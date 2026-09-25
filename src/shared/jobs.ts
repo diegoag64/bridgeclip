@@ -4,7 +4,10 @@ import type { JobOutput } from './job-output'
 export interface ClipJobRequest {
   videoUrl: string
   /** Missing on older queued requests; those retain the original quality mode. */
-  clippingMode?: 'quality' | 'economy'
+  clippingMode?: 'quality' | 'economy' | 'advanced'
+  /** Required in Advanced mode; presets choose their own models. */
+  plannerModel?: string
+  transcriptionModel?: string
   maxClips: number | null
   autoClipCount: boolean
   durationRanges: string[] | null
@@ -13,6 +16,8 @@ export interface ClipJobRequest {
   layoutVision: boolean
   debugCapture?: boolean
   pacing: string
+  /** Export speed for every clip. Older requests default to normal speed. */
+  videoSpeed?: number
   includeCaptions: boolean
   captionPreset: string
   startTimeSeconds: number | null

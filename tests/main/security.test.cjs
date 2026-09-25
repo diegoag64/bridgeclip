@@ -5,6 +5,7 @@ const path = require('node:path')
 const os = require('node:os')
 const vm = require('node:vm')
 const ts = require('typescript')
+const { fileLinksAvailable, directoryLinkType } = require('../support/symlinks.cjs')
 
 function loadSource(file, mocks = {}, globals = {}) {
   const source = fs.readFileSync(path.join(__dirname, '../../src/main', file), 'utf8')
@@ -27,11 +28,11 @@ const jobOutput = loadShared('job-output.ts')
 const videoSource = loadShared('video-source.ts')
 const runHistory = loadSource('run-history.ts', { '../shared/video-source': videoSource })
 const security = loadSource('security.ts', { electron: {}, '../shared/brand': loadShared('brand.ts') })
-const { validateJobConfig } = loadSource('validation.ts', { './security': security, '../shared/video-source': videoSource, '../shared/job-contract': jobContract })
+const { validateJobConfig } = loadSource('validation.ts', { './security': security, '../shared/video-source': videoSource, '../shared/job-contract': jobContract, '../shared/openrouter-models': loadShared('openrouter-models.ts') })
 
 test('development checks the staged FFmpeg that the clipping engine uses', async () => {
   const binDir = path.join(__dirname, '../../engine-bin')
-  const ffmpeg = path.join(binDir, 'ffmpeg')
+  const ffmpeg = path.join(binDir, process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg')
   const invoked = []
   const execFile = () => {}
   execFile[require('node:util').promisify.custom] = async (command) => {
@@ -75,7 +76,7 @@ test('Zernio sign-in links stay on its HTTPS origin and provider errors are sani
     error.message.includes('HTTP 500') && !error.message.includes('private-provider-token'))
 })
 
-test('media authorization rejects traversal, symlink escapes, and non-media files', () => {
+test('media authorization rejects traversal, symlink escapes, and non-media files', (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bridgeclip-test-'))
   try {
     const library = path.join(root, 'library')
@@ -86,10 +87,11 @@ test('media authorization rejects traversal, symlink escapes, and non-media file
     fs.writeFileSync(video, '')
     fs.writeFileSync(outside, '')
     fs.writeFileSync(secret, '{}')
-    fs.symlinkSync(outside, path.join(library, 'escape.mp4'))
+    if (fileLinksAvailable) fs.symlinkSync(outside, path.join(library, 'escape.mp4'))
+    else t.diagnostic('File symlinks unavailable; symlink escape assertion skipped')
     assert.doesNotThrow(() => security.assertMediaPath(video, library))
     assert.throws(() => security.assertMediaPath(outside, library))
-    assert.throws(() => security.assertMediaPath(path.join(library, 'escape.mp4'), library))
+    if (fileLinksAvailable) assert.throws(() => security.assertMediaPath(path.join(library, 'escape.mp4'), library))
     assert.throws(() => security.assertMediaPath(secret, library))
     assert.equal(security.isWithinDirectory(outside, library), false)
     security.authorizeMedia(outside)
@@ -100,7 +102,7 @@ test('media authorization rejects traversal, symlink escapes, and non-media file
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 
-test('validated media handle keeps the authorized file after its pathname changes', async () => {
+test('validated media handle keeps the authorized file after its pathname changes', { skip: !fileLinksAvailable }, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bridgeclip-media-handle-'))
   try {
     const library = path.join(root, 'library')
@@ -119,7 +121,7 @@ test('validated media handle keeps the authorized file after its pathname change
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 
-test('thumbnail generation uses a private cache and does not follow an adjacent symlink', async () => {
+test('thumbnail generation uses a private cache and does not follow an adjacent symlink', { skip: !fileLinksAvailable }, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bridgeclip-thumb-'))
   try {
     const video = path.join(root, 'clip.mp4')
@@ -158,7 +160,7 @@ test('IPC authentication requires the registered window main frame', () => {
   assert.throws(() => security.assertTrustedSender({ sender: contents, senderFrame: frame }, null))
 })
 
-test('the native picker authorizes media and shell opening rejects aliased application bundles', async () => {
+test('the native picker authorizes media and shell opening rejects aliased application bundles', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bridgeclip-picker-'))
   try {
     const library = path.join(root, 'library')
@@ -187,6 +189,7 @@ test('the native picker authorizes media and shell opening rejects aliased appli
       './security': security,
       './network-policy': {},
       './validation': {},
+      './openrouter-models': {},
       './tools': {},
       './zernio/service': {},
       './zernio/posts': {},
@@ -202,8 +205,10 @@ test('the native picker authorizes media and shell opening rejects aliased appli
     const bundle = path.join(library, 'unsafe.app')
     fs.mkdirSync(bundle)
     const alias = path.join(library, 'ordinary-folder')
-    fs.symlinkSync(bundle, alias)
-    await assert.rejects(handlers.get('shell:openPath')({ sender: contents, senderFrame: frame }, alias), /Application bundles cannot be opened/)
+    if (directoryLinkType) {
+      fs.symlinkSync(bundle, alias, directoryLinkType)
+      await assert.rejects(handlers.get('shell:openPath')({ sender: contents, senderFrame: frame }, alias), /Application bundles cannot be opened/)
+    } else t.diagnostic('Directory links unavailable; aliased bundle assertion skipped')
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 
@@ -217,8 +222,19 @@ test('external URLs reject executable schemes and embedded credentials', () => {
 test('job validation rejects malformed options and invalid trim intervals', () => {
   const job = { videoUrl: 'https://example.com/video', maxClips: 5, autoClipCount: true, includeCaptions: true, aspectRatio: '9:16', layoutStyle: 'auto', layoutVision: true, pacing: 'tight', captionPreset: 'pop', durationRanges: ['short'], startTimeSeconds: null, endTimeSeconds: null, bannerPlatform: null, bannerChannelUrl: null }
   assert.doesNotThrow(() => validateJobConfig(job))
+  assert.equal(validateJobConfig(job).videoSpeed, 1)
+  for (const videoSpeed of jobContract.VIDEO_SPEED_OPTIONS) assert.equal(validateJobConfig({ ...job, videoSpeed }).videoSpeed, videoSpeed)
+  for (const videoSpeed of [null, true, '1.5', 0, 0.5, 2.01, NaN, Infinity, -Infinity]) {
+    assert.throws(() => validateJobConfig({ ...job, videoSpeed }), /Video speed/)
+  }
   assert.doesNotThrow(() => validateJobConfig({ ...job, clippingMode: 'economy' }))
   assert.doesNotThrow(() => validateJobConfig({ ...job, clippingMode: 'quality' }))
+  const advanced = { ...job, clippingMode: 'advanced', plannerModel: 'google/gemini-3.8-flash', transcriptionModel: 'openai/whisper-large-v3' }
+  assert.doesNotThrow(() => validateJobConfig(advanced))
+  assert.equal(validateJobConfig({ ...advanced, plannerCapabilities: { maxOutputTokens: 1e12 } }).plannerCapabilities, undefined)
+  for (const patch of [{ plannerModel: '' }, { transcriptionModel: undefined }, { plannerModel: 'provider/model,other/model' }, { plannerModel: 'https://example.com' }, { clippingMode: 'quality' }]) {
+    assert.throws(() => validateJobConfig({ ...advanced, ...patch }))
+  }
   for (const option of jobContract.DURATION_OPTIONS) assert.doesNotThrow(() => validateJobConfig({ ...job, durationRanges: [option.id] }))
   assert.equal(validateJobConfig({ ...job, videoUrl: 'https://go.twitch.tv/videos/123?t=30s' }).videoUrl, 'https://www.twitch.tv/videos/123')
   for (const videoUrl of ['https://twitch.tv/channel', 'https://clips.twitch.tv/Clip']) assert.throws(() => validateJobConfig({ ...job, videoUrl }), /completed Twitch VOD/)
@@ -304,11 +320,66 @@ test('settings migration writes a private file', () => {
   })
   try {
     assert.equal(store.loadSettings().openrouterApiKey, 'old-key')
-    assert.equal(fs.statSync(path.join(userData, 'settings.json')).mode & 0o077, 0)
+    if (process.platform !== 'win32') {
+      assert.equal(fs.statSync(path.join(userData, 'settings.json')).mode & 0o077, 0)
+    }
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 
-test('library rejects parseable but incomplete job output', async () => {
+test('Windows resolves the saved legacy Python default without replacing an installed or explicit interpreter', () => {
+  const winProcess = Object.create(process)
+  Object.defineProperty(winProcess, 'platform', { value: 'win32' })
+  Object.defineProperty(winProcess, 'env', { value: { PATH: 'C:\\Python;C:\\Windows' } })
+  Object.defineProperty(winProcess, 'resourcesPath', { value: 'C:\\BridgeClip\\resources' })
+  const userData = 'C:\\Users\\Test\\BridgeClip'
+  const engine = 'C:\\BridgeClip\\engine'
+  const present = new Set()
+  let python3Runnable = false
+  let saved = null
+  const app = { isPackaged: false, isReady: () => false, getPath: (name) => name === 'home' ? 'C:\\Users\\Test' : userData }
+  const store = loadSource('settings-store.ts', {
+    electron: { app, safeStorage: {} }, path: path.win32,
+    fs: {
+      existsSync: (file) => file === userData || (file === path.win32.join(userData, 'settings.json') && saved !== null),
+      readFileSync: () => JSON.stringify(saved)
+    }
+  }, { process: winProcess })
+  const runner = loadSource('pipeline-runner.ts', {
+    electron: { app }, path: path.win32,
+    fs: { existsSync: (file) => present.has(file) },
+    child_process: { execFile() {}, execFileSync(command, args) {
+      assert.equal(command, 'python3')
+      assert.deepEqual(Array.from(args), ['-c', 'import sys; assert sys.version_info[0] == 3'])
+      if (!python3Runnable) throw new Error('Python is unavailable')
+    } },
+    './settings-store': {}, './logger': {}, '../shared/job-output': {},
+    '../shared/job-contract': {}, './run-history': {}, './tools': {}
+  }, { process: winProcess })
+
+  assert.equal(store.loadSettings().pythonPath, 'python')
+  saved = { version: 7, openrouterApiKey: '', zernioApiKey: '', outputDirectory: 'C:\\Clips', pythonPath: 'python3' }
+  assert.equal(store.loadSettings().pythonPath, 'python3', 'the persisted setting is not rewritten')
+  assert.equal(runner.resolvePythonPath(engine, store.loadSettings().pythonPath), 'python')
+
+  python3Runnable = true
+  assert.equal(runner.resolvePythonPath(engine, 'python3'), 'python3', 'an installed python3 remains usable')
+  python3Runnable = false
+  const venv = path.win32.join(engine, '.venv', 'Scripts', 'python.exe')
+  present.add(venv)
+  assert.equal(runner.resolvePythonPath(engine, 'python3'), venv, 'the project venv retains priority')
+  present.delete(venv)
+
+  const explicit = 'C:\\Python\\python.exe'
+  saved.pythonPath = explicit
+  present.add(explicit)
+  assert.equal(store.loadSettings().pythonPath, explicit)
+  assert.equal(runner.resolvePythonPath(engine, explicit), explicit)
+  assert.equal(runner.resolvePythonPath(engine, 'py'), 'py', 'other command settings remain untouched')
+  app.isPackaged = true
+  assert.equal(runner.resolvePythonPath(engine, explicit), path.win32.join(winProcess.resourcesPath, 'engine-venv', 'python.exe'))
+})
+
+test('library rejects parseable but incomplete job output', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bridgeclip-library-'))
   const run = path.join(root, 'run-one')
   fs.mkdirSync(run)
@@ -321,10 +392,47 @@ test('library rejects parseable but incomplete job output', async () => {
     assert.equal((await manager.getJobHistory(root))[0].status, 'completed')
     const outside = path.join(root, 'outside.json')
     fs.writeFileSync(outside, JSON.stringify({ job_id: 'outside', clips: [] }))
-    fs.rmSync(path.join(run, 'job_output.json'))
-    fs.symlinkSync(outside, path.join(run, 'job_output.json'))
-    assert.equal(await manager.getJobOutput(run), null)
-    assert.equal((await manager.getJobHistory(root))[0].status, 'failed')
+    if (fileLinksAvailable) {
+      fs.rmSync(path.join(run, 'job_output.json'))
+      fs.symlinkSync(outside, path.join(run, 'job_output.json'))
+      assert.equal(await manager.getJobOutput(run), null)
+      assert.equal((await manager.getJobHistory(root))[0].status, 'failed')
+      const withoutNoFollow = loadSource('file-manager.ts', {
+        fs: { ...fs, constants: { ...fs.constants, O_NOFOLLOW: undefined } },
+        '../shared/job-output': jobOutput, './run-history': runHistory, './tools': { resolveBinary: () => 'ffprobe' }
+      })
+      assert.equal(await withoutNoFollow.getJobOutput(run, root), null)
+      assert.equal((await withoutNoFollow.getJobHistory(root))[0].status, 'failed', 'a link inside the library is still rejected')
+    } else t.diagnostic('File symlinks unavailable; linked job output assertions skipped')
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})
+
+test('job output rejects a link substituted during open when O_NOFOLLOW is unavailable', { skip: !fileLinksAvailable }, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bridgeclip-output-open-'))
+  const run = path.join(root, 'run-one')
+  const output = path.join(run, 'job_output.json')
+  const outside = path.join(root, 'outside.json')
+  let closed = false
+  try {
+    fs.mkdirSync(run)
+    fs.writeFileSync(output, JSON.stringify({ job_id: 'run-one', clips: [] }))
+    fs.writeFileSync(outside, JSON.stringify({ job_id: 'outside', clips: [] }))
+    const manager = loadSource('file-manager.ts', {
+      fs: { ...fs, constants: { ...fs.constants, O_NOFOLLOW: undefined } },
+      'fs/promises': { ...fs.promises, open: async (...args) => {
+        fs.rmSync(output)
+        fs.symlinkSync(outside, output)
+        const handle = await fs.promises.open(...args)
+        return {
+          stat: () => handle.stat(),
+          readFile: (...readArgs) => handle.readFile(...readArgs),
+          close: async () => { closed = true; await handle.close() }
+        }
+      } },
+      '../shared/job-output': jobOutput, './run-history': runHistory, './tools': { resolveBinary: () => 'ffprobe' }
+    })
+    assert.equal(await manager.getJobOutput(run, root), null)
+    assert.equal(closed, true, 'the opened file is closed after rejection')
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 
@@ -343,7 +451,7 @@ test('library retains unfinished desktop runs and ignores unrelated folders', as
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 
-test('run history persists outcomes, identifies interrupted work, and omits source query data', async () => {
+test('run history persists outcomes, identifies interrupted work, and omits source query data', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bridgeclip-history-'))
   const failedId = '4de005c2-1234-4123-8123-567890abcdef'
   const runningId = '4de005c3-1234-4123-8123-567890abcdef'
@@ -354,7 +462,9 @@ test('run history persists outcomes, identifies interrupted work, and omits sour
     const raw = fs.readFileSync(path.join(root, failedId, 'run-history.json'), 'utf8')
     assert.equal(raw.includes('private-query'), false)
     assert.equal(raw.includes('abc123def45'), true)
-    assert.equal(fs.statSync(path.join(root, failedId, 'run-history.json')).mode & 0o077, 0)
+    if (process.platform !== 'win32') {
+      assert.equal(fs.statSync(path.join(root, failedId, 'run-history.json')).mode & 0o077, 0)
+    }
     runHistory.finishRunRecord(root, failedId, 'failed', 'Audio transcription failed.')
     runHistory.createRunRecord(root, runningId, '/tmp/local-video.mp4')
     runHistory.createRunRecord(root, cancelledId, '/tmp/cancelled.mp4')
@@ -367,11 +477,13 @@ test('run history persists outcomes, identifies interrupted work, and omits sour
     assert.equal(active.find((entry) => entry.jobId === cancelledId).status, 'cancelled')
     assert.equal((await manager.getJobHistory(root)).find((entry) => entry.jobId === runningId).status, 'interrupted')
 
-    const outside = path.join(root, 'outside.json')
-    fs.writeFileSync(outside, raw)
-    fs.rmSync(path.join(root, failedId, 'run-history.json'))
-    fs.symlinkSync(outside, path.join(root, failedId, 'run-history.json'))
-    assert.equal(runHistory.readRunRecord(root, failedId), null)
+    if (fileLinksAvailable) {
+      const outside = path.join(root, 'outside.json')
+      fs.writeFileSync(outside, raw)
+      fs.rmSync(path.join(root, failedId, 'run-history.json'))
+      fs.symlinkSync(outside, path.join(root, failedId, 'run-history.json'))
+      assert.equal(runHistory.readRunRecord(root, failedId), null)
+    } else t.diagnostic('File symlinks unavailable; linked run history assertion skipped')
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 
@@ -390,7 +502,9 @@ test('diagnostic logs omit source URLs and use private file permissions', () => 
     assert.equal(log.includes('dummy'), false)
     assert.equal(JSON.parse(log).failureCode, 'transcription.bad_request')
     assert.equal(JSON.parse(log).httpStatus, 400)
-    assert.equal(fs.statSync(loggerModule.getLogFilePath()).mode & 0o077, 0)
+    if (process.platform !== 'win32') {
+      assert.equal(fs.statSync(loggerModule.getLogFilePath()).mode & 0o077, 0)
+    }
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 
@@ -423,8 +537,20 @@ test('pipeline preserves split JSON messages and protects the job identity', asy
     './tools': { resolveBinary: () => '/staged/engine-bin/ffmpeg' }
   })
   const window = { isDestroyed: () => false, webContents: { isDestroyed: () => false, send: (channel, data) => sent.push({ channel, data }) } }
-  runner.startClipJob('trusted-job', { videoUrl: '/tmp/video.mp4' }, window, undefined, '/tmp/queued-output')
-  assert.equal(JSON.parse(workerInput).output_dir, '/tmp/queued-output')
+  runner.startClipJob('trusted-job', {
+    videoUrl: '/tmp/video.mp4', videoSpeed: 1.5, clippingMode: 'advanced', plannerModel: 'custom/planner', transcriptionModel: 'custom/speech',
+    plannerCapabilities: { maxOutputTokens: 8192, supportsImages: false, inputPrice: .000001, outputPrice: .000005 }
+  }, window, undefined, '/tmp/queued-output')
+  const forwarded = JSON.parse(workerInput)
+  assert.equal(forwarded.video_speed, 1.5)
+  assert.equal(forwarded.contract_version, 2)
+  assert.equal(forwarded.output_dir, '/tmp/queued-output')
+  assert.equal(forwarded.clipping_mode, 'advanced')
+  assert.equal(forwarded.planner_model, 'custom/planner')
+  assert.equal(forwarded.transcription_model, 'custom/speech')
+  assert.equal(forwarded.planner_max_output_tokens, 8192)
+  assert.equal(forwarded.planner_supports_images, false)
+  assert.equal(forwarded.planner_input_price, .000001)
   child.stdout.write('{"type":"prog')
   child.stdout.write('ress","jobId":"spoof","percent":42}\n{"type":"result","status":"completed","job_id":"trusted-job","output":{"job_id":"trusted-job","clips":[]}}\n')
   child.stdout.end()

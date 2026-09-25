@@ -11,10 +11,11 @@ import { logger } from './logger'
 import { parseJobOutput, type JobOutput } from '../shared/job-output'
 import { BRIDGE_CONTRACT_VERSION } from '../shared/job-contract'
 import type { ClipJobRequest } from '../shared/jobs'
+import type { OpenRouterModel } from '../shared/openrouter-models'
 import { finishRunRecord, type StoredRunStatus } from './run-history'
 import { resolveBinary } from './tools'
 
-export type ClipJobConfig = ClipJobRequest
+export type ClipJobConfig = ClipJobRequest & { plannerCapabilities?: OpenRouterModel }
 
 /**
  * Where a run's events go. The job manager passes its own sink so it can track
@@ -176,14 +177,15 @@ export function getBridgeRunnerPath(): string {
  * Resolve the Python interpreter to use.
  *
  * Priority order:
- * 1. Explicit path from user settings (if set and not "python3")
+ * 1. Explicit path from user settings (if set and not the default "python3")
  * 2. Bundled venv inside the app (packaged builds)
  * 3. In-repo engine venv python (engine/.venv/bin/python)
- * 4. System python3
+ * 4. System python3 (or python on Windows)
  */
 export function resolvePythonPath(enginePath: string, userPythonPath: string): string {
   if (app.isPackaged) {
-    return join(process.resourcesPath, 'engine-venv', ...(process.platform === 'win32' ? ['Scripts', 'python.exe'] : ['bin', 'python3']))
+    // python-build-standalone is a relocatable distribution, not a Windows venv.
+    return join(process.resourcesPath, 'engine-venv', ...(process.platform === 'win32' ? ['python.exe'] : ['bin', 'python3']))
   }
   if (!app.isPackaged && userPythonPath && userPythonPath !== 'python3') {
     if (existsSync(userPythonPath)) return userPythonPath
@@ -206,7 +208,18 @@ export function resolvePythonPath(enginePath: string, userPythonPath: string): s
     }
   }
 
-  return (!app.isPackaged && userPythonPath) || 'python3'
+  // Older Windows settings saved "python3" as the default. Probe the command:
+  // WindowsApps can contain a python3.exe alias that does not run Python.
+  if (process.platform === 'win32' && userPythonPath === 'python3') {
+    try {
+      execFileSync('python3', ['-c', 'import sys; assert sys.version_info[0] == 3'], {
+        timeout: 2000, windowsHide: true, stdio: 'ignore'
+      })
+    } catch {
+      return 'python'
+    }
+  }
+  return userPythonPath || (process.platform === 'win32' ? 'python' : 'python3')
 }
 
 /**
@@ -377,6 +390,14 @@ export function startClipJob(
     job_id: jobId,
     video_url: config.videoUrl,
     clipping_mode: config.clippingMode ?? 'quality',
+    ...(config.clippingMode === 'advanced' ? {
+      planner_model: config.plannerModel,
+      transcription_model: config.transcriptionModel,
+      planner_max_output_tokens: Math.min(32000, Math.floor(config.plannerCapabilities?.maxOutputTokens ?? 32000)),
+      planner_supports_images: config.plannerCapabilities?.supportsImages ?? false,
+      planner_input_price: config.plannerCapabilities?.inputPrice ?? null,
+      planner_output_price: config.plannerCapabilities?.outputPrice ?? null
+    } : {}),
     max_clips: config.maxClips,
     auto_clip_count: config.autoClipCount,
     duration_ranges: config.durationRanges,
@@ -385,6 +406,7 @@ export function startClipJob(
     debug_capture: config.debugCapture ?? false,
     layout_vision_enabled: config.clippingMode === 'economy' ? false : config.layoutVision,
     pacing: config.pacing || 'tight',
+    video_speed: config.videoSpeed ?? 1,
     include_captions: config.includeCaptions,
     caption_preset: config.captionPreset,
     keyterms: vocabularyTerms(settings.customVocabulary),

@@ -5,6 +5,7 @@ import os
 from fractions import Fraction
 
 from clip_engine.services import layout_analyzer as analyzer
+from clip_engine.services.video_speed import scaled_duration_ms, validate_video_speed
 from clip_engine.services.layout_renderer import _fill_crop_path, shot_views, video_frame_pieces
 
 TRACE_VERSION = 1
@@ -39,21 +40,23 @@ def plan_record(plan, out_w, out_h, landscape=False):
 def make_trace(request, analysis_plan, attempted_plan, rendered_plan, time_map,
                window_start, window_ms, width, height, fps, attempts, settings):
     analysis = analysis_plan.trace if analysis_plan is not None and analysis_plan.trace else {}
+    speed = validate_video_speed(request.video_speed)
     rate = float(Fraction(fps))
     output_frame = 0
     video = []
     for shot, start, count in video_frame_pieces(rendered_plan, time_map.keeps, fps):
         video.append({"shot": shot, "source_start_ms": start * 1000 / rate,
                       "source_end_ms": (start + count) * 1000 / rate,
-                      "output_start_ms": output_frame * 1000 / rate,
-                      "output_end_ms": (output_frame + count) * 1000 / rate})
+                      "output_start_ms": output_frame * 1000 / rate / speed,
+                      "output_end_ms": (output_frame + count) * 1000 / rate / speed})
         output_frame += count
     return {
         "version": TRACE_VERSION,
         "source": {"width": rendered_plan.source_width, "height": rendered_plan.source_height},
         "window": {"start_ms": window_start, "duration_ms": window_ms,
                    "requested_start_ms": request.start_time_ms, "requested_end_ms": request.end_time_ms},
-        "output": {"width": width, "height": height, "duration_ms": time_map.output_ms, "fps": rate},
+        "output": {"width": width, "height": height, "duration_ms": scaled_duration_ms(time_map.output_ms, speed), "fps": rate,
+                   **({"video_speed": speed} if speed != 1 else {})},
         "sample_fps": analyzer.ANALYSIS_FPS,
         "thresholds": {name: getattr(analyzer, name) for name in (
             "FACE_SCORE_THRESHOLD", "STRONG_FACE_SCORE", "COMPETING_FACE_SCORE", "SHOT_CUT_THRESHOLD", "MIN_SHOT_MS", "LAYOUT_CHANGE_MS",

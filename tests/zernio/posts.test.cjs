@@ -16,6 +16,7 @@ const FFMPEG = fs.existsSync(path.join(ROOT, 'engine-bin', 'ffmpeg')) ? path.joi
 const MINUTE = 60_000
 const DAY = 86_400_000
 const historyPath = (dir, key = KEY) => path.join(dir, `zernio-posts-${crypto.createHash('sha256').update(key).digest('hex')}.json`)
+const attemptPath = (dir, key = KEY) => path.join(dir, `zernio-post-attempts-${crypto.createHash('sha256').update(key).digest('hex')}.json`)
 
 const pure = loadMain(`
   export * as shared from './src/shared/zernio-posts'
@@ -439,7 +440,7 @@ test('post history rejects another workspace and quarantines unbound legacy reco
     assert.deepEqual(store.list(), [])
     const retained = fs.readdirSync(dir).find((name) => name.startsWith('zernio-posts.json.quarantine-'))
     assert.ok(retained)
-    assert.equal(fs.statSync(path.join(dir, retained)).mode & 0o077, 0)
+    if (process.platform !== 'win32') assert.equal(fs.statSync(path.join(dir, retained)).mode & 0o077, 0)
     store.clear()
     assert.deepEqual(new pure.PostsStore(file, 'workspace-two').list(), [])
     assert.equal(fs.existsSync(file), false)
@@ -517,7 +518,7 @@ test('post history persists atomically, survives a damaged file and keeps schedu
     store.save(record('a'.repeat(24), 'scheduled', '2026-09-01T00:00:00.000Z'), record('b'.repeat(24), 'published', '2026-09-02T00:00:00.000Z'))
     assert.deepEqual(new pure.PostsStore(file).list().map((p) => p.id), ['b'.repeat(24), 'a'.repeat(24)], 'newest first')
     assert.equal(fs.existsSync(`${file}.tmp`), false)
-    assert.equal((fs.statSync(file).mode & 0o777).toString(8), '600')
+    if (process.platform !== 'win32') assert.equal((fs.statSync(file).mode & 0o777).toString(8), '600')
     const onDisk = JSON.parse(fs.readFileSync(file, 'utf8'))
     assert.equal(onDisk.version, 1)
     assert.equal(JSON.stringify(onDisk).includes(KEY), false)
@@ -644,7 +645,7 @@ test('publish now: presign, a streamed PUT to storage, then POST /v1/posts with 
   assert.equal(history.posts[0].clipPath, clipPath)
 }))
 
-test('changing the Zernio key isolates local post history and cached uploads', () => withPosting(async ({ mock, posting, main, publish }) => {
+test('changing the Zernio key isolates history and reuses uploads when the original key returns', () => withPosting(async ({ mock, posting, main, publish }) => {
   await publish()
   assert.equal(main.posts.listPosts().length, 1)
   assert.equal(posting.state.uploads.length, 1)
@@ -657,9 +658,9 @@ test('changing the Zernio key isolates local post history and cached uploads', (
   main.service.resetZernioState(() => null)
   assert.equal(main.posts.listPosts().length, 1, 'the original workspace history is restored')
   await publish({ caption: 'A post after switching workspaces' })
-  assert.equal(posting.state.uploads.length, 2, 'the prior workspace upload is not reused')
+  assert.equal(posting.state.uploads.length, 1, 'the original workspace reuses its upload')
   assert.equal(main.posts.listPosts().length, 2)
-  assert.equal(mock.requestsTo('POST', '/api/v1/media/presign').length, 2)
+  assert.equal(mock.requestsTo('POST', '/api/v1/media/presign').length, 1)
 }))
 
 test('a lost response is retried with the same x-request-id and never double-posts', () => withPosting(async ({ mock, posting, publish }) => {
@@ -736,8 +737,8 @@ test('trying again after an error reuses the upload; the same content twice is r
 test('an uncertain post is not replayed after Zernio’s idempotency window or restart', () => withPosting(async ({ mock, publish, electron, clipPath, accounts, userData }) => {
   for (let i = 0; i < 3; i++) mock.failNext('POST', '/api/v1/posts', 500, { error: 'temporary failure' })
   await assert.rejects(publish(), /Retry this attempt soon/)
-  const journal = path.join(userData, 'zernio-post-attempts.json')
-  assert.equal(fs.statSync(journal).mode & 0o077, 0)
+  const journal = attemptPath(userData)
+  if (process.platform !== 'win32') assert.equal(fs.statSync(journal).mode & 0o077, 0)
   assert.equal(fs.readFileSync(journal, 'utf8').includes(KEY), false)
   const before = mock.requestsTo('POST', '/api/v1/posts').length
   const restarted = loadMain("export * as posts from './src/main/zernio/posts'", { electron })
@@ -754,6 +755,46 @@ test('an uncertain post is not replayed after Zernio’s idempotency window or r
     Date.now = realNow
   }
   assert.equal(mock.requestsTo('POST', '/api/v1/posts').length, before, 'the expired idempotency key is never sent again')
+}))
+
+test('an unresolved request id survives switching away from and back to the same key', () => withPosting(async ({ mock, posting, main, publish, userData }) => {
+  for (let i = 0; i < 3; i++) mock.failNext('POST', '/api/v1/posts', 500, { error: 'temporary failure' })
+  await assert.rejects(publish(), /Retry this attempt soon/)
+  const journal = attemptPath(userData)
+  const pending = JSON.parse(fs.readFileSync(journal, 'utf8')).attempts[0][1].requestId
+  assert.match(pending, /^[0-9a-f-]{36}$/)
+
+  main.settings.replaceApiKey('zernioApiKey', 'another-workspace-key')
+  main.service.resetZernioState(() => null)
+  assert.equal(fs.existsSync(journal), true, 'switching keys retains the old workspace journal')
+  main.settings.replaceApiKey('zernioApiKey', KEY)
+  main.service.resetZernioState(() => null)
+
+  const result = await publish()
+  assert.equal(result.outcome, 'published')
+  assert.equal(posting.state.creates[0].requestId, pending, 'retry replays the same idempotency key')
+  assert.equal(posting.state.uploads.length, 1)
+}))
+
+test('a bound legacy attempt journal migrates only after its key returns', () => withPosting(async ({ mock, posting, main, publish, userData }) => {
+  for (let i = 0; i < 3; i++) mock.failNext('POST', '/api/v1/posts', 500, { error: 'temporary failure' })
+  await assert.rejects(publish(), /Retry this attempt soon/)
+  const scoped = attemptPath(userData)
+  const legacy = path.join(userData, 'zernio-post-attempts.json')
+  const pending = JSON.parse(fs.readFileSync(scoped, 'utf8')).attempts[0][1].requestId
+  fs.renameSync(scoped, legacy)
+
+  main.settings.replaceApiKey('zernioApiKey', 'another-workspace-key')
+  main.service.resetZernioState(() => null)
+  assert.equal(fs.existsSync(legacy), true, 'a different key cannot consume the bound legacy journal')
+  main.settings.replaceApiKey('zernioApiKey', KEY)
+  main.service.resetZernioState(() => null)
+
+  const result = await publish()
+  assert.equal(result.outcome, 'published')
+  assert.equal(posting.state.creates[0].requestId, pending)
+  assert.equal(fs.existsSync(legacy), false)
+  assert.equal(fs.existsSync(scoped), true)
 }))
 
 test('partial and failed inline publishes keep per-platform errors; Retry fixes the failed ones', () => withPosting(async ({ posting, main, accounts, publish }) => {

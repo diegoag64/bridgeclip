@@ -56,6 +56,8 @@ def test_full_transcript_and_rejected_candidates_are_saved(monkeypatch, tmp_path
     assert audit['candidates'][0]['report']['coherence']['attempts'][0]['judgment']['questions']
     assert result.status == (JobStatus.COMPLETED if accept else JobStatus.FAILED), result.error
     assert mocked_render.await_count == int(accept)
+    if accept:
+        assert result.output.metrics["analysis_duration_seconds"] == 12
     if not accept:
         assert audit['outcome'] == 'no_approved_clips'
         assert 'No clip was forced' in result.error

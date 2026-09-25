@@ -6,6 +6,7 @@ const path = require('node:path')
 const http = require('node:http')
 const { execFileSync } = require('node:child_process')
 const { loadMain, tempDir, fakeElectron, ROOT } = require('../zernio/support/load-main.cjs')
+const { fileLinksAvailable } = require('../support/symlinks.cjs')
 const FFMPEG = fs.existsSync(path.join(ROOT, 'engine-bin/ffmpeg')) ? path.join(ROOT, 'engine-bin/ffmpeg') : 'ffmpeg'
 
 async function server(handler) {
@@ -93,7 +94,7 @@ test('a bad OpenRouter request is not reported as a credit failure', async () =>
   } finally { global.fetch = oldFetch; cleanup() }
 })
 
-test('post cache writes do not follow predictable temporary-file symlinks', () => {
+test('post cache writes do not follow predictable temporary-file symlinks', { skip: !fileLinksAvailable }, () => {
   const { dir, cleanup } = tempDir()
   try {
     const { PostsStore } = loadMain("export { PostsStore } from './src/main/zernio/posts-store'", { electron: fakeElectron(dir).electron })
@@ -115,7 +116,7 @@ test('packaged tools never fall back to PATH or a user-selected Python', () => {
     for (const name of ['ffmpeg', 'ffprobe', 'yt-dlp']) {
       assert.equal(api.resolveBinary(name), path.join(dir, 'engine-bin', name + (process.platform === 'win32' ? '.exe' : '')))
     }
-    assert.equal(api.resolvePythonPath(dir, '/untrusted/python'), path.join(dir, 'engine-venv', ...(process.platform === 'win32' ? ['Scripts', 'python.exe'] : ['bin', 'python3'])))
+    assert.equal(api.resolvePythonPath(dir, '/untrusted/python'), path.join(dir, 'engine-venv', ...(process.platform === 'win32' ? ['python.exe'] : ['bin', 'python3'])))
     const check = api.preflightCheck({ pythonPath: '/untrusted/python', bridgePath: dir, enginePath: dir })
     assert.equal(check.ok, false)
     assert.match(check.error, /Bundled ffmpeg is missing/)

@@ -106,10 +106,11 @@ function TraceView({ trace, inspection, mediaUrl }: { trace: FramingTrace; inspe
     const video = output.current
     if (!video) return
     if (outputMs === null) { video.pause(); return }
+    video.playbackRate = 1 / (trace.output.video_speed ?? 1)
     if (Math.abs(video.currentTime * 1000 - outputMs) > 75) video.currentTime = outputMs / 1000
     if (playing && video.paused) void video.play().catch(() => { setMediaError('The generated preview could not start playback.') })
     if (!playing) video.pause()
-  }, [outputMs, playing])
+  }, [outputMs, playing, trace.output.video_speed])
 
   const seek = (ms: number): void => {
     const value = Math.min(trace.source.duration_ms, Math.max(0, ms))

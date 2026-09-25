@@ -163,3 +163,28 @@ test('webcam refinement provenance is bounded and older traces remain readable',
   raw.rendered_plan[0].cam_box_refined = 'yes'
   assert.throws(() => parseFramingTrace(raw))
 })
+
+
+test('sped-up framing traces map source, cuts and output without changing source geometry', () => {
+  for (const speed of [1.25, 1.5, 2]) {
+    const value = clone()
+    value.output.video_speed = speed
+    value.output.duration_ms = Math.round(value.output.duration_ms / speed)
+    for (const piece of value.video_pieces) {
+      piece.output_start_ms /= speed
+      piece.output_end_ms /= speed
+    }
+    const trace = parseFramingTrace(value)
+    assert.equal(sourceToOutput(trace, 7000), null)
+    assert.equal(sourceToOutput(trace, 8500), 5000 / speed)
+    assert.equal(outputToSource(trace, 5000 / speed), 8500)
+    for (let source = 8500; source < 13900; source += 37) {
+      assert.ok(Math.abs(outputToSource(trace, sourceToOutput(trace, source)) - source) < .001)
+    }
+    assert.deepEqual(trace.rendered_plan, parseFramingTrace(fixture).rendered_plan)
+  }
+  for (const speed of [0, .5, 2.1, NaN, '1.5']) {
+    const value = clone(); value.output.video_speed = speed
+    assert.throws(() => parseFramingTrace(value))
+  }
+})

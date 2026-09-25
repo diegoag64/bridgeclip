@@ -1,7 +1,8 @@
 {
   "name": "bridgeclip",
+  "private": true,
   "productName": "BridgeClip",
-  "version": "0.1.16",
+  "version": "0.1.18",
   "description": "BridgeClip: open-source AI video clipping by BridgeMind. Turn long videos into captioned short-form clips, locally, with your own API keys.",
   "main": "./out/main/index.js",
   "author": "BridgeMind",
@@ -15,9 +16,9 @@
     "url": "https://github.com/bridge-mind/bridgeclip/issues"
   },
   "scripts": {
-    "dev": "electron-vite dev",
+    "dev": "install-electron && electron-vite dev",
     "build": "electron-vite build",
-    "preview": "electron-vite preview",
+    "preview": "install-electron && electron-vite preview",
     "postinstall": "electron-builder install-app-deps",
     "dist": "electron-vite build && electron-builder",
     "dist:mac": "electron-vite build && electron-builder --mac --$(node -p 'process.arch')",
@@ -30,13 +31,14 @@
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "icons": "bash scripts/icon/build-icons.sh",
-    "test:bridge": "python3 -m unittest discover -s bridge -p 'test_*.py'",
+    "test:bridge": "node scripts/run-bridge-tests.cjs",
     "test:release": "node --test scripts/*.test.cjs",
-    "test:renderer": "node --test tests/renderer-state.test.cjs tests/create-form.test.cjs",
+    "test:renderer": "node --test tests/renderer-state.test.cjs tests/create-form.test.cjs tests/opus-clip.test.cjs",
     "test:main": "node --test tests/main/*.test.cjs",
     "test:zernio": "node --test tests/zernio/*.test.cjs",
-    "test:e2e": "node --test --test-concurrency=1 tests/main/local-file.e2e.cjs tests/zernio/e2e/accounts.e2e.cjs tests/zernio/e2e/automations.e2e.cjs tests/zernio/posts.e2e.cjs",
-    "test": "npm run test:main && npm run test:renderer && npm run test:zernio && npm run test:bridge && npm run test:release"
+    "test:e2e": "node --test --test-concurrency=1 tests/main/local-file.e2e.cjs tests/main/video-speed.e2e.cjs tests/main/advanced-models.e2e.cjs tests/main/updates.e2e.cjs tests/zernio/e2e/accounts.e2e.cjs tests/zernio/e2e/automations.e2e.cjs tests/zernio/posts.e2e.cjs",
+    "test": "npm run test:main && npm run test:renderer && npm run test:zernio && npm run test:bridge && npm run test:release",
+    "dist:linux-x64": "electron-vite build && electron-builder --linux --x64"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.1",

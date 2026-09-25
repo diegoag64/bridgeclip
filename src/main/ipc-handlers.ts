@@ -18,9 +18,10 @@ import { logger, getLogFilePath } from './logger'
 import { assertAbsolutePath, assertMediaPath, assertTrustedSender, authorizeMedia, isTrustedExternalUrl, isWebUrl, isWithinDirectory, openAuthorizedMedia } from './security'
 import { assertPublicWebUrl } from './network-policy'
 import { validateJobConfig } from './validation'
+import { getModelCatalog, resolveAdvancedModels } from './openrouter-models'
 import { randomUUID } from 'crypto'
 import { resolveBinary, supportsCaptionFilter } from './tools'
-import { automationEnhancementGroups, enhanceAutomationBatch, automationContentSource, enhanceAutomationContent, resolveAutomationMetadataDraft, addAutomationContent, addLibraryClipsToAutomation, createAutomation, deleteAutomation, isAutomationMedia, listAutomations, removeAutomationContent, runAutomation, updateAutomation, updateAutomationContent } from './automations'
+import { automationEnhancementGroups, enhanceAutomationBatch, automationContentSource, enhanceAutomationContent, resolveAutomationMetadataDraft, addAutomationContent, addLibraryClipsToAutomation, createAutomation, deleteAutomation, isAutomationMedia, listAutomations, removeAutomationContent, runAutomation, updateAutomation, updateAutomationContent, approveAutomationTikTokReview, prepareAutomationTikTokReview } from './automations'
 import {
   cancelZernioConnect,
   connectZernioAccount,
@@ -61,6 +62,7 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
   handle('settings:load', () => {
     return publicSettings(loadSettings())
   })
+  handle('models:list', (_event, refresh: unknown = false) => getModelCatalog(refresh))
 
   handle('settings:save', (_event, settings: PublicSettings) => {
     const current = loadSettings()
@@ -117,6 +119,8 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
   handle('automations:run', (_event, id: unknown) => runAutomation(id))
   handle('automations:addLibraryClips', (_event, id: unknown, outputDir: unknown, clipIndices: unknown) => addLibraryClipsToAutomation(id, outputDir, clipIndices))
   handle('automations:updateContent', (_event, id: unknown, contentId: unknown, update: unknown) => updateAutomationContent(id, contentId, update))
+  handle('automations:prepareTikTokReview', (_event, id: unknown, contentId: unknown) => prepareAutomationTikTokReview(id, contentId))
+  handle('automations:approveTikTokReview', (_event, id: unknown, contentId: unknown, update: unknown) => approveAutomationTikTokReview(id, contentId, update))
   handle('automations:removeContent', (_event, id: unknown, contentId: unknown) => removeAutomationContent(id, contentId))
   handle('automations:addContent', async (_event, id: unknown) => {
     const window = getMainWindow()
@@ -154,6 +158,9 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
 
     try {
       config = validateJobConfig(config)
+      if (config.clippingMode === 'advanced') {
+        config.plannerCapabilities = await resolveAdvancedModels(config.plannerModel!, config.transcriptionModel!)
+      }
       if (isWebUrl(config.videoUrl)) await assertPublicWebUrl(config.videoUrl)
       else assertMediaPath(config.videoUrl, loadSettings().outputDirectory)
       if (config.bannerChannelUrl) await assertPublicWebUrl(config.bannerChannelUrl)

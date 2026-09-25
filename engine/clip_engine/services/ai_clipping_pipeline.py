@@ -24,6 +24,7 @@ from enum import Enum
 from typing import Any, Callable, Optional
 
 from clip_engine.config import CaptionStyle, LayoutStyle, get_settings, is_longform, resolve_clip_duration_bounds
+from clip_engine.services.video_speed import validate_video_speed
 from clip_engine.error_policy import safe_failure_code, safe_processing_error
 from clip_engine.services.editorial_evidence import discovery_feedback, overlaps
 from clip_engine.services.jev_service import JevService, MODEL as JEV_MODEL
@@ -111,8 +112,10 @@ class ClippingJobRequest:
     debug_capture: bool = False
     # "tight" cuts dead air and filler words; "natural" keeps original timing.
     pacing: str = "tight"
+    video_speed: float = 1.0
 
     def __post_init__(self):
+        validate_video_speed(self.video_speed)
         if self.job_id is None:
             self.job_id = str(uuid.uuid4())
         if not isinstance(self.job_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", self.job_id):
@@ -524,6 +527,7 @@ class AIClippingPipeline:
                         layout_style=request.layout_style,
                         debug_capture=request.debug_capture,
                         pacing=request.pacing,
+                        video_speed=request.video_speed,
                         longform=longform,
                         skip_ranges_ms=segment.skip_ranges_ms,
                         chapters=segment.chapters,
@@ -754,6 +758,7 @@ class AIClippingPipeline:
                     "audio_duration_seconds": round(tc.audio_duration_seconds, 1),
                     "estimated_cost_usd": tc.estimated_cost_usd,
                     "attempts": tc.attempts,
+                    "cost_incomplete": tc.cost_incomplete,
                 }
                 total_cost += tc.estimated_cost_usd
 
@@ -767,6 +772,7 @@ class AIClippingPipeline:
                     "total_tokens": pc.total_tokens,
                     "estimated_cost_usd": pc.estimated_cost_usd,
                     "attempts": pc.attempts,
+                    "cost_incomplete": pc.cost_incomplete,
                 }
                 total_cost += pc.estimated_cost_usd
 
@@ -796,15 +802,21 @@ class AIClippingPipeline:
                     'estimated_cost_usd': editorial_vision.cost_usd, 'attempts': editorial_vision.requests}
                 total_cost += editorial_vision.cost_usd
             api_costs["total_estimated_cost_usd"] = round(total_cost, 6)
+            api_costs["cost_incomplete"] = any(section.get("cost_incomplete", False) for section in api_costs.values() if isinstance(section, dict))
 
             logger.info(f"Job {job_id} total API cost: ${total_cost:.6f}")
 
             metrics = {
+                "analysis_duration_seconds": video_duration,
                 "requested_settings": {
+                    "clipping_mode": self.settings.clipping_mode,
+                    "planner_model": self.settings.planner_model,
+                    "transcription_model": self.settings.transcription_model,
                     "aspect_ratio": request.aspect_ratio,
                     "layout_style": request.layout_style,
                     "layout_vision_enabled": self.settings.layout_vision_enabled,
                     "pacing": request.pacing,
+                    "video_speed": request.video_speed,
                 },
                 "transcription_status": transcription_status,
                 "planning_source": "visual" if visual_frames else "transcript",

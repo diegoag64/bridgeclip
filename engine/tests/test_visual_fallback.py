@@ -137,7 +137,8 @@ def test_visual_only_planner_uses_duration_and_rejects_unsupported_clip(monkeypa
 
 
 @pytest.mark.parametrize("no_audio", [False, True])
-def test_visual_only_candidate_is_omitted_without_verifiable_dialogue(monkeypatch, tmp_path, no_audio):
+@pytest.mark.parametrize("speed", [1, 1.5])
+def test_visual_only_candidate_is_omitted_without_verifiable_dialogue(monkeypatch, tmp_path, no_audio, speed):
     monkeypatch.setattr(RenderingService, "_verify_ffmpeg", lambda self: None)
     settings = pipeline_module.get_settings()
     monkeypatch.setattr(settings, "local_mode", True)
@@ -163,7 +164,7 @@ def test_visual_only_candidate_is_omitted_without_verifiable_dialogue(monkeypatc
     async def plan(**kwargs):
         assert len(kwargs["frames"]) == 3
         assert not kwargs["transcript_result"].segments
-        return ClipPlanResponse([ClipPlanSegment(10_000, 30_000, 0.8, summary="Visible action")], total_clips=1)
+        return ClipPlanResponse([ClipPlanSegment(t, t + 20_000, 0.8, summary="Visible action") for t in (10_000, 30_000)], total_clips=2)
 
     async def render(request):
         pytest.fail("Unverified visual-only content must never render")
@@ -175,7 +176,7 @@ def test_visual_only_candidate_is_omitted_without_verifiable_dialogue(monkeypatc
     monkeypatch.setattr(pipeline.intelligence_planner, "plan_clips", plan)
     monkeypatch.setattr(pipeline.rendering_service, "render_clip", render)
 
-    result = asyncio.run(pipeline.process_video(ClippingJobRequest(video_url="x", job_id="visual-test")))
+    result = asyncio.run(pipeline.process_video(ClippingJobRequest(video_url="x", job_id="visual-test", video_speed=speed)))
     assert result.status == JobStatus.FAILED
     assert 'No clip was forced' in result.error
     audit = json.loads((tmp_path / "out" / "visual-test" / "edit_audit.json").read_text())

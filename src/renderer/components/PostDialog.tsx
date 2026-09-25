@@ -39,7 +39,8 @@ import { PlatformIcon, platformName } from './PlatformIcon'
 import { Button } from './ui/Button'
 import { Checkbox } from './ui/Checkbox'
 import { Switch } from './ui/Switch'
-import { Select, TextArea, TextInput, WELL } from './ui/Field'
+import { TextArea, TextInput, WELL } from './ui/Field'
+import { Select } from './ui/Select'
 import { ProgressBar } from './ui/ProgressBar'
 import { Badge } from './ui/Badge'
 import { Callout } from './ui/Callout'
@@ -68,7 +69,7 @@ type CreatorInfoState = TikTokCreatorInfo | { error: string } | 'loading'
 /** Past this many accounts the picker gets a search box. */
 const SEARCH_ACCOUNTS_AT = 8
 
-const EMPTY_TIKTOK: TikTokPostOptions = {
+export const EMPTY_TIKTOK: TikTokPostOptions = {
   accounts: {},
   disclose: false,
   yourBrand: false,
@@ -385,8 +386,8 @@ export function PostDialog({ clips, onClose, onNavigate }: PostDialogProps): Rea
   }
 
   const viewPosts = (): void => {
-    usePostsStore.getState().requestReveal()
-    goToAccounts()
+    onClose()
+    onNavigate?.('posts')
   }
 
   // Focus trap and Escape, as in UpdateModal.
@@ -952,7 +953,7 @@ function AccountRow({ account, grouped, profile, reason, selected, onToggle }: {
 }
 
 /** Choices for one TikTok account, from its own creator info. */
-function TikTokAccountFields({ heading, state, value, onChange, brandedContent, draft, businessConnection, onRetry }: {
+export function TikTokAccountFields({ heading, state, value, onChange, brandedContent, draft, businessConnection, onRetry }: {
   heading: string | null
   state: CreatorInfoState | undefined
   value: TikTokAccountOptions
@@ -997,20 +998,20 @@ function TikTokAccountFields({ heading, state, value, onChange, brandedContent, 
           <Select
             id={id}
             value={value.privacyLevel}
-            onChange={(e) => set({ privacyLevel: e.target.value })}
-          >
-            <option value="" disabled>Choose who can view</option>
-            {info.privacyLevels.map((level) => {
+            onChange={(privacyLevel) => set({ privacyLevel })}
+            placeholder="Choose who can view"
+            emptyText="TikTok returned no privacy options."
+            options={info.privacyLevels.map((level) => {
               const privateBranded = level.value === 'SELF_ONLY' && brandedContent
               const businessDirectPrivate = businessConnection && !draft && level.value !== 'PUBLIC_TO_EVERYONE'
-              return (
-                <option key={level.value} value={level.value} disabled={privateBranded || businessDirectPrivate}>
-                  {TIKTOK_PRIVACY_LABELS[level.value] ?? level.label}
-                  {privateBranded ? ' (not for branded content)' : businessDirectPrivate ? ' (send to inbox)' : ''}
-                </option>
-              )
+              return {
+                value: level.value,
+                label: TIKTOK_PRIVACY_LABELS[level.value] ?? level.label,
+                detail: privateBranded ? 'not for branded content' : businessDirectPrivate ? 'send to inbox' : undefined,
+                disabled: privateBranded || businessDirectPrivate
+              }
             })}
-          </Select>
+          />
           {info.privacyLevels.length === 0 && <p className="mt-2 text-xs text-danger">TikTok returned no privacy options for this account.</p>}
         </div>
         <div>
@@ -1041,8 +1042,8 @@ function TikTokAccountFields({ heading, state, value, onChange, brandedContent, 
 }
 
 /** Choices that apply to every TikTok account in the post, and TikTok's consent. */
-function TikTokSharedFields({ value, onChange, commercialTypes }: { value: TikTokPostOptions; onChange: (value: TikTokPostOptions) => void; commercialTypes: string[] }): React.JSX.Element {
-  const set = (patch: Partial<TikTokPostOptions>): void => onChange({ ...value, ...patch })
+export function TikTokSharedFields({ value, onChange, commercialTypes }: { value: TikTokPostOptions; onChange: (value: TikTokPostOptions) => void; commercialTypes: string[] }): React.JSX.Element {
+  const set = (patch: Partial<TikTokPostOptions>): void => onChange({ ...value, ...patch, ...('consent' in patch ? {} : { consent: false }) })
   const canBrand = commercialTypes.length === 0 || commercialTypes.includes('brand_organic')
   const canBranded = commercialTypes.length === 0 || commercialTypes.includes('brand_content')
   const label = value.disclose && value.brandedContent ? 'Paid partnership' : value.disclose && value.yourBrand ? 'Promotional content' : null

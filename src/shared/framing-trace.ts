@@ -29,7 +29,7 @@ export interface FramingTrace {
   version: 1; clip_index: number
   source: { width: number; height: number; duration_ms: number; preview_status: string }
   window: { start_ms: number; duration_ms: number; requested_start_ms: number; requested_end_ms: number }
-  output: { width: number; height: number; duration_ms: number; fps: number }
+  output: { width: number; height: number; duration_ms: number; fps: number; video_speed?: number }
   sample_fps: number; thresholds: Record<string, number>
   config: { style: string; pacing: string; vision_enabled: boolean; vision_model: string; detector: string; analysis_width: number }
   analysis_status: string; samples: TraceSample[]
@@ -109,7 +109,7 @@ export function parseFramingTrace(value: unknown): FramingTrace {
     version: 1, clip_index: integer(v.clip_index, 999),
     source: { width: number(source.width, 32768), height: number(source.height, 32768), duration_ms: number(source.duration_ms), preview_status: oneOf(source.preview_status, ['available', 'failed']) },
     window: { start_ms: number(win.start_ms), duration_ms: number(win.duration_ms, 3600000), requested_start_ms: number(win.requested_start_ms), requested_end_ms: number(win.requested_end_ms) },
-    output: { width: number(output.width, 32768), height: number(output.height, 32768), duration_ms: number(output.duration_ms), fps: number(output.fps, 240) },
+    output: { width: number(output.width, 32768), height: number(output.height, 32768), duration_ms: number(output.duration_ms), fps: number(output.fps, 240), video_speed: output.video_speed == null ? 1 : number(output.video_speed, 2) },
     sample_fps: number(v.sample_fps, 60), thresholds: {},
     config: { style: oneOf(config.style, ['auto', 'fit', 'fill']), pacing: oneOf(config.pacing, ['natural', 'tight']), vision_enabled: bool(config.vision_enabled),
       vision_model: text(config.vision_model), detector: text(config.detector), analysis_width: number(config.analysis_width, 32768) },
@@ -143,6 +143,7 @@ export function parseFramingTrace(value: unknown): FramingTrace {
     if (value != null) result.thresholds[key] = number(value, 1)
   }
   if (!result.source.width || !result.source.height || !result.window.duration_ms || !result.output.fps || !result.sample_fps || !result.output.width || !result.output.height) throw new Error('Empty framing geometry')
+  if ((result.output.video_speed ?? 1) < 1) throw new Error('Invalid framing speed')
   let last = -1
   for (const sample of result.samples) {
     if (sample.t_ms <= last || sample.t_ms >= result.window.duration_ms + 250) throw new Error('Unordered framing samples')
@@ -186,7 +187,7 @@ export function parseFramingTrace(value: unknown): FramingTrace {
   last = 0
   let sourceEnd = 0
   for (const p of result.video_pieces) {
-    if (p.shot >= result.rendered_plan.length || Math.abs(p.output_start_ms - last) > .01 || p.source_start_ms < sourceEnd - .01 || p.source_end_ms <= p.source_start_ms || p.output_end_ms <= p.output_start_ms || Math.abs((p.source_end_ms - p.source_start_ms) - (p.output_end_ms - p.output_start_ms)) > .01 || p.source_end_ms > result.window.duration_ms + 1000 / result.output.fps) throw new Error('Invalid video mapping')
+    if (p.shot >= result.rendered_plan.length || Math.abs(p.output_start_ms - last) > .01 || p.source_start_ms < sourceEnd - .01 || p.source_end_ms <= p.source_start_ms || p.output_end_ms <= p.output_start_ms || Math.abs((p.source_end_ms - p.source_start_ms) / (result.output.video_speed ?? 1) - (p.output_end_ms - p.output_start_ms)) > .01 || p.source_end_ms > result.window.duration_ms + 1000 / result.output.fps) throw new Error('Invalid video mapping')
     last = p.output_end_ms; sourceEnd = p.source_end_ms
   }
   if (Math.abs(last - result.output.duration_ms) > 1000 / result.output.fps + .01) throw new Error('Incomplete video mapping')
@@ -197,11 +198,11 @@ export function parseFramingTrace(value: unknown): FramingTrace {
 export function sourceToOutput(trace: FramingTrace, sourceMs: number): number | null {
   const t = sourceMs - trace.window.start_ms
   const p = trace.video_pieces.find((p) => p.source_start_ms <= t && t < p.source_end_ms)
-  return p ? p.output_start_ms + t - p.source_start_ms : null
+  return p ? p.output_start_ms + (t - p.source_start_ms) / (trace.output.video_speed ?? 1) : null
 }
 export function outputToSource(trace: FramingTrace, outputMs: number): number | null {
   const p = trace.video_pieces.find((p) => p.output_start_ms <= outputMs && outputMs < p.output_end_ms)
-  return p ? trace.window.start_ms + p.source_start_ms + outputMs - p.output_start_ms : null
+  return p ? trace.window.start_ms + p.source_start_ms + (outputMs - p.output_start_ms) * (trace.output.video_speed ?? 1) : null
 }
 export function cropViews(shot: TraceShot, windowMs: number): Rect[] {
   const views = shot.views.map((v) => [...v.source] as Rect)

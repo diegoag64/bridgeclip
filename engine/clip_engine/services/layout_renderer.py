@@ -23,6 +23,7 @@ from math import ceil
 from typing import Optional
 
 from clip_engine.services.layout_analyzer import Box, ClipLayoutPlan, LayoutType, ShotLayout
+from clip_engine.services.video_speed import speed_audio_filter, validate_video_speed
 
 # Two people get equal space. Screen shares start with more room for the
 # screen; a smaller webcam can move the seam farther down.
@@ -516,6 +517,7 @@ def build_layout_graph(
     landscape: bool = False,
     fps: str = "30",
     loudness_filter: Optional[str] = None,
+    video_speed: float = 1.0,
 ) -> str:
     """Filter graph from [0:v] (and [0:a]) to [base] (and [aout]).
 
@@ -527,6 +529,7 @@ def build_layout_graph(
     Audio uses the same window clock and exact keep intervals; framing changes
     must neither splice speech nor add concat's longest-stream padding.
     """
+    validate_video_speed(video_speed)
     src_w, src_h = plan.source_width, plan.source_height
     window_end = plan.shots[-1].end_ms
     video_pieces = video_frame_pieces(plan, keeps, fps)
@@ -574,7 +577,18 @@ def build_layout_graph(
                 f"asetpts=PTS-{start / 1000:.3f}/TB{fades}[a{k}]"
             )
         inputs = "".join(f"[a{k}]" for k in range(audio_n))
-        parts.append(f"{inputs}concat=n={audio_n}:v=0:a=1,{loudness_filter or LOUDNESS_FILTER}[aout]")
+        # The input resampler has already materialized source offsets/gaps,
+        # and concat has applied the exact sample edits. Rebuild the final
+        # clock from those samples AFTER loudnorm: its buffered EOF flush can
+        # leave a PTS jump when the edit ends between its 100 ms blocks. AAC
+        # then encodes that jump as an overlong packet, delaying the tail.
+        # Resetting timestamps here preserves all content and source silence;
+        # doing it before AUDIO_SYNC would erase legitimate source offsets.
+        parts.append(
+            f"{inputs}concat=n={audio_n}:v=0:a=1,{loudness_filter or LOUDNESS_FILTER},"
+            f"{speed_audio_filter(video_speed, sum(end - start for start, end in audio_keeps))}"
+            "asettb=1/48000,asetpts=N[aout]"
+        )
     return ";".join(parts)
 
 

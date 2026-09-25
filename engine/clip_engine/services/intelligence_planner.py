@@ -79,6 +79,7 @@ class PlanningApiCosts:
     total_tokens: int = 0
     estimated_cost_usd: float = 0.0
     attempts: int = 0
+    cost_incomplete: bool = False
 
 
 # OpenRouter reports the billed cost of every request in `usage.cost`, which
@@ -535,6 +536,10 @@ class IntelligencePlannerService:
         logger.info("Transcript text length: %s chars", len(transcript_text))
         
         frames_to_send = frames[:48]
+        if self.settings.clipping_mode == "advanced" and not self.settings.planner_supports_images:
+            if not transcript:
+                raise VisualPlanningUnsupportedError("Selected planner requires a video with speech")
+            frames_to_send = []
         frame_images = await self._load_frames_as_base64(frames_to_send)
         if not transcript and len(frame_images) < 3:
             return ClipPlanResponse(
@@ -574,7 +579,7 @@ class IntelligencePlannerService:
         logger.info(
             f"Calling planner model {model_name} "
             f"(fallbacks: {fallback_models or 'none'}, "
-            f"reasoning: {self.settings.planner_reasoning_effort}) for clip planning..."
+            f"reasoning: {'model default' if self.settings.clipping_mode == 'advanced' else self.settings.planner_reasoning_effort}) for clip planning..."
         )
 
         max_attempts = 1 if discovery_feedback is not None else 3
@@ -583,6 +588,7 @@ class IntelligencePlannerService:
         cumulative_total_tokens = 0
         cumulative_cost = 0.0
         cost_reported = True
+        cost_incomplete = False
         attempts_made = 0
         served_by = model_name
 
@@ -611,6 +617,21 @@ class IntelligencePlannerService:
                     cumulative_cost += usage_data["cost"]
                 else:
                     cost_reported = False
+                    pricing = MODEL_PRICING.get(served_by, DEFAULT_PRICING)
+                    if self.settings.clipping_mode == "advanced":
+                        if self.settings.planner_input_price is not None and self.settings.planner_output_price is not None:
+                            pricing = {"input": self.settings.planner_input_price, "output": self.settings.planner_output_price}
+                        else:
+                            pricing = None
+                    if pricing is None:
+                        cost_incomplete = True
+                    else:
+                        # Estimate only this response. Preserve reported charges
+                        # from other attempts, including malformed responses.
+                        cumulative_cost += (
+                            usage_data["prompt_tokens"] * pricing["input"]
+                            + usage_data["completion_tokens"] * pricing["output"]
+                        )
 
                 result = self._parse_clip_plan_response(response)
                 record['status'] = 'parsed'
@@ -624,13 +645,6 @@ class IntelligencePlannerService:
                 )
                 await asyncio.sleep(delay)
                 continue
-
-            if not cost_reported:
-                pricing = MODEL_PRICING.get(served_by, DEFAULT_PRICING)
-                cumulative_cost = (
-                    cumulative_prompt_tokens * pricing["input"]
-                    + cumulative_completion_tokens * pricing["output"]
-                )
 
             if discovery_feedback is not None:
                 result.segments = [c for c in result.segments
@@ -647,6 +661,7 @@ class IntelligencePlannerService:
                 total_tokens=cumulative_total_tokens,
                 estimated_cost_usd=round(cumulative_cost, 6),
                 attempts=attempts_made,
+                cost_incomplete=cost_incomplete,
             )
             logger.info(
                 f"Planning API cost: ${cumulative_cost:.6f} "
@@ -988,7 +1003,10 @@ Do not overlap clips by more than 5 seconds."""
         if fallback_models:
             payload["models"] = fallback_models
 
-        apply_reasoning(payload, self.settings.planner_reasoning_effort)
+        # Advanced accepts models without configurable reasoning. Let the
+        # selected model use its defaults instead of requiring a preset effort.
+        if self.settings.clipping_mode != "advanced":
+            apply_reasoning(payload, self.settings.planner_reasoning_effort)
         return payload
 
     async def _call_openrouter(
@@ -1273,3 +1291,7 @@ class IntelligencePlanningError(Exception):
     def __init__(self, message: str, retryable: bool = False):
         super().__init__(message)
         self.retryable = retryable
+
+
+class VisualPlanningUnsupportedError(IntelligencePlanningError):
+    """The selected text-only planner cannot analyze a silent video."""

@@ -80,6 +80,28 @@ test('automation imports require prior media authorization for files outside the
   } finally { cleanup() }
 })
 
+test('a failed batch import leaves no copied clips to duplicate on retry', async () => {
+  const { dir, cleanup } = tempDir('bridgeclip-bank-batch-')
+  try {
+    const library = path.join(dir, 'library')
+    fs.mkdirSync(library)
+    const clip = path.join(library, 'clip.mp4')
+    const unsupported = path.join(library, 'notes.txt')
+    fs.writeFileSync(clip, 'clip bytes')
+    fs.writeFileSync(unsupported, 'not a clip')
+    const main = loadMain("export * as automations from './src/main/automations'; export * as settings from './src/main/settings-store'; export { workspaceId } from './src/main/zernio/workspace-cache'", { electron: fakeElectron(dir).electron })
+    main.settings.savePublicSettings({ outputDirectory: library, pythonPath: 'python3', customVocabulary: '' })
+    main.settings.replaceApiKey('zernioApiKey', KEY)
+    const [automation] = main.automations.createAutomation('Batch import')
+    await assert.rejects(main.automations.addAutomationContent(automation.id, [clip, unsupported]), /Invalid media path/)
+    assert.equal(main.automations.listAutomations()[0].content.length, 0)
+    const bank = path.join(dir, 'userData', 'automation-bank', main.workspaceId(KEY), automation.id)
+    assert.deepEqual(fs.readdirSync(bank), [])
+    await main.automations.addAutomationContent(automation.id, [clip])
+    assert.equal(main.automations.listAutomations()[0].content.length, 1)
+  } finally { cleanup() }
+})
+
 test('a key switch during an automation import cannot overwrite the old workspace', async () => {
   const { dir, cleanup } = tempDir('bridgeclip-bank-key-switch-')
   try {
@@ -153,6 +175,61 @@ test('an upload failure keeps an automation clip retryable without creating a po
     assert.equal(posted.content[0].status, 'posted')
     assert.equal(posting.state.creates.length, 1)
   } finally {
+    if (previousUrl === undefined) delete process.env.BRIDGECLIP_ZERNIO_API_URL
+    else process.env.BRIDGECLIP_ZERNIO_API_URL = previousUrl
+    process.env.PATH = previousPath
+    await mock.close()
+    cleanup()
+  }
+})
+
+test('a reviewed uncertain post can return to the queue after its replay window expires', async () => {
+  const { dir, cleanup } = tempDir('bridgeclip-automation-reviewed-retry-')
+  const posting = createPostingMock()
+  const mock = await createMockZernio({ apiKey: KEY, extraRoutes: posting.routes })
+  const previousUrl = process.env.BRIDGECLIP_ZERNIO_API_URL
+  const previousPath = process.env.PATH
+  process.env.BRIDGECLIP_ZERNIO_API_URL = mock.apiUrl
+  process.env.PATH = `${previousPath}${path.delimiter}${path.join(ROOT, 'engine-bin')}`
+  const realNow = Date.now
+  try {
+    const library = path.join(dir, 'library')
+    const clip = makeClip(path.join(library, 'clip.mp4'))
+    const main = loadMain("export * as automations from './src/main/automations'; export * as settings from './src/main/settings-store'", { electron: fakeElectron(dir).electron })
+    main.settings.replaceApiKey('zernioApiKey', KEY)
+    main.settings.savePublicSettings({ outputDirectory: library, pythonPath: 'python3' })
+    const [profile] = mock.state.profiles
+    const youtube = mock.addAccount('youtube', profile._id)
+    const [created] = main.automations.createAutomation('Reviewed retry')
+    await main.automations.updateAutomation(created.id, {
+      name: created.name, enabled: false, profileId: profile._id, metadataMode: 'manual', timezone: 'UTC', times: [],
+      youtubeVisibility: 'unlisted', youtubeMadeForKids: false,
+      accounts: [{ platform: 'youtube', accountId: youtube._id }]
+    })
+    await main.automations.addAutomationContent(created.id, [clip])
+    for (let i = 0; i < 3; i++) mock.failNext('POST', '/api/v1/posts', 500, { error: 'temporary failure' })
+    const [uncertain] = await main.automations.runAutomation(created.id)
+    assert.equal(uncertain.content[0].status, 'needs_review')
+    await main.automations.runAutomation(created.id)
+    assert.equal(mock.requestsTo('POST', '/api/v1/posts').length, 3, 'uncertain posts never retry automatically')
+    const oldAttemptId = uncertain.content[0].id
+    const journal = path.join(dir, 'userData', `zernio-post-attempts-${require('node:crypto').createHash('sha256').update(KEY).digest('hex')}.json`)
+    assert.ok(JSON.parse(fs.readFileSync(journal, 'utf8')).attempts.some(([id]) => id === oldAttemptId))
+
+    Date.now = () => realNow() + 5 * 60_000
+    const [requeued] = main.automations.updateAutomationContent(created.id, oldAttemptId, {
+      title: uncertain.content[0].title, caption: 'Reviewed and ready', returnToQueue: true
+    })
+    assert.equal(requeued.content[0].status, 'queued')
+    assert.notEqual(requeued.content[0].postingAttemptId, oldAttemptId)
+    const restarted = loadMain("export * as automations from './src/main/automations'; export * as settings from './src/main/settings-store'", { electron: fakeElectron(dir).electron })
+    assert.equal(restarted.automations.listAutomations()[0].content[0].postingAttemptId, requeued.content[0].postingAttemptId)
+    const [posted] = await restarted.automations.runAutomation(created.id)
+    assert.equal(posted.content[0].status, 'posted')
+    assert.equal(posting.state.posts.size, 1)
+    assert.ok(JSON.parse(fs.readFileSync(journal, 'utf8')).attempts.some(([id]) => id === oldAttemptId), 'the uncertain attempt stays in the audit journal')
+  } finally {
+    Date.now = realNow
     if (previousUrl === undefined) delete process.env.BRIDGECLIP_ZERNIO_API_URL
     else process.env.BRIDGECLIP_ZERNIO_API_URL = previousUrl
     process.env.PATH = previousPath
@@ -289,8 +366,10 @@ test('bank clips publish once to selected accounts and keep their used state aft
     assert.equal(partial.content[1].status, 'needs_review')
     assert.ok(partial.content[1].postId, 'the partial post is linked for review')
     assert.throws(() => restarted.automations.updateAutomationContent(created.id, partial.content[1].id, {
-      title: partial.content[1].title, caption: partial.content[1].caption, returnToQueue: true
-    }), /Use Posts on Accounts/)
+      title: partial.content[1].title, caption: 'Must not be saved', returnToQueue: true
+    }), /Open Posts/)
+    assert.equal(restarted.automations.listAutomations()[0].content[1].caption, partial.content[1].caption,
+      'a rejected return does not change the clip in memory')
     await restarted.automations.runAutomation(created.id)
     assert.equal(posting.state.creates.length, 2, 'a partial post is never retried silently')
 
@@ -411,6 +490,159 @@ test('AI automation transcribes the bank clip and sends distinct grounded metada
       BRIDGECLIP_E2E_OPENROUTER_URL: previous.openrouter,
       PATH: previous.path
     })) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+    await mock.close()
+    cleanup()
+  }
+})
+
+test('TikTok automations require per-clip review, preserve approved copy, and publish once per slot', async () => {
+  const { dir, cleanup } = tempDir('bridgeclip-automation-tiktok-')
+  const posting = createPostingMock()
+  let generations = 0
+  const mock = await createMockZernio({ apiKey: KEY, extraRoutes: [
+    ...posting.routes,
+    { method: 'POST', path: '/speech', auth: false, handler: (ctx) => ctx.json(200, { text: 'Accurate transcripts make reliable automations.' }) },
+    { method: 'POST', path: '/metadata', auth: false, handler: (ctx) => {
+      generations++
+      const input = JSON.parse(ctx.body.messages[1].content)
+      ctx.json(200, { choices: [{ message: { content: JSON.stringify({ posts: input.platforms.map(({ platform }) => ({
+        platform, caption: 'Accurate transcripts make reliable automations.', title: null, tags: [], categoryId: null, topicTag: null,
+        evidence: 'Accurate transcripts make reliable automations.'
+      })) }) } }] })
+    } }
+  ] })
+  const environment = {
+    BRIDGECLIP_ZERNIO_API_URL: mock.apiUrl,
+    BRIDGECLIP_E2E_TRANSCRIPTION_URL: `${mock.url}/speech`,
+    BRIDGECLIP_E2E_OPENROUTER_URL: `${mock.url}/metadata`,
+    PATH: `${process.env.PATH}${path.delimiter}${path.join(ROOT, 'engine-bin')}`
+  }
+  const previous = Object.fromEntries(Object.keys(environment).map((name) => [name, process.env[name]]))
+  Object.assign(process.env, environment)
+  try {
+    const library = path.join(dir, 'library')
+    const clip = makeClip(path.join(library, 'clip.mp4'))
+    const { electron } = fakeElectron(dir)
+    const source = "export * as automations from './src/main/automations'; export * as settings from './src/main/settings-store'"
+    const main = loadMain(source, { electron })
+    main.settings.replaceApiKey('zernioApiKey', KEY)
+    main.settings.replaceApiKey('openrouterApiKey', 'test-openrouter-key')
+    main.settings.savePublicSettings({ outputDirectory: library, pythonPath: 'python3' })
+    const [profile] = mock.state.profiles
+    const tiktok = mock.addAccount('tiktok', profile._id)
+    const instagram = mock.addAccount('instagram', profile._id)
+    const [created] = main.automations.createAutomation('TikTok queue')
+    const update = { name: created.name, enabled: true, profileId: profile._id, metadataMode: 'ai', timezone: 'UTC', times: ['12:00', '13:00'],
+      youtubeVisibility: 'public', youtubeMadeForKids: false,
+      accounts: [{ platform: 'tiktok', accountId: tiktok._id }, { platform: 'instagram', accountId: instagram._id }] }
+    await main.automations.updateAutomation(created.id, update)
+    const [bank] = await main.automations.addAutomationContent(created.id, [clip, clip])
+    const [first, second] = bank.content
+    const [waiting] = await main.automations.runAutomation(created.id)
+    assert.match(waiting.lastError, /Review a queued clip for TikTok/)
+    assert.equal(posting.state.uploads.length, 0)
+    assert.equal(generations, 0, 'unapproved clips do not generate copy during a scheduled run')
+    const review = await main.automations.prepareAutomationTikTokReview(created.id, second.id)
+    assert.equal(review.caption, 'Accurate transcripts make reliable automations.')
+    assert.equal(review.creators[0].info.accountId, tiktok._id)
+    assert.equal(generations, 1)
+    assert.equal(posting.state.uploads.length, 0, 'review does not upload')
+    const options = { accounts: { [tiktok._id]: { privacyLevel: 'PUBLIC_TO_EVERYONE', allowComment: true, allowDuet: false, allowStitch: true } },
+      disclose: true, yourBrand: true, brandedContent: false, madeWithAi: false, draft: false, consent: true }
+    const approval = { reviewId: review.reviewId, caption: 'My reviewed caption #Automation', options, previewConfirmed: true }
+    await assert.rejects(main.automations.approveAutomationTikTokReview(created.id, second.id, { ...approval, previewConfirmed: false }), /reviewed this clip/)
+    await assert.rejects(main.automations.approveAutomationTikTokReview(created.id, second.id, { ...approval, options: { ...options, consent: false } }), /Agree to TikTok/)
+    await assert.rejects(main.automations.approveAutomationTikTokReview(created.id, second.id, { ...approval, options: { ...options, accounts: {} } }), /Choose who can view/)
+    await main.automations.approveAutomationTikTokReview(created.id, second.id, approval)
+    assert.equal(posting.state.uploads.length, 0, 'approval only saves locally')
+    const reopened = await main.automations.prepareAutomationTikTokReview(created.id, second.id)
+    assert.equal(reopened.caption, approval.caption, 'editing TikTok preserves the reviewed caption')
+    assert.equal(main.automations.listAutomations()[0].content[1].tiktokApproval, null, 'a reopened review pauses the clip until approved again')
+    await main.automations.approveAutomationTikTokReview(created.id, second.id, { ...approval, reviewId: reopened.reviewId })
+    const restarted = loadMain(source, { electron })
+    assert.equal(restarted.automations.listAutomations()[0].content[1].tiktokApproval.caption, approval.caption)
+    const slot = { time: '12:00', date: '2026-09-25' }
+    const [posted] = await restarted.automations.runAutomation(created.id, slot)
+    assert.equal(posted.lastError, null)
+    assert.equal(posted.content[0].status, 'queued', 'unapproved first clip is skipped')
+    assert.equal(posted.content[1].status, 'posted')
+    assert.equal(generations, 1, 'reviewed copy is not regenerated at publish time')
+    const body = posting.state.creates[0].body
+    assert.equal(body.platforms[0].customContent, approval.caption)
+    assert.equal(body.platforms[1].customContent, review.caption)
+    assert.equal(body.platforms[0].platformSpecificData.tiktokSettings.privacy_level, 'PUBLIC_TO_EVERYONE')
+    assert.equal(body.platforms[0].platformSpecificData.tiktokSettings.allow_comment, true)
+    assert.equal(body.platforms[0].platformSpecificData.tiktokSettings.allow_stitch, false, 'creator-disabled interactions stay off')
+    assert.equal(body.tiktokSettings.express_consent_given, true)
+    assert.equal(body.tiktokSettings.content_preview_confirmed, true)
+    await restarted.automations.runAutomation(created.id, slot)
+    assert.equal(posting.state.creates.length, 1, 'the same slot cannot duplicate a post')
+
+    const staleReview = await restarted.automations.prepareAutomationTikTokReview(created.id, first.id)
+    restarted.automations.updateAutomationContent(created.id, first.id, { title: first.title, caption: 'Changed notes' })
+    await assert.rejects(restarted.automations.approveAutomationTikTokReview(created.id, first.id, { ...approval, reviewId: staleReview.reviewId }), /changed/)
+    const fresh = await restarted.automations.prepareAutomationTikTokReview(created.id, first.id)
+    await restarted.automations.approveAutomationTikTokReview(created.id, first.id, { ...approval, reviewId: fresh.reviewId })
+    const [changedMode] = await restarted.automations.updateAutomation(created.id, { ...update, metadataMode: 'manual' })
+    assert.equal(changedMode.content[0].tiktokApproval, null, 'changing metadata mode requires review again')
+    const manual = await restarted.automations.prepareAutomationTikTokReview(created.id, first.id)
+    assert.equal(manual.caption, 'Changed notes')
+    await restarted.automations.approveAutomationTikTokReview(created.id, first.id, { ...approval, reviewId: manual.reviewId })
+    const [changedAccounts] = await restarted.automations.updateAutomation(created.id, { ...update, metadataMode: 'manual', accounts: [update.accounts[1]] })
+    assert.equal(changedAccounts.content[0].tiktokApproval, null, 'removing and re-adding TikTok cannot reuse consent')
+    await restarted.automations.updateAutomation(created.id, { ...update, metadataMode: 'manual' })
+    const fileReview = await restarted.automations.prepareAutomationTikTokReview(created.id, first.id)
+    await restarted.automations.approveAutomationTikTokReview(created.id, first.id, { ...approval, reviewId: fileReview.reviewId })
+    fs.utimesSync(fileReview.clipPath, new Date(), new Date(Date.now() + 10000))
+    const [changedFile] = await restarted.automations.runAutomation(created.id)
+    assert.match(changedFile.lastError, /clip file changed/)
+    assert.equal(changedFile.content[0].tiktokApproval, null)
+    assert.equal(posting.state.creates.length, 1)
+    // Fresh creator limits still apply when approving, and inbox delivery stays explicit.
+    const inboxReview = await restarted.automations.prepareAutomationTikTokReview(created.id, first.id)
+    const inboxApproval = { ...approval, reviewId: inboxReview.reviewId, options: { ...options, draft: true } }
+    posting.state.creatorInfo[tiktok._id] = {
+      creator: { nickname: 'Limited creator', canPostMore: false },
+      privacyLevels: [{ value: 'PUBLIC_TO_EVERYONE', label: 'Public' }],
+      postingLimits: { maxVideoDurationSec: 600 }
+    }
+    await assert.rejects(restarted.automations.approveAutomationTikTokReview(created.id, first.id, { ...inboxApproval, options }), /isn’t accepting more posts/)
+    await restarted.automations.approveAutomationTikTokReview(created.id, first.id, inboxApproval)
+    const [delivered] = await restarted.automations.runAutomation(created.id, { time: '13:00', date: '2026-09-25' })
+    assert.equal(delivered.content[0].status, 'posted')
+    assert.equal(posting.state.creates[1].body.tiktokSettings.draft, true)
+    assert.equal(delivered.content[0].tiktokApproval.options.draft, true)
+
+    // Enhanced copy and TikTok consent must be reviewed together, even in manual mode.
+    const [extended] = await restarted.automations.addAutomationContent(created.id, [clip])
+    const third = extended.content.at(-1)
+    const thirdReview = await restarted.automations.prepareAutomationTikTokReview(created.id, third.id)
+    await restarted.automations.approveAutomationTikTokReview(created.id, third.id, { ...inboxApproval, reviewId: thirdReview.reviewId })
+    const [enhanced] = await restarted.automations.enhanceAutomationContent(created.id, third.id, { research: false })
+    const draft = enhanced.content.at(-1).metadataDraft
+    assert.ok(draft)
+    const heldSlot = { time: '12:00', date: '2026-09-26' }
+    const [held] = await restarted.automations.runAutomation(created.id, heldSlot)
+    assert.match(held.lastError, /enhanced metadata draft/)
+    assert.notEqual(held.lastSlots['12:00'], heldSlot.date, 'draft review does not consume the due slot')
+    await assert.rejects(restarted.automations.prepareAutomationTikTokReview(created.id, third.id), /Apply or discard/)
+    const [applied] = restarted.automations.resolveAutomationMetadataDraft(created.id, third.id, draft.id, true)
+    assert.equal(applied.content.at(-1).tiktokApproval, null, 'applying new copy invalidates older TikTok consent')
+    const callsBeforeReview = generations
+    const enhancedReview = await restarted.automations.prepareAutomationTikTokReview(created.id, third.id)
+    assert.equal(enhancedReview.caption, draft.posts.find(post => post.platform === 'tiktok').caption)
+    assert.equal(generations, callsBeforeReview, 'manual mode reuses applied metadata without generating new copy')
+    await restarted.automations.approveAutomationTikTokReview(created.id, third.id, { ...inboxApproval, reviewId: enhancedReview.reviewId, caption: enhancedReview.caption })
+    const [enhancedPosted] = await restarted.automations.runAutomation(created.id, heldSlot)
+    assert.equal(enhancedPosted.content.at(-1).status, 'posted')
+    assert.equal(posting.state.creates.at(-1).body.platforms[0].customContent, enhancedReview.caption)
+
+
+  } finally {
+    for (const [name, value] of Object.entries(previous)) {
       if (value === undefined) delete process.env[name]
       else process.env[name] = value
     }

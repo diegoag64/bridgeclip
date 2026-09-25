@@ -10,6 +10,7 @@ const bundled = buildSync({
     contents: `export { FormatStep, ClipsStep, JobForm, buildJobRequest, parseTrimRange } from './src/renderer/components/JobForm';
       export { SetupCard } from './src/renderer/components/SetupCard';
       export { useSettingsStore } from './src/renderer/store/use-settings-store';
+      export { useDraftStore } from './src/renderer/store/use-draft-store';
       export { SourcePicker, isValidSourceLink } from './src/renderer/components/SourcePicker';
       export { framingProblem, sourceAnalysisNotice } from './src/renderer/components/ClipList';
       export { parseJobOutput } from './src/shared/job-output';
@@ -82,10 +83,57 @@ test('clipping mode is selectable and economy disables paid vision in the submit
 test('format and framing radio groups each expose one keyboard tab stop', () => {
   const draft = { aspectRatio: '9:16', layoutStyle: 'auto', layoutVision: true, pacing: 'tight' }
   const html = renderToStaticMarkup(React.createElement(FormatStep, { draft, update() {} }))
-  for (const label of ['Format', 'Framing']) {
-    const group = html.match(new RegExp(`role="radiogroup" aria-label="${label}">(.*?)<\\/div>`, 's'))?.[1]
+  for (const label of ['Format', 'Framing', 'Video speed']) {
+    const group = html.match(new RegExp(`role="radiogroup" aria-label="${label}"[^>]*>(.*?)<\\/div>`, 's'))?.[1]
     assert.ok(group)
     assert.equal((group.match(/tabindex="0"/g) ?? []).length, 1)
+  }
+})
+
+test('speed survives navigation and another job, and appears in the submitted request', () => {
+  const { useDraftStore, buildJobRequest, ClipsStep } = form.exports
+  const original = useDraftStore.getState()
+  try {
+    assert.equal(original.videoSpeed, 1)
+    original.update({ source: 'https://example.com/video', videoSpeed: 1.5 })
+    original.setStep('review')
+    assert.equal(useDraftStore.getState().step, 'review')
+    const lengths = renderToStaticMarkup(React.createElement(ClipsStep, { draft: useDraftStore.getState(), update() {} }))
+    assert.match(lengths, /60 seconds becomes about 40 seconds/)
+    assert.equal(buildJobRequest(useDraftStore.getState(), { start: 10, end: 70 }).videoSpeed, 1.5)
+    original.startAnother()
+    assert.equal(useDraftStore.getState().videoSpeed, 1.5)
+    assert.equal(useDraftStore.getState().step, 'video')
+  } finally { useDraftStore.setState(original) }
+})
+
+test('saved run speed is retained while invalid speed metadata is discarded', () => {
+  assert.equal(parseJobOutput({ clips: [], metrics: { requested_settings: { video_speed: 1.5 } } }).metrics.requested_settings.video_speed, 1.5)
+  for (const video_speed of ['2', null, Infinity, 0, 3]) {
+    assert.equal(parseJobOutput({ clips: [], metrics: { requested_settings: { video_speed } } }).metrics.requested_settings.video_speed, undefined)
+  }
+})
+
+test('advanced selections travel with the job while presets ignore retained custom choices', () => {
+  const { ClipsStep, buildJobRequest } = form.exports
+  const draft = {
+    source: 'https://example.com/video', clippingMode: 'advanced',
+    plannerModel: 'provider/planning', transcriptionModel: 'provider/speech',
+    aspectRatio: '9:16', layoutStyle: 'auto', layoutVision: true, pacing: 'tight',
+    durations: ['short'], autoClipCount: true, maxClips: 5, includeCaptions: true, captionPreset: 'pop'
+  }
+  const html = renderToStaticMarkup(React.createElement(ClipsStep, { draft, update() {} }))
+  assert.match(html, /Clip planning model/)
+  assert.match(html, /Transcription model/)
+  assert.equal((html.match(/role="combobox"/g) ?? []).length, 2)
+  const request = buildJobRequest(draft, { start: null, end: null })
+  assert.equal(request.plannerModel, 'provider/planning')
+  assert.equal(request.transcriptionModel, 'provider/speech')
+  assert.equal(request.layoutVision, true)
+  for (const clippingMode of ['quality', 'economy']) {
+    const preset = buildJobRequest({ ...draft, clippingMode }, { start: null, end: null })
+    assert.equal(preset.plannerModel, undefined)
+    assert.equal(preset.transcriptionModel, undefined)
   }
 })
 

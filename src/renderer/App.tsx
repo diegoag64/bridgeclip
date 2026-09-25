@@ -6,12 +6,13 @@ import { LibraryPage } from './pages/LibraryPage'
 import { JobsPage } from './pages/JobsPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { AccountsPage } from './pages/AccountsPage'
+import { PostsPage } from './pages/PostsPage'
 import { AutomationsPage } from './pages/AutomationsPage'
-import { UpdateModal } from './components/UpdateModal'
 import { BridgeClipLogo } from './components/brand/BridgeClipLogo'
 import { useSettingsStore } from './store/use-settings-store'
 import { useJobStore } from './store/use-job-store'
 import { useSidebarStore } from './store/use-sidebar-store'
+import { useUpdateStore } from './store/use-update-store'
 import { Button } from './components/ui/Button'
 import { getApi } from './lib/ipc'
 
@@ -19,6 +20,8 @@ export default function App(): React.JSX.Element {
   const [loadError, setLoadError] = useState(false)
   const [retry, setRetry] = useState(0)
   const [page, setPage] = useState<Page>('clip')
+  /** Set when Help → Check for Updates… asks for Settings → About. */
+  const [showUpdates, setShowUpdates] = useState(0)
 
   const loadSettings = useSettingsStore((s) => s.load)
   const checkTools = useSettingsStore((s) => s.checkTools)
@@ -38,7 +41,22 @@ export default function App(): React.JSX.Element {
     return unsubscribe
   }, [])
 
-  // ⌘1 Create, ⌘2 Library, ⌘3 History, ⌘4 Accounts, ⌘5 Automations, ⌘, Settings,
+  // Update state lives in the main process, which keeps checking in the
+  // background. Subscribe first, then read it, so no change is missed.
+  useEffect(() => {
+    const api = getApi()
+    const unsubscribes = [
+      api.update.onState((state) => useUpdateStore.getState().set(state)),
+      api.update.onShow(() => {
+        setPage('settings')
+        setShowUpdates((count) => count + 1)
+      })
+    ]
+    void api.update.getState().then((state) => useUpdateStore.getState().set(state)).catch(() => {})
+    return () => unsubscribes.forEach((unsubscribe) => unsubscribe())
+  }, [])
+
+  // ⌘1 Create, ⌘2 Library, ⌘3 Jobs, ⌘4 Accounts, ⌘5 Posts, ⌘6 Automations, ⌘, Settings,
   // ⌘\ collapse or expand the sidebar (Ctrl on Windows/Linux).
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent): void => {
@@ -73,8 +91,9 @@ export default function App(): React.JSX.Element {
           {page === 'library' && <LibraryPage onNavigate={setPage} />}
           {page === 'jobs' && <JobsPage onNavigate={setPage} />}
           {page === 'accounts' && <AccountsPage onNavigate={setPage} />}
+          {page === 'posts' && <PostsPage onNavigate={setPage} />}
           {page === 'automations' && <AutomationsPage onNavigate={setPage} />}
-          {page === 'settings' && <SettingsPage />}
+          {page === 'settings' && <SettingsPage showUpdates={showUpdates} />}
         </Layout>
       ) : (
         <div className="app-backdrop drag flex h-screen items-center justify-center">
@@ -86,7 +105,6 @@ export default function App(): React.JSX.Element {
           ) : <BridgeClipLogo className="h-7 animate-pulse opacity-80" />}
         </div>
       )}
-      <UpdateModal />
     </>
   )
 }

@@ -144,6 +144,16 @@ test('enhancement preserves current copy until review, holds scheduling, survive
     assert.deepEqual(standalone.metadataDraft.platforms, ['youtube'])
     assert.equal(standalone.metadataDraft.research.status, 'skipped')
     assert.equal(researchCalls, 2, 'research-off makes no search request')
+    // The newly supported TikTok platform makes seven possible draft destinations.
+    const allPlatforms = ['instagram', 'youtube', 'twitter', 'facebook', 'linkedin', 'threads', 'tiktok']
+    const sevenPlatformStore = JSON.parse(fs.readFileSync(fullStorePath, 'utf8'))
+    const savedStandalone = sevenPlatformStore.automations.find(a => a.id === unconfigured.id).content[0]
+    savedStandalone.metadataDraft.platforms = allPlatforms
+    savedStandalone.metadataDraft.posts = allPlatforms.map(platform => ({ ...savedStandalone.metadataDraft.posts[0], platform }))
+    fs.writeFileSync(fullStorePath, JSON.stringify(sevenPlatformStore))
+    const reloaded = loadMain(entry, { electron }).automations.listAutomations()
+    assert.equal(reloaded.find(a => a.id === unconfigured.id).content[0].metadataDraft.posts.length, 7)
+
     assert.equal(posting.state.creates.length, 1)
 
   } finally {

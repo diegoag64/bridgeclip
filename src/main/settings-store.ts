@@ -37,7 +37,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   jevEnabled: 'on',
   jevVisualContext: 'off',
   outputDirectory: join(app.getPath('home'), 'BridgeClip'),
-  pythonPath: 'python3',
+  pythonPath: process.platform === 'win32' ? 'python' : 'python3',
   customVocabulary: ''
 }
 

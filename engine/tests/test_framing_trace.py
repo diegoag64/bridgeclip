@@ -54,15 +54,20 @@ def test_padding_cut_mapping_and_renderer_geometry():
 
 
 @pytest.mark.parametrize('failures', [0, 1, 2])
-def test_fallback_retains_attempted_and_actual_plans(service, monkeypatch, tmp_path, failures):
+@pytest.mark.parametrize('speed', [1, 1.5, 2])
+def test_fallback_retains_attempted_and_actual_plans(service, monkeypatch, tmp_path, failures, speed):
     stub_render(monkeypatch, service, failures, [])
-    result = render(service, request_for(tmp_path, debug_capture=True))
+    result = render(service, request_for(tmp_path, debug_capture=True, video_speed=speed))
     trace = json.loads(Path(result.framing_trace_path).read_text())
     assert len(trace['attempts']) == failures + 1
     assert trace['attempted_plan'][0]['layout'] == 'screen_cam'
     assert trace['rendered_plan'][0]['layout'] == ('screen_cam' if not failures else 'screen')
     assert trace['attempts'][-1]['status'] == 'rendered'
     assert trace['output']['duration_ms'] == result.duration_ms
+    assert trace['output'].get('video_speed', 1) == speed
+    for piece in trace['video_pieces']:
+        assert piece['output_end_ms'] - piece['output_start_ms'] == pytest.approx(
+            (piece['source_end_ms'] - piece['source_start_ms']) / speed)
     assert 'Cannot select channel' not in json.dumps(trace)
     assert Path(result.framing_trace_path).stat().st_mode & 0o777 == 0o600
 

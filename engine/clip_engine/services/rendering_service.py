@@ -17,6 +17,7 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from typing import Optional, Union
@@ -41,7 +42,7 @@ from clip_engine.services.editorial_context import window_protection, record_pre
 from clip_engine.services.editorial_review import review_retained_clip
 from clip_engine.services.jev_service import JevService
 from clip_engine.services.coherence_review import CoherenceReviewer, CoherenceRejected
-from clip_engine.services.media_process import MEDIA_INPUT_OPTIONS, PROBE_TIMEOUT_SECONDS, run_media, validate_video_dimensions
+from clip_engine.services.media_process import MEDIA_INPUT_OPTIONS, PROBE_TIMEOUT_SECONDS, media_process, run_media, validate_video_dimensions
 from clip_engine.services.layout_renderer import (
     AUDIO_FORMAT,
     AUDIO_SYNC,
@@ -55,6 +56,7 @@ from clip_engine.services.layout_renderer import (
     title_y,
 )
 from clip_engine.services.transcription_service import TranscriptSegment
+from clip_engine.services.video_speed import scaled_duration_ms, speed_video_filter, validate_video_speed
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +74,9 @@ MAX_OUTPUT_FPS = 60
 # Landscape H.264 bitrates (Mbps) by output height at 30 fps, after
 # YouTube's upload recommendations; 60 fps sources get 1.5x.
 LANDSCAPE_BITRATE_MBPS = {1080: 12, 1440: 20, 2160: 45}
+# Leave room for input/output paths and codec options below Windows' process
+# command-line limit. Long edits can contain hundreds of trims and concats.
+MAX_INLINE_FILTER_GRAPH_BYTES = 8192
 
 
 @dataclass
@@ -105,6 +110,7 @@ class RenderRequest:
     layout_style: str = LayoutStyle.AUTO
     # tight: cut dead air and filler words; natural: original timing.
     pacing: str = Pacing.TIGHT
+    video_speed: float = 1.0
     # Longform episode (16:9, 5+ min): gentler pacing, SRT sidecar, and the
     # planner's skips (source ms, cut at any pacing) and chapters (source ms).
     longform: bool = False
@@ -122,7 +128,7 @@ class RenderResult:
 
     output_path: str
     file_size_bytes: int
-    duration_ms: int  # of the rendered file, after pacing cuts
+    duration_ms: int  # of the rendered file, after pacing cuts and speed
     removed_ms: int = 0  # dead air / fillers cut by tight pacing
     layout_type: str = "fit"
     layout_shots: list[dict] = field(default_factory=list)
@@ -190,10 +196,15 @@ class RenderingService:
         """Verify ffmpeg is available."""
         if not shutil.which("ffmpeg"):
             raise RuntimeError("ffmpeg not found in PATH")
+        if self.settings.local_mode and sys.platform != "darwin":
+            encoders = run_media(["ffmpeg", "-hide_banner", "-encoders"], timeout=10, check=True).stdout.decode("utf-8", errors="replace")
+            self._local_cpu_encoder = next((name for name in ("libopenh264", "libx264") if re.search(rf"\b{name}\b", encoders)), None)
+            if self._local_cpu_encoder is None:
+                raise RuntimeError("FFmpeg needs a CPU H.264 encoder (OpenH264 or x264)")
         logger.info("FFmpeg available")
 
     def _video_codec_args(self, out_w: int = 1080, out_h: int = 1920, fps: str = "30") -> list[str]:
-        """Use the LGPL macOS encoder in BridgeClip; retain server encoding.
+        """Use the bundled LGPL encoders in BridgeClip; retain server encoding.
 
         Keyframes every 2 s keep long clips seekable. Landscape bitrates scale
         with resolution and frame rate (VideoToolbox is bitrate-driven).
@@ -201,10 +212,19 @@ class RenderingService:
         rate = float(Fraction(fps))
         gop = ["-g", str(max(1, round(rate * 2)))]
         if self.settings.local_mode and sys.platform == "darwin":
+            # VideoToolbox otherwise requires a free hardware encoder. Allow
+            # Apple's software fallback on Intel VMs and Macs with a busy GPU.
             if out_w > out_h:
                 mbps = LANDSCAPE_BITRATE_MBPS.get(out_h, 12) * (1.5 if rate > 31 else 1)
-                return ["-c:v", "h264_videotoolbox", "-profile:v", "high", "-b:v", f"{mbps:g}M", *gop]
-            return ["-c:v", "h264_videotoolbox", "-b:v", "8M", *gop]
+                return ["-c:v", "h264_videotoolbox", "-allow_sw", "1", "-profile:v", "high", "-b:v", f"{mbps:g}M", *gop]
+            return ["-c:v", "h264_videotoolbox", "-allow_sw", "1", "-b:v", "8M", *gop]
+        if self.settings.local_mode and getattr(self, "_local_cpu_encoder", "libopenh264") == "libopenh264":
+            # The Windows/Linux LGPL distribution includes OpenH264, not x264.
+            # A CPU encoder also works on machines without an NVIDIA/Intel GPU.
+            mbps = LANDSCAPE_BITRATE_MBPS.get(out_h, 12) if out_w > out_h else 8
+            if rate > 31:
+                mbps *= 1.5
+            return ["-c:v", "libopenh264", "-b:v", f"{mbps:g}M", *gop]
         return ["-c:v", "libx264", "-preset", self.settings.ffmpeg_preset,
                 "-crf", str(self.settings.ffmpeg_crf), *gop]
 
@@ -237,6 +257,7 @@ class RenderingService:
         16:9 (landscape): Whole frame at the source's resolution (1080p-4K)
             and frame rate, over a blurred fill when the source isn't 16:9.
         """
+        validate_video_speed(request.video_speed)
         os.makedirs(os.path.dirname(request.output_path), exist_ok=True)
 
         duration_ms = request.end_time_ms - request.start_time_ms
@@ -379,7 +400,7 @@ class RenderingService:
                 trace_path = None
         logger.info(
             f"Clip rendered: {request.output_path} ({file_size / 1024 / 1024:.1f} MB, "
-            f"{time_map.output_ms / 1000:.1f}s"
+            f"{scaled_duration_ms(time_map.output_ms, request.video_speed) / 1000:.1f}s at {request.video_speed:g}x"
             + (f", pacing removed {removed_ms / 1000:.1f}s in {time_map.cut_count} cuts" if removed_ms else "")
             + (f", fallback={render_fallback}" if render_fallback else "")
             + ")"
@@ -387,7 +408,7 @@ class RenderingService:
         return RenderResult(
             output_path=request.output_path,
             file_size_bytes=file_size,
-            duration_ms=time_map.output_ms,
+            duration_ms=scaled_duration_ms(time_map.output_ms, request.video_speed),
             removed_ms=removed_ms,
             layout_type=plan.dominant_layout if smart else "fit",
             layout_shots=[shot.summary() for shot in plan.shots] if analyzed else [],
@@ -418,10 +439,10 @@ class RenderingService:
         """Chapters moved onto the edited timeline; the first starts at 0."""
         chapters: list[tuple[int, str]] = []
         for t_ms, title in request.chapters:
-            out = time_map.to_output_clamped(max(0, t_ms - window_start_ms))
+            out = scaled_duration_ms(time_map.to_output_clamped(max(0, t_ms - window_start_ms)), request.video_speed)
             if chapters and out - chapters[-1][0] < 10_000:
                 continue  # YouTube needs 10 s+ per chapter
-            if out < time_map.output_ms - 10_000:
+            if out < scaled_duration_ms(time_map.output_ms, request.video_speed) - 10_000:
                 chapters.append((out, title))
         if chapters:
             chapters[0] = (0, chapters[0][1])
@@ -435,9 +456,13 @@ class RenderingService:
             return None
         try:
             segments = remap_segments(request.transcript_segments, window_start_ms, time_map)
+            for segment in segments:
+                for item in [segment, *segment.words]:
+                    item.start_time_ms = window_start_ms + scaled_duration_ms(item.start_time_ms - window_start_ms, request.video_speed)
+                    item.end_time_ms = max(item.start_time_ms + 1, window_start_ms + scaled_duration_ms(item.end_time_ms - window_start_ms, request.video_speed))
             path = os.path.splitext(request.output_path)[0] + ".srt"
             return self.caption_generator.generate_srt(
-                segments, window_start_ms, window_start_ms + time_map.output_ms, path,
+                segments, window_start_ms, window_start_ms + scaled_duration_ms(time_map.output_ms, request.video_speed), path,
             )
         except Exception as e:
             logger.warning(f"Subtitle sidecar failed; the clip is unaffected: {e}")
@@ -461,6 +486,7 @@ class RenderingService:
         graph = build_layout_graph(
             plan, target_width, target_height, time_map.keeps, has_audio, landscape=is_landscape,
             fps=fps, loudness_filter=loudness_filter,
+            video_speed=request.video_speed,
         )
         out_plan = remap_plan(plan, time_map)
         caption_path = await self._generate_captions(
@@ -468,7 +494,11 @@ class RenderingService:
         )
         graph += f";[base]{self._caption_filter(caption_path)}[captioned]"
         overlays = self._overlays(request, out_plan, target_width, target_height, is_landscape)
-        filter_complex, extra_inputs = self._compose_overlays(graph, overlays)
+        # Burn captions and animate framing/overlays on the edited source clock,
+        # then speed up the entire composited picture to match the tempo audio.
+        filter_complex, extra_inputs = self._compose_overlays(
+            graph, overlays, speed_video_filter(request.video_speed, fps),
+        )
 
         try:
             await self._run_ffmpeg_complex(
@@ -481,7 +511,7 @@ class RenderingService:
                 extra_inputs=extra_inputs if extra_inputs else None,
                 fps=fps,
                 output_size=(target_width, target_height),
-                output_duration_ms=time_map.output_ms,
+                output_duration_ms=scaled_duration_ms(time_map.output_ms, request.video_speed),
             )
         finally:
             for path in extra_inputs:
@@ -600,19 +630,19 @@ class RenderingService:
         return "null"
 
     @staticmethod
-    def _compose_overlays(graph: str, overlays: list[Overlay]) -> tuple[str, list[str]]:
+    def _compose_overlays(graph: str, overlays: list[Overlay], video_filter: str = "null") -> tuple[str, list[str]]:
         """Append image overlays to a graph ending in [captioned]; output is [out].
 
         Returns the full filter_complex and the extra input paths, in input
         order (the video is input 0, overlays follow).
         """
         if not overlays:
-            return f"{graph};[captioned]null[out]", []
+            return f"{graph};[captioned]{video_filter}[out]", []
         parts = [graph]
         current = "captioned"
         for index, overlay in enumerate(overlays, start=1):
             _, x_expr, y_expr = overlay[:3]
-            label = "out" if index == len(overlays) else f"ov{index}"
+            label = "composited" if index == len(overlays) else f"ov{index}"
             image, enable = f"[{index}:v]", ""
             if len(overlay) == 5:
                 enable_expr, image_filter = overlay[3], overlay[4]
@@ -622,6 +652,7 @@ class RenderingService:
                 f"[{current}]{image}overlay=x='{x_expr}':y='{y_expr}':shortest=1{enable}[{label}]"
             )
             current = label
+        parts.append(f"[composited]{video_filter}[out]")
         return ";".join(parts), [overlay[0] for overlay in overlays]
 
     def _title_overlay_image(
@@ -1003,7 +1034,8 @@ class RenderingService:
     ) -> None:
         """Check the encoded presentation clock before publishing an export.
 
-        This catches missing/truncated tracks and mux/encoder timing shifts.
+        This catches missing/truncated tracks and mux/encoder timing shifts,
+        including gaps inside audio whose overall start/end times look valid.
         Content-level lip sync is covered by decoded flash/beep regressions;
         stream metadata alone cannot detect an already out-of-sync source.
         """
@@ -1035,9 +1067,42 @@ class RenderingService:
                         kind, start, duration, expected, tolerance,
                     )
                     raise ValueError(f"{kind} timing differs from the edit")
+            if with_audio:
+                await asyncio.to_thread(self._validate_audio_packets, output_path)
             logger.info("Export timing verified: %.3fs at %s fps, audio=%s", expected, fps, with_audio)
         except Exception as exc:
             raise RenderingError("Export timing validation failed; the clip was not saved") from exc
+
+    @staticmethod
+    def _validate_audio_packets(output_path: str) -> None:
+        """Verify the continuous 48 kHz AAC clock, with bounded memory.
+
+        MP4 can hide a PTS jump by extending the preceding packet's duration;
+        compare against AAC's 1024 samples as well as adjacent timestamps.
+        The final packet may be shorter and the priming packet may start
+        before zero. Neither should shift the audible presentation clock.
+        """
+        cmd = [
+            "ffprobe", "-v", "error", *MEDIA_INPUT_OPTIONS,
+            "-select_streams", "a:0", "-show_entries",
+            "packet=pts_time,duration_time:packet_side_data=",
+            "-of", "compact=p=0:nk=0", output_path,
+        ]
+        packet_seconds = 1024 / 48000
+        tolerance = 1 / 48000 + 0.000002  # One sample plus probe rounding.
+        previous = None
+        with media_process(cmd, timeout=PROBE_TIMEOUT_SECONDS) as (process, _):
+            while line := process.stdout.readline(512):
+                fields = dict(part.split(b"=", 1) for part in line.strip().split(b"|") if b"=" in part)
+                start = float(fields[b"pts_time"])
+                duration = float(fields[b"duration_time"])
+                if not (math.isfinite(start) and math.isfinite(duration) and 0 < duration <= packet_seconds + tolerance):
+                    raise ValueError("invalid AAC packet duration")
+                if previous is not None and abs(start - previous - packet_seconds) > tolerance:
+                    raise ValueError("discontinuous AAC packet timestamps")
+                previous = start
+        if process.returncode != 0 or previous is None:
+            raise ValueError("could not verify AAC packet timestamps")
 
     def _compute_padded_range(self, start_time_ms: int, duration_ms: int) -> tuple[int, int]:
         """Compute padded start and duration for consistent A/V trimming."""
@@ -1054,10 +1119,48 @@ class RenderingService:
         """Run a command asynchronously."""
         logger.debug(f"Running: {' '.join(cmd[:10])}...")
 
+        def invoke():
+            # Keep the script inside the worker: cancelling the await does not
+            # stop run_media's thread, so the file must outlive that thread.
+            try:
+                graph_index = cmd.index("-filter_complex")
+            except ValueError:
+                return run_media(cmd)
+            graph = cmd[graph_index + 1]
+            if len(graph.encode("utf-8")) <= MAX_INLINE_FILTER_GRAPH_BYTES:
+                return run_media(cmd)
+
+            script_path = None
+            try:
+                # NamedTemporaryFile creates a private file. Close it before
+                # FFmpeg opens it, which is required on Windows.
+                with tempfile.NamedTemporaryFile(
+                    mode="w", encoding="utf-8", suffix=".ffgraph",
+                    prefix="bridgeclip-filter-", delete=False,
+                ) as script:
+                    script_path = script.name
+                    script.write(graph)
+                script_cmd = cmd.copy()
+                script_cmd[graph_index:graph_index + 2] = ["-/filter_complex", script_path]
+                result = run_media(script_cmd)
+                # FFmpeg 6 (Ubuntu 24.04) predates file-backed option values;
+                # FFmpeg 9 removed the older script option. Retry only when the
+                # first option itself is unknown, before any render can start.
+                if result.returncode != 0:
+                    stderr = result.stderr or b""
+                    if (b"Unrecognized option '/filter_complex'." in stderr and
+                            b"Error splitting the argument list: Option not found" in stderr):
+                        script_cmd[graph_index] = "-filter_complex_script"
+                        result = run_media(script_cmd)
+                return result
+            finally:
+                if script_path is not None:
+                    os.remove(script_path)
+
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(
             None,
-            lambda: run_media(cmd)
+            invoke,
         )
 
         if result.returncode != 0:
