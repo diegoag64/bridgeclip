@@ -18,7 +18,7 @@ function loadShared(file) {
   const source = fs.readFileSync(path.join(__dirname, '../../src/shared', file), 'utf8')
   const js = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText
   const module = { exports: {} }
-  vm.runInNewContext(js, { module, exports: module.exports, require, URL })
+  vm.runInNewContext(js, { module, exports: module.exports, require: (id) => id === './editorial' ? loadShared('editorial.ts') : require(id), URL })
   return module.exports
 }
 const TEST_WORK_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'bridgeclip-worker-test-'))
@@ -180,6 +180,8 @@ test('the native picker authorizes media and shell opening rejects aliased appli
       },
       './settings-store': { loadSettings: () => ({ outputDirectory: library }) },
       './file-manager': {},
+      './edit-inspector': { inspectEdits: async () => ({}) },
+    './framing-inspector': {},
       './run-history': runHistory,
       './pipeline-runner': {},
       './job-manager': { initJobManager() {} },
@@ -263,6 +265,17 @@ test('saved provider keys remain in main and migrate away from legacy encoding',
     settingsStore.replaceApiKey('zernioApiKey', 'dummy-social-value')
     assert.equal(settingsStore.publicSettings(settingsStore.loadSettings()).zernioConfigured, true)
     assert.equal(JSON.stringify(settingsStore.publicSettings(settingsStore.loadSettings())).includes('dummy-social-value'), false)
+    const editorialPublic = settingsStore.publicSettings(settingsStore.loadSettings())
+    assert.equal(editorialPublic.jevEnabled, 'on')
+    assert.equal(editorialPublic.jevVisualContext, 'off')
+    assert.equal(Object.hasOwn(editorialPublic, 'typesafeConfigured'), false)
+    settingsStore.savePublicSettings({ ...editorialPublic, jevVisualContext: 'on', jevEnabled: 'off' })
+    const workerSettings = settingsStore.getSettingsForBridge(settingsStore.loadSettings())
+    assert.equal(workerSettings.OPENROUTER_API_KEY, 'dummy-provider-value')
+    assert.equal(workerSettings.JEV_ENABLED, 'false')
+    assert.equal(workerSettings.JEV_VISUAL_CONTEXT, 'true')
+    assert.equal(Object.hasOwn(workerSettings, 'TYPESAFE_API_KEY'), false)
+    assert.throws(() => settingsStore.replaceApiKey('typesafeApiKey', 'unused'), /Invalid API key/)
     settingsStore.replaceApiKey('openrouterApiKey', '')
     assert.equal(settingsStore.publicSettings(settingsStore.loadSettings()).openrouterConfigured, false)
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
@@ -323,7 +336,7 @@ test('Windows resolves the saved legacy Python default without replacing an inst
   const present = new Set()
   let python3Runnable = false
   let saved = null
-  const app = { isPackaged: false, getPath: (name) => name === 'home' ? 'C:\\Users\\Test' : userData }
+  const app = { isPackaged: false, isReady: () => false, getPath: (name) => name === 'home' ? 'C:\\Users\\Test' : userData }
   const store = loadSource('settings-store.ts', {
     electron: { app, safeStorage: {} }, path: path.win32,
     fs: {
@@ -715,4 +728,35 @@ test('crash logs keep safe diagnostics without leaking credentials from errors',
   assert.equal(lines[1].frame, '')
   assert.doesNotMatch(JSON.stringify(lines), /sk-or-v1-secretcredential|\/Users\/dev/)
   fs.rmSync(logDir, { recursive: true, force: true })
+})
+
+
+test('Jev migration drops the separate TypeSafe key without decrypting it', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bridgeclip-jev-migration-'))
+  const userData = path.join(root, 'userdata')
+  fs.mkdirSync(userData)
+  const file = path.join(userData, 'settings.json')
+  fs.writeFileSync(file, JSON.stringify({ version: 8, outputDirectory: root,
+    openrouterApiKey: { scheme: 'safeStorage', value: Buffer.from('active-openrouter').toString('base64') },
+    typesafeApiKey: { scheme: 'safeStorage', value: Buffer.from('obsolete-typesafe').toString('base64') },
+    typesafeVisualContext: 'on'
+  }))
+  const store = loadSource('settings-store.ts', { electron: {
+    app: { getPath: (name) => ({ home: root, appData: root, userData }[name]), isReady: () => true },
+    safeStorage: { isEncryptionAvailable: () => true, getSelectedStorageBackend: () => 'gnome_libsecret', encryptString: (value) => Buffer.from(value),
+      decryptString: (value) => { assert.notEqual(value.toString(), 'obsolete-typesafe'); return value.toString() } }
+  } })
+  try {
+    const loaded = store.loadSettings()
+    assert.equal(loaded.openrouterApiKey, 'active-openrouter')
+    assert.equal(loaded.jevEnabled, 'on')
+    assert.equal(loaded.jevVisualContext, 'on')
+    const saved = JSON.parse(fs.readFileSync(file, 'utf8'))
+    assert.equal(saved.version, 9)
+    assert.equal(Object.hasOwn(saved, 'typesafeApiKey'), false)
+    assert.equal(Object.hasOwn(saved, 'typesafeVisualContext'), false)
+    assert.equal(Object.hasOwn(loaded, 'typesafeApiKey'), false)
+    assert.equal(Object.hasOwn(store.getSettingsForBridge(loaded), 'TYPESAFE_API_KEY'), false)
+    assert.throws(() => store.savePublicSettings({ ...store.publicSettings(loaded), jevEnabled: 'invalid' }), /Invalid Jev/)
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })

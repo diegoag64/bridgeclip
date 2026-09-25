@@ -23,7 +23,7 @@ type SectionTone = 'success' | 'warning' | 'danger' | 'idle'
 
 /** `showUpdates` changes each time Help → Check for Updates… asks for the Updates row. */
 export function SettingsPage({ showUpdates = 0 }: { showUpdates?: number }): React.JSX.Element {
-  const { outputDirectory, pythonPath, customVocabulary, openrouterConfigured, zernioConfigured, saving, save, toolStatus, toolError, checkTools, checkingTools } =
+  const { outputDirectory, pythonPath, customVocabulary, openrouterConfigured, zernioConfigured, jevEnabled, jevVisualContext, saving, save, toolStatus, toolError, checkTools, checkingTools } =
     useSettingsStore()
   const keys = useApiKeyDrafts()
   const [isPackaged, setIsPackaged] = useState(true)
@@ -155,6 +155,20 @@ export function SettingsPage({ showUpdates = 0 }: { showUpdates?: number }): Rea
                 />
               </KeyRow>
               <p className="eyebrow px-1 pt-2">Optional</p>
+              <label className="flex items-start gap-3 px-3 py-2 text-sm text-ink-muted">
+                <input type="checkbox" className="mt-1" checked={jevEnabled === 'on'}
+                  onChange={(e) => commit({ jevEnabled: e.target.checked ? 'on' : 'off' })} />
+                <span>Jev editorial review via OpenRouter
+                  <span className="mt-1 block text-xs text-ink-subtle">Required to approve new clips. Turning this off prevents automatic clip generation. Uses your existing OpenRouter key to judge complete ideas and proposed cuts. Transcript excerpts, titles and diagnostic text go to Jev; no video or audio. Charges appear on your OpenRouter account.</span>
+                </span>
+              </label>
+              <label className="flex items-start gap-3 px-3 py-2 text-sm text-ink-muted">
+                <input type="checkbox" className="mt-1" disabled={jevEnabled !== 'on'} checked={jevVisualContext === 'on'}
+                  onChange={(e) => commit({ jevVisualContext: e.target.checked ? 'on' : 'off' })} />
+                <span>Use additional visual evidence for reaction context
+                  <span className="mt-1 block text-xs text-ink-subtle">When Jev text evidence is insufficient, send timestamped frames to your OpenRouter vision model. Limited to 8 requests per run and 12 frames per interval, with additional provider charges. Unknown cuts are restored; clips that cannot establish enough context are omitted.</span>
+                </span>
+              </label>
               <KeyRow>
                 <ApiKeyInput
                   label="Zernio (optional)"

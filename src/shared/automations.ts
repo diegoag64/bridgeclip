@@ -44,6 +44,34 @@ export interface GeneratedPlatformMetadata {
   topicTag?: string | null
 }
 
+export interface AutomationSourceContext {
+  /** Opaque library identity for non-YouTube sources. */
+  videoId?: string
+  title: string
+  description: string
+  channel: string
+  /** Canonical YouTube URL only; local paths and signed source URLs are never sent. */
+  url: string | null
+}
+
+export interface MetadataResearch {
+  scope?: 'source'
+  reused?: boolean
+  researchedAt?: string
+  status: 'complete' | 'unavailable' | 'skipped'
+  summary: string
+  sources: { title: string; url: string }[]
+}
+
+export interface MetadataEnhancement {
+  id: string
+  createdAt: string
+  platforms: AutomationAccount['platform'][]
+  posts: GeneratedPlatformMetadata[]
+  source: AutomationSourceContext | null
+  research: MetadataResearch
+}
+
 export interface AutomationContent {
   id: string
   /** Changes only after a person reviews an uncertain post and returns the clip to the queue. */
@@ -54,6 +82,11 @@ export interface AutomationContent {
   /** Speech recognized from this exact bank clip; never inferred from its filename. */
   transcript: string | null
   generatedMetadata: GeneratedPlatformMetadata[] | null
+  metadataError?: string | null
+  sourceContext?: AutomationSourceContext | null
+  /** A pending draft holds this clip from posting until applied or discarded. */
+  metadataDraft?: MetadataEnhancement | null
+  metadataEnhancement?: MetadataEnhancement | null
   /** The exact TikTok caption and choices approved for this clip; absent in older banks. */
   tiktokApproval?: AutomationTikTokApproval | null
   /** Keeps the last reviewed copy when approval is revoked to reopen the editor. */
@@ -65,7 +98,21 @@ export interface AutomationContent {
   error: string | null
 }
 
+export interface AutomationSourceGroup {
+  key: string
+  title: string
+  contentIds: string[]
+}
+
+export interface AutomationBatchResult {
+  automations: Automation[]
+  completed: number
+  skipped: number
+  errors: { contentId: string; message: string }[]
+}
+
 export interface Automation {
+  sourceResearch?: { key: string; createdAt: string; source: AutomationSourceContext; research: MetadataResearch }[]
   id: string
   name: string
   enabled: boolean

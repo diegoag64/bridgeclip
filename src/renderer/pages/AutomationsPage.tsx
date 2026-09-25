@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Check, ChevronDown, Pencil, Play, Plus, RefreshCw, Trash2, Workflow, X } from 'lucide-react'
-import { AUTOMATION_PLATFORMS, needsTikTokReview, nextAutomationContent, type Automation, type AutomationContent, type AutomationContentStatus, type AutomationUpdate } from '../../shared/automations'
+import { Check, ChevronDown, Pencil, Play, Plus, RefreshCw, Sparkles, Trash2, Workflow, X } from 'lucide-react'
+import { AUTOMATION_PLATFORMS, needsTikTokReview, nextAutomationContent, type Automation, type AutomationContent, type AutomationContentStatus, type AutomationUpdate, type AutomationSourceGroup } from '../../shared/automations'
 import { isPostableAccount, isValidProfileName } from '../../shared/zernio'
 import { AutomationTikTokReviewDialog } from '../components/AutomationTikTokReviewDialog'
+import { AutomationMetadataDialog } from '../components/AutomationMetadataDialog'
 import { PlatformIcon, platformName } from '../components/PlatformIcon'
 import { Badge, StatusDot } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { Callout } from '../components/ui/Callout'
 import { ConfirmDialog, type ConfirmRequest } from '../components/ui/ConfirmDialog'
 import { EmptyState } from '../components/ui/EmptyState'
-import { TextArea, TextInput } from '../components/ui/Field'
+import { Field, TextArea, TextInput } from '../components/ui/Field'
 import { Select } from '../components/ui/Select'
 import { Page } from '../components/ui/Page'
 import { PageHeader } from '../components/ui/PageHeader'
@@ -93,6 +94,11 @@ export function AutomationsPage({ onNavigate }: { onNavigate: (page: PageName) =
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [editing, setEditing] = useState<{ id: string; title: string; caption: string } | null>(null)
+  const [enhancing, setEnhancing] = useState<{ automationId: string; contentId: string } | null>(null)
+  const [bulkProgress, setBulkProgress] = useState<string | null>(null)
+  const stopBulk = useRef(false)
+  const [sourceGroups, setSourceGroups] = useState<AutomationSourceGroup[] | null>(null)
+  const [sourceGroupKey, setSourceGroupKey] = useState('')
   const [tiktokReview, setTiktokReview] = useState<AutomationContent | null>(null)
   const [filter, setFilter] = useState<ContentFilter>('all')
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null)
@@ -136,6 +142,7 @@ export function AutomationsPage({ onNavigate }: { onNavigate: (page: PageName) =
     setSelectedId(automation?.id ?? null)
     rememberSelection(automation?.id ?? null)
     setDraft(automation ? draftFor(automation) : null)
+    setSourceGroups(null); setSourceGroupKey('');
     setEditing(null); setTiktokReview(null); setFilter('all'); setNewProfileOpen(false)
   }
 
@@ -150,6 +157,49 @@ export function AutomationsPage({ onNavigate }: { onNavigate: (page: PageName) =
       setError(errorMessage(cause, 'Could not update the automation.'))
       return null
     } finally { setBusy(null) }
+  }
+
+  const prepareEnhancementGroups = async (): Promise<void> => {
+    if (!selected) return
+    setBusy('group-sources'); setError(null); setSourceGroups(null)
+    try {
+      const groups = await getApi().automations.enhancementGroups(selected.id)
+      setSourceGroups(groups); setSourceGroupKey(groups[0]?.key ?? '')
+    } catch (cause) { setError(errorMessage(cause, 'Could not group clips by source.')) }
+    finally { setBusy(null) }
+  }
+
+  const enhanceQueued = async (): Promise<void> => {
+    if (!selected) return
+    const group = sourceGroups?.find((group) => group.key === sourceGroupKey)
+    if (!group) return
+    const ids = group.contentIds.slice(0, 30)
+    setBusy('enhance-bulk'); setError(null); setNotice(null); stopBulk.current = false
+    let completed = 0
+    let skipped = 0
+    let attempted = 0
+    const failures: string[] = []
+    try {
+      for (let offset = 0; offset < ids.length; offset += 5) {
+        if (stopBulk.current) break
+        setBulkProgress(`${group.title} · preparing clips ${offset + 1}–${Math.min(offset + 5, ids.length)} of ${ids.length}`)
+        try {
+          const result = await getApi().automations.enhanceBatch(selected.id, ids.slice(offset, offset + 5), group.key)
+          setAutomations(result.automations)
+          completed += result.completed
+          skipped += result.skipped
+          attempted += ids.slice(offset, offset + 5).length
+          failures.push(...result.errors.map((error) => `${selected.content.find((item) => item.id === error.contentId)?.title ?? 'Clip'}: ${error.message}`))
+        } catch (cause) {
+          const message = errorMessage(cause, 'Could not generate this batch.')
+          const batchIds = ids.slice(offset, offset + 5)
+          attempted += batchIds.length
+          failures.push(...batchIds.map((id) => `${selected.content.find((item) => item.id === id)?.title ?? 'Clip'}: ${message}`))
+        }
+      }
+      setNotice(`${completed} drafts ready to review · ${failures.length} failed · ${skipped} already handled · ${ids.length - attempted} not attempted. ${stopBulk.current ? 'Stopped after the current batch.' : 'All selected clips were attempted.'} Failed clips remain available to retry; research and transcripts are reused.`)
+      if (failures.length) setError(`${failures.length} clips need another attempt. ${failures.slice(0, 3).join(' · ')}`)
+    } finally { setBusy(null); setBulkProgress(null); setSourceGroups(null) }
   }
 
   const create = async (name: string): Promise<boolean> => {
@@ -505,7 +555,7 @@ export function AutomationsPage({ onNavigate }: { onNavigate: (page: PageName) =
 
                   <Row
                     label="Captions"
-                    hint="Uses OpenRouter and MAI Transcribe 2. TikTok captions wait for your review. AI can make mistakes."
+                    hint="Uses applied enhancement drafts when available. Otherwise OpenRouter writes captions automatically; TikTok captions wait for your review. Use Enhance in the bank to research and review copy first."
                   >
                     <label className="flex h-7 items-center gap-2 text-xs text-ink">
                       <Switch checked={draft.metadataMode === 'ai'} onChange={(on) => setDraft({ ...draft, metadataMode: on ? 'ai' : 'manual' })} label="Write captions with AI" />
@@ -557,6 +607,18 @@ export function AutomationsPage({ onNavigate }: { onNavigate: (page: PageName) =
                   )}
                   <Button size="sm" icon={<Plus className="h-3 w-3" />} loading={busy === 'upload'} onClick={() => void mutate('upload', () => getApi().automations.addContent(selected.id), 'Clips added to the bank.')} disabled={Boolean(busy)}>Add clips</Button>
                 </div>
+                {selected.content.some((item) => item.status === 'queued') && <div className="mt-3 flex flex-wrap items-center gap-3">
+                  <Button size="sm" icon={<Sparkles className="h-3.5 w-3.5" />} disabled={Boolean(busy) || dirty || !writingConfigured} loading={busy === 'group-sources'} onClick={() => void prepareEnhancementGroups()}>Enhance by source video</Button>
+                  <span className="text-xs text-ink-subtle">Shared description & research · up to 5 clips per writing request · uses OpenRouter credits{!selected.accounts.length ? ' · drafts for YouTube until accounts are selected' : ''}</span>
+                </div>}
+                {sourceGroups && <div className="glass-well mt-3 space-y-3 rounded-xl p-3">
+                  {sourceGroups.length ? <>
+                    <Field label="Original video" htmlFor="enhancement-source-video"><Select id="enhancement-source-video" value={sourceGroupKey} disabled={Boolean(busy)} onChange={setSourceGroupKey} options={sourceGroups.map((group) => ({ value: group.key, label: `${group.title} · ${group.contentIds.length} clips` }))} /></Field>
+                    <p className="text-xs text-ink-muted">Research is shared across this video’s clips and reused for 7 days. Each clip keeps its own transcript and reviewable draft. Already reviewed metadata is skipped. Up to 30 clips per batch.</p>
+                    <Button size="sm" disabled={Boolean(busy) || dirty} onClick={() => void enhanceQueued()}>Enhance {Math.min(30, sourceGroups.find((group) => group.key === sourceGroupKey)?.contentIds.length ?? 0)} clips from this video</Button>
+                  </> : <p className="text-sm text-ink-muted">No queued clips need a new draft.</p>}
+                </div>}
+                {bulkProgress && <Callout tone="info" className="mt-3" action={<Button size="sm" onClick={() => { stopBulk.current = true; setBulkProgress('Stopping after the current operation…') }}>Stop after batch</Button>}>{bulkProgress}</Callout>}
                 <ul className="divide-y divide-white/[0.06] border-t border-white/[0.06]">
                   {selected.content.length === 0 && (
                     <li className="px-3.5 py-4 text-center">
@@ -577,6 +639,8 @@ export function AutomationsPage({ onNavigate }: { onNavigate: (page: PageName) =
                       editing={editing?.id === item.id ? editing : null}
                       busy={Boolean(busy)}
                       onEdit={() => setEditing(editing?.id === item.id ? null : { id: item.id, title: item.title, caption: item.caption })}
+                      onEnhance={() => setEnhancing({ automationId: selected.id, contentId: item.id })}
+                      enhancementDisabled={dirty || !writingConfigured}
                       onChange={setEditing}
                       onSave={() => void saveContent(item)}
                       onReturnToQueue={() => requestReturnToQueue(item)}
@@ -601,6 +665,10 @@ export function AutomationsPage({ onNavigate }: { onNavigate: (page: PageName) =
         </>
       )}
 
+      {enhancing && (() => {
+        const item = automations.find((automation) => automation.id === enhancing.automationId)?.content.find((content) => content.id === enhancing.contentId)
+        return item ? <AutomationMetadataDialog key={item.id} automationId={enhancing.automationId} item={item} youtubeOnly={!automations.find((automation) => automation.id === enhancing.automationId)?.accounts.length} onUpdated={setAutomations} onClose={() => setEnhancing(null)} onBusy={(value) => setBusy(value ? 'enhance' : null)} /> : null
+      })()}
       {selected && tiktokReview && <AutomationTikTokReviewDialog key={tiktokReview.id} automationId={selected.id} contentId={tiktokReview.id} title={tiktokReview.title}
         onPrepared={() => setAutomations((current) => current.map((automation) => automation.id === selected.id
           ? { ...automation, content: automation.content.map((item) => item.id === tiktokReview.id ? { ...item, tiktokApproval: null } : item) } : automation))}
@@ -693,7 +761,7 @@ function CreateForm({ busy, onCreate, onCancel, autoFocus, size = 'md', classNam
   )
 }
 
-function ContentRow({ item, nextUp, tiktokReviewNeeded, tiktokSelected, onReviewTikTok, reviewDisabled, editing, busy, onEdit, onChange, onSave, onReturnToQueue, onRemove, onCheckPosts }: {
+function ContentRow({ item, nextUp, tiktokReviewNeeded, tiktokSelected, onReviewTikTok, reviewDisabled, editing, busy, onEdit, onChange, onSave, onReturnToQueue, onRemove, onCheckPosts, onEnhance, enhancementDisabled }: {
   item: AutomationContent
   nextUp: boolean
   tiktokReviewNeeded: boolean
@@ -708,6 +776,8 @@ function ContentRow({ item, nextUp, tiktokReviewNeeded, tiktokSelected, onReview
   onReturnToQueue: () => void
   onRemove: () => void
   onCheckPosts: () => void
+  onEnhance: () => void
+  enhancementDisabled: boolean
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const status = tiktokReviewNeeded ? { label: 'Needs TikTok review', tone: 'warning' as const } : CONTENT_STATUS[item.status]
@@ -722,6 +792,7 @@ function ContentRow({ item, nextUp, tiktokReviewNeeded, tiktokSelected, onReview
         <StatusDot tone={status.tone} pulse={item.status === 'posting'} className="h-1.5 w-1.5 [&>span]:h-1.5 [&>span]:w-1.5" />
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <p className="truncate text-xs text-ink">{item.title}</p>
+          {item.metadataDraft && <Badge tone="warning">Draft to review</Badge>}
           {nextUp && <Badge tone="accent" className="h-4 px-1.5 text-[10px]">Next up</Badge>}
         </div>
         <p className="shrink-0 truncate text-2xs text-ink-subtle">
@@ -730,15 +801,17 @@ function ContentRow({ item, nextUp, tiktokReviewNeeded, tiktokSelected, onReview
           <span className="hidden md:inline"> · {item.postedAt ? `Posted ${formatRelativeDate(item.postedAt)}` : `Added ${formatRelativeDate(item.addedAt)}`}</span>
         </p>
         <div className="-mr-1.5 flex shrink-0 items-center">
-          {item.status === 'queued' && tiktokSelected && <Button size="sm" variant={tiktokReviewNeeded ? 'secondary' : 'ghost'} className="h-6 px-2" onClick={onReviewTikTok} disabled={busy || reviewDisabled} title={reviewDisabled ? 'Save automation changes and finish editing this clip first' : undefined}>{tiktokReviewNeeded ? 'Review TikTok' : 'Edit TikTok'}</Button>}
+          {item.status === 'queued' && !item.postId && <Button size="sm" variant="ghost" disabled={busy || (!item.metadataDraft && enhancementDisabled)} onClick={onEnhance}>{item.metadataDraft ? 'Review draft' : 'Enhance'}</Button>}
+          {item.status === 'queued' && tiktokSelected && <Button size="sm" variant={tiktokReviewNeeded ? 'secondary' : 'ghost'} className="h-6 px-2" onClick={onReviewTikTok} disabled={busy || reviewDisabled || Boolean(item.metadataDraft)} title={reviewDisabled ? 'Save automation changes and finish editing this clip first' : undefined}>{tiktokReviewNeeded ? 'Review TikTok' : 'Edit TikTok'}</Button>}
           {hasDetails && <Button size="sm" variant="ghost" className="h-6 px-2" aria-expanded={open} trailingIcon={<ChevronDown className={cn('h-3 w-3 transition-transform', open && 'rotate-180')} />} onClick={() => setOpen(!open)}>AI details</Button>}
           <div className={cn('flex items-center transition-opacity duration-150', !editing && 'opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100')}>
-            <Button size="sm" variant="ghost" iconOnly className="h-6 w-6" aria-label={editing ? 'Close editor' : `Edit ${item.title}`} title="Edit title and caption" icon={editing ? <X className="h-3 w-3" /> : <Pencil className="h-3 w-3" />} onClick={onEdit} />
+            <Button size="sm" variant="ghost" iconOnly className="h-6 w-6" aria-label={editing ? 'Close editor' : `Edit ${item.title}`} title="Edit title and caption" disabled={busy || Boolean(item.metadataDraft)} icon={editing ? <X className="h-3 w-3" /> : <Pencil className="h-3 w-3" />} onClick={onEdit} />
             <Button size="sm" variant="ghost" iconOnly className="h-6 w-6" aria-label={`Remove ${item.title}`} title="Remove from bank" icon={<Trash2 className="h-3 w-3" />} disabled={busy} onClick={onRemove} />
           </div>
         </div>
       </div>
 
+      {item.metadataError && <Callout tone="warning" className="mt-2">Metadata enhancement failed: {item.metadataError} Use Enhance to retry this clip, or select its source video to retry all remaining clips.</Callout>}
       {problem && (
         <p role={item.status === 'needs_review' ? 'status' : 'alert'} className={cn('mb-1 ml-4 flex flex-wrap items-baseline gap-x-2 text-2xs', item.status === 'needs_review' ? 'text-warning' : 'text-danger')}>
           <span data-selectable>{problem}</span>
@@ -759,6 +832,13 @@ function ContentRow({ item, nextUp, tiktokReviewNeeded, tiktokSelected, onReview
               )}
             </div>
           ))}
+          {item.metadataEnhancement && <details className="glass-well rounded-xl p-3 text-xs text-ink-muted">
+            <summary className="cursor-pointer font-medium text-ink">Source context & research</summary>
+            <p className="mt-2 whitespace-pre-wrap" data-selectable>{item.metadataEnhancement.source?.title || 'No source identified'}</p>
+            <p className="mt-2 whitespace-pre-wrap" data-selectable>{item.metadataEnhancement.source?.description || 'Description unavailable'}</p>
+            <p className="mt-2 whitespace-pre-wrap" data-selectable>{item.metadataEnhancement.research.summary}</p>
+            {item.metadataEnhancement.research.sources.map((source) => <p key={source.url} className="mt-2 break-all" data-selectable>{source.title} · {source.url}</p>)}
+          </details>}
           {item.transcript && (
             <details className="glass-well rounded-lg px-2.5 py-2 text-2xs text-ink-muted">
               <summary className="cursor-pointer font-medium text-ink">Transcript</summary>

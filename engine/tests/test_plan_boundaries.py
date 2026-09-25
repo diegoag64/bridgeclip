@@ -98,103 +98,48 @@ class TestDurationBounds:
     def test_prompt_has_no_contradictory_bounds(self):
         planner = make_planner([])
         prompt = planner._build_system_prompt(5, 15, 90, ["long"])
-        assert "STRICTLY between 120 and 300 seconds" in prompt
-        assert "<= 300" in prompt and "<= 90" not in prompt
+        assert "Preferred length: 120–300 seconds" in prompt
+        assert "Never pad, hard-truncate" in prompt
+        assert "Return exactly" not in prompt
 
 
 class TestParseBoundaries:
-    def test_rounding_below_minimum_extends_to_next_sentence(self):
-        transcript = [
-            TranscriptSegment(i * 5000, (i + 1) * 5000 - 50, "Sentence.", words=[
-                TranscriptWord("Sentence.", i * 5000, (i + 1) * 5000 - 50),
-            ])
-            for i in range(4)
-        ]
-        planner = make_planner(transcript, 15, 20)
-        plan = planner._parse_clip_plan_response(completion([clip(0, 15.0)]))
-        assert len(plan.segments) == 1
-        assert plan.segments[0].end_time_ms == 19_950
+    def test_short_complete_candidate_is_not_padded(self):
+        tr = make_transcript(5)
+        segment = make_planner(tr, 30, 60)._parse_clip_plan_response(completion([clip(shown(tr[0].start_time_ms), shown(tr[0].end_time_ms))])).segments[0]
+        assert segment.end_time_ms == tr[0].end_time_ms
 
-    def test_rounding_below_minimum_filters_when_no_sentence_fits(self):
-        transcript = [
-            TranscriptSegment(i * 5000, (i + 1) * 5000 - 50, "Sentence.", words=[
-                TranscriptWord("Sentence.", i * 5000, (i + 1) * 5000 - 50),
-            ])
-            for i in range(4)
-        ]
-        planner = make_planner(transcript, 15, 15)
-        assert planner._parse_clip_plan_response(completion([clip(0, 15.0)])).segments == []
-
-    def test_long_clip_survives_with_default_bounds_passed(self):
+    def test_overlong_candidate_is_not_truncated(self):
         tr = make_transcript()
-        start_ms, end_ms = tr[10].start_time_ms, tr[60].end_time_ms
-        planner = make_planner(tr, 15, 90, ["long"])
-        seg = planner._parse_clip_plan_response(completion([clip(shown(start_ms), shown(end_ms))])).segments[0]
-        assert (seg.end_time_ms - seg.start_time_ms) / 1000 == pytest.approx((end_ms - start_ms) / 1000, abs=0.1)
-        assert seg.end_time_ms == end_ms
+        segment = make_planner(tr, 15, 60)._parse_clip_plan_response(completion([clip(shown(tr[0].start_time_ms), shown(tr[30].end_time_ms))])).segments[0]
+        assert segment.end_time_ms == tr[30].end_time_ms
 
-    def test_rounded_sentence_end_is_not_extended_into_next_sentence(self):
+    def test_rounding_is_resolved_to_the_original_sentence_edges(self):
         tr = make_transcript()
-        planner = make_planner(tr, 5, 600)
+        planner = make_planner(tr, 15, 90)
         for i in range(20, 60):
-            true_end = tr[i].end_time_ms
-            plan = planner._parse_clip_plan_response(
-                completion([clip(shown(tr[i - 5].start_time_ms), shown(true_end))])
-            )
-            assert plan.segments[0].end_time_ms == true_end
+            segment = planner._parse_clip_plan_response(completion([clip(shown(tr[i-5].start_time_ms), shown(tr[i].end_time_ms))])).segments[0]
+            assert segment.start_time_ms == tr[i-5].start_time_ms
+            assert segment.end_time_ms == tr[i].end_time_ms
 
-    def test_over_long_clip_snaps_back_to_last_sentence_that_fits(self):
+    def test_preferred_range_does_not_remove_setup_or_payoff(self):
         tr = make_transcript()
-        planner = make_planner(tr, 15, 60)
-        start_ms = tr[30].start_time_ms
-        seg = planner._parse_clip_plan_response(
-            completion([clip(shown(start_ms), shown(tr[50].end_time_ms))])
-        ).segments[0]
-        duration_s = (seg.end_time_ms - seg.start_time_ms) / 1000
-        assert 15 <= duration_s <= 60
-        assert seg.end_time_ms in sentence_ends(tr)
+        a, b = tr[10].start_time_ms, tr[30].end_time_ms
+        segment = make_planner(tr, 15, 60, start_limit=a/1000 + 10, end_limit=b/1000 - 10)._parse_clip_plan_response(completion([clip(a/1000, b/1000)])).segments[0]
+        assert (segment.start_time_ms, segment.end_time_ms) == (a, b)
 
-    def test_snapping_stays_inside_selected_range(self):
+    def test_partial_sentence_expands_outward(self):
         tr = make_transcript()
-        range_start = tr[40].start_time_ms / 1000 + 1.0  # starts mid-sentence
-        range_end = tr[70].end_time_ms / 1000 - 1.0      # ends mid-sentence
-        planner = make_planner(tr, 15, 90, None, range_start, range_end)
-        plan = planner._parse_clip_plan_response(completion([
-            clip(range_start - 5, range_start + 40),
-            clip(range_end - 40, range_end + 5),
-        ]))
-        for seg in plan.segments:
-            assert seg.start_time_ms >= range_start * 1000
-            assert seg.end_time_ms <= range_end * 1000
+        segment = make_planner(tr)._parse_clip_plan_response(completion([clip(tr[10].start_time_ms/1000 + 1, tr[15].end_time_ms/1000 - 1)])).segments[0]
+        assert (segment.start_time_ms, segment.end_time_ms) == (tr[10].start_time_ms, tr[15].end_time_ms)
 
-    def test_range_end_mid_sentence_ends_on_last_sentence_inside(self):
-        # The clip end is clamped to a range end that falls mid-sentence; it
-        # used to stay there (mid-sentence) because the forward snap left the range.
-        tr = make_transcript()
-        range_end = tr[70].end_time_ms / 1000 - 1.0
-        planner = make_planner(tr, 15, 90, None, None, range_end)
-        seg = planner._parse_clip_plan_response(completion([clip(range_end - 40, range_end + 5)])).segments[0]
-        assert seg.end_time_ms == tr[69].end_time_ms
+    def test_source_bounds_and_malformed_timestamps_are_rejected(self):
+        planner = make_planner(make_transcript(10))
+        planner._current_video_duration = 50
+        assert planner._parse_clip_plan_response(completion([clip(-1, 10), clip(1, 60), clip(float('nan'), 20), clip(True, 20)])).segments == []
 
-    def test_range_start_mid_word_moves_to_next_word(self):
-        # Range start falls inside a word and the next sentence is >3 s away:
-        # start on the next word rather than mid-word.
-        tr = make_transcript()
-        range_start = tr[40].start_time_ms / 1000 + 1.0
-        planner = make_planner(tr, 15, 90, None, range_start, None)
-        seg = planner._parse_clip_plan_response(completion([clip(range_start - 5, range_start + 40)])).segments[0]
-        assert seg.start_time_ms == tr[40].words[3].start_time_ms
-
-    def test_range_start_prefers_a_nearby_sentence_start(self):
-        tr = make_transcript()
-        range_start = tr[40].start_time_ms / 1000 + 2.0  # mid-word; next sentence starts 2.96 s later
-        planner = make_planner(tr, 15, 90, None, range_start, None)
-        seg = planner._parse_clip_plan_response(completion([clip(range_start - 5, range_start + 40)])).segments[0]
-        assert seg.start_time_ms == tr[41].start_time_ms
-
-    def test_empty_clip_list_parses_to_empty_plan(self):
-        plan = make_planner(make_transcript())._parse_clip_plan_response(completion([]))
-        assert plan.segments == [] and plan.total_clips == 0
+    def test_empty_clip_list_is_preserved(self):
+        assert make_planner(make_transcript())._parse_clip_plan_response(completion([])).segments == []
 
 
 class TestSentenceHelpers:
@@ -232,22 +177,18 @@ class TestEmptyPlan:
         monkeypatch.setattr(pipeline.transcription_service, "transcribe", transcribe)
         result = asyncio.run(pipeline.process_video(ClippingJobRequest(video_url="x", job_id="j1")))
         assert result.status == JobStatus.FAILED
-        assert "No clip-worthy moments found" in result.error
+        assert "No clips passed the coherence review" in result.error
 
-    def test_range_shorter_than_min_clip_skips_the_paid_call(self, monkeypatch):
-        from clip_engine.services import intelligence_planner as planner_module
-
-        async def no_call(*args, **kwargs):
-            raise AssertionError("planner model must not be called")
-
-        monkeypatch.setattr(planner_module, "chat_completion", no_call)
+    def test_short_preference_keeps_full_transcript_and_can_extend(self, monkeypatch):
         tr = make_transcript(10)
         planner = make_planner(tr)
-        start_s = tr[2].start_time_ms / 1000
-        plan = asyncio.run(planner.plan_clips(
-            TranscriptionResult(segments=tr, full_text=""),
-            duration_ranges=["short"],                     # clips must be 30-60 s
-            start_time_seconds=start_s, end_time_seconds=start_s + 20,
-        ))
-        assert plan.segments == []
-        assert "shorter than the minimum clip length" in plan.insights
+        async def complete(**kwargs):
+            text = str(kwargs['messages'])
+            assert tr[0].text in text and tr[-1].text in text
+            assert 'Preferred discovery range' in text
+            return completion([clip(tr[0].start_time_ms/1000, tr[-1].end_time_ms/1000)]), {'prompt_tokens': 1, 'completion_tokens': 1, 'total_tokens': 2, 'cost': 0}
+        monkeypatch.setattr(planner, '_call_openrouter', complete)
+        result = asyncio.run(planner.plan_clips(TranscriptionResult(segments=tr, full_text=''), duration_ranges=['short'],
+            start_time_seconds=10, end_time_seconds=15))
+        assert len(result.segments) == 1
+        assert result.segments[0].start_time_ms < 10000 and result.segments[0].end_time_ms > 15000

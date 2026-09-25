@@ -14,6 +14,7 @@ export interface ClipJobRequest {
   aspectRatio: string
   layoutStyle: string
   layoutVision: boolean
+  debugCapture?: boolean
   pacing: string
   /** Export speed for every clip. Older requests default to normal speed. */
   videoSpeed?: number

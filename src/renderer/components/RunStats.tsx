@@ -216,7 +216,10 @@ function costParts(costs: ApiCosts): string | null {
   const parts = [
     costs.transcription && `Transcribe ${formatUsd(costs.transcription.estimated_cost_usd)}`,
     costs.planning && `plan ${formatUsd(costs.planning.estimated_cost_usd)}`,
-    costs.layout_vision && `framing ${formatUsd(costs.layout_vision.estimated_cost_usd)}`
+    costs.layout_vision && `framing ${formatUsd(costs.layout_vision.estimated_cost_usd)}`,
+    costs.editorial && `editorial ${formatUsd(costs.editorial.estimated_cost_usd)}`,
+    costs.editorial_vision && `context vision ${formatUsd(costs.editorial_vision.estimated_cost_usd)}`,
+    costs.editorial_repair && `edit repair ${formatUsd(costs.editorial_repair.estimated_cost_usd)}`
   ].filter(Boolean)
   return parts.length > 0 ? parts.join(' · ') : null
 }

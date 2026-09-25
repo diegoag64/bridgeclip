@@ -12,6 +12,7 @@ everything stays in sync after the cuts.
 """
 
 import re
+import math
 from dataclasses import dataclass
 from typing import Optional
 
@@ -109,6 +110,38 @@ def _max_pause_at(plan: Optional[ClipLayoutPlan], t_ms: int) -> Optional[int]:
     return MAX_PAUSE_MS.get(layout, MAX_PAUSE_MS[LayoutType.TALKING_HEAD])
 
 
+def max_pause_over(plan: Optional[ClipLayoutPlan], start_ms: int, end_ms: int) -> Optional[int]:
+    """The most protective threshold from EVERY layout overlapping a gap."""
+    if plan is None:
+        return UNKNOWN_MAX_PAUSE_MS
+    shots = [s for s in plan.shots if s.start_ms < end_ms and s.end_ms > start_ms]
+    limits = [MAX_PAUSE_MS.get(s.detected_layout or s.layout, UNKNOWN_MAX_PAUSE_MS) for s in shots]
+    covered = sum(max(0, min(end_ms, s.end_ms) - max(start_ms, s.start_ms)) for s in shots)
+    if covered < end_ms - start_ms or not limits:
+        limits.append(UNKNOWN_MAX_PAUSE_MS)
+    return None if None in limits else max(limits)
+
+
+def preserve_intervals(keeps, protected, window_ms):
+    """Union protected intervals into keeps, rounding protection OUT to frames.
+
+    Apply after all cut/sliver/grid operations so none can erode protection.
+    """
+    spans = list(keeps) + [(max(0, math.floor(a / FRAME_MS) * FRAME_MS),
+                            min(window_ms, math.ceil(b / FRAME_MS) * FRAME_MS))
+                           for a, b in protected if b > 0 and a < window_ms and b > a]
+    merged = []
+    for a, b in sorted(spans):
+        a, b = max(0, round(a)), min(window_ms, round(b))
+        if b <= a:
+            continue
+        if merged and a <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(b, merged[-1][1]))
+        else:
+            merged.append((a, b))
+    return merged
+
+
 def compute_keep_intervals(
     words: list[WindowWord],
     window_ms: int,
@@ -120,11 +153,11 @@ def compute_keep_intervals(
 
     `longform` keeps pauses up to LONGFORM_MIN_PAUSE_MS (fillers are still cut).
     """
-    protected = protected or []
+    protected = preserve_intervals([], protected or [], window_ms)
     keep_pause_ms = LONGFORM_KEEP_PAUSE_MS if longform else KEEP_PAUSE_MS
 
-    def pause_limit(t_ms: int) -> Optional[int]:
-        threshold = _max_pause_at(plan, t_ms)
+    def pause_limit(start_ms: int, end_ms: int) -> Optional[int]:
+        threshold = max_pause_over(plan, start_ms, end_ms)
         if longform and threshold is not None:
             return max(threshold, LONGFORM_MIN_PAUSE_MS)
         return threshold
@@ -142,10 +175,10 @@ def compute_keep_intervals(
 
     # Lead-in and tail silence.
     first, last = spoken[0], spoken[-1]
-    lead_threshold = pause_limit(first.start_ms)
+    lead_threshold = pause_limit(0, first.start_ms)
     if lead_threshold is not None and first.start_ms > LEAD_IN_MS + MIN_CUT_MS:
         cuts.append((0, first.start_ms - LEAD_IN_MS))
-    tail_threshold = pause_limit(last.end_ms)
+    tail_threshold = pause_limit(last.end_ms, window_ms)
     if tail_threshold is not None and window_ms - last.end_ms > TAIL_MS + MIN_CUT_MS:
         cuts.append((last.end_ms + TAIL_MS, window_ms))
 
@@ -157,7 +190,7 @@ def compute_keep_intervals(
             w for w in all_words
             if prev.end_ms <= w.start_ms and w.end_ms <= nxt.start_ms and is_filler(w.text)
         ]
-        threshold = pause_limit(prev.end_ms)
+        threshold = pause_limit(prev.end_ms, nxt.start_ms)
         if fillers and threshold is not None:
             threshold = 0
         before = len(cuts)
@@ -211,12 +244,14 @@ def compute_keep_intervals(
             merged.append(piece)
     if len(merged) > 1 and merged[0][1] - merged[0][0] < MIN_PIECE_MS:
         merged[:2] = [(merged[0][0], merged[1][1])]
-    return merged or [(0, window_ms)]
+    return preserve_intervals(merged or [(0, window_ms)], protected, window_ms)
 
 
 def subtract_intervals(
     keeps: list[tuple[int, int]],
     cuts: list[tuple[int, int]],
+    protected: Optional[list[tuple[int, int]]] = None,
+    window_ms: Optional[int] = None,
 ) -> list[tuple[int, int]]:
     """`keeps` with every `cuts` interval removed; pieces under MIN_PIECE_MS drop.
 
@@ -238,7 +273,8 @@ def subtract_intervals(
             if k_end - c_end >= MIN_PIECE_MS:
                 pieces.append((c_end, k_end))
         result = pieces
-    return result or keeps
+    return preserve_intervals(result or keeps, protected or [],
+                              window_ms if window_ms is not None else max((b for _, b in keeps), default=0))
 
 
 class TimeMap:

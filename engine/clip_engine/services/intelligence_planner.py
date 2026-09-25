@@ -21,6 +21,7 @@ from typing import Any, Literal, Optional
 import httpx
 
 from clip_engine.config import DURATION_RANGES, get_settings, is_longform, resolve_clip_duration_bounds
+from clip_engine.services.editorial_evidence import parse_moment, overlaps
 from clip_engine.services.openrouter import (
     OpenRouterError,
     apply_reasoning,
@@ -63,6 +64,8 @@ class ClipPlanSegment:
     # timeline, and the SRT sidecar path.
     output_chapters: list[tuple[int, str]] = field(default_factory=list)
     subtitle_path: Optional[str] = None
+    editorial: Optional[dict] = None
+    moment: Optional[dict] = None
 
 
 @dataclass
@@ -96,6 +99,15 @@ DEFAULT_PRICING = {"input": 2.00e-6, "output": 12.0e-6}
 # virality_score is computed from these rather than trusting model arithmetic.
 RUBRIC_DIMENSIONS = ("hook", "standalone", "arc", "quotability", "ending")
 
+MOMENT_SCHEMA = {'type': 'object', 'properties': {
+    'topic': {'type': 'string', 'description': 'One specific topic of this moment, not a summary of the whole video.'},
+    'topic_start_segment': {'type': 'integer'}, 'topic_end_segment': {'type': 'integer'},
+    'setup_segment': {'type': 'integer', 'description': 'The source line introducing essential context.'},
+    'payoff_segment': {'type': 'integer', 'description': 'The source line completing the idea or reaction.'},
+    'requires_visual_context': {'type': 'boolean'}},
+    'required': ['topic', 'topic_start_segment', 'topic_end_segment', 'setup_segment', 'payoff_segment', 'requires_visual_context'],
+    'additionalProperties': False}
+
 CLIP_PLAN_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -108,6 +120,7 @@ CLIP_PLAN_SCHEMA: dict[str, Any] = {
             "items": {
                 "type": "object",
                 "properties": {
+                    "moment": MOMENT_SCHEMA,
                     "start_time": {"type": "number", "description": "Clip start, seconds from the start of the video."},
                     "end_time": {"type": "number", "description": "Clip end, seconds from the start of the video."},
                     "summary": {"type": "string", "description": "2-7 word on-screen title."},
@@ -126,7 +139,7 @@ CLIP_PLAN_SCHEMA: dict[str, Any] = {
                         "description": "2-5 single punch words spoken in the clip, highlighted in captions.",
                     },
                 },
-                "required": ["start_time", "end_time", "summary", "scores", "tags", "emphasis"],
+                "required": ["moment", "start_time", "end_time", "summary", "scores", "tags", "emphasis"],
                 "additionalProperties": False,
             },
         },
@@ -378,6 +391,7 @@ class IntelligencePlannerService:
         start_time_seconds: Optional[float] = None,
         end_time_seconds: Optional[float] = None,
         aspect_ratio: str = "9:16",
+        discovery_feedback: Optional[dict] = None,
     ) -> ClipPlanResponse:
         """
         Plan viral clips from video content.
@@ -392,8 +406,8 @@ class IntelligencePlannerService:
             duration_ranges: Optional list of selected duration ranges ('short', 'medium', 'long')
             target_platform: Target platform (tiktok, youtube_shorts, instagram_reels)
             frames: Optional sampled video frames for vision analysis
-            start_time_seconds: Optional start of processing range (clips only from this point)
-            end_time_seconds: Optional end of processing range (clips only until this point)
+            start_time_seconds: Preferred discovery range start; complete clips may extend earlier
+            end_time_seconds: Preferred discovery range end; complete clips may extend later
             aspect_ratio: Output aspect ratio; long 16:9 clips are planned as longform edits
 
         Returns:
@@ -406,35 +420,12 @@ class IntelligencePlannerService:
             logger.warning("No transcript or frames provided for clip planning")
             return ClipPlanResponse(segments=[], total_clips=0, target_platform=target_platform, insights="No content provided for analysis")
 
-        # Store time range for validation
+        # The preferred range guides discovery, never transcript coverage or cuts.
         self._start_time_seconds = start_time_seconds
         self._end_time_seconds = end_time_seconds
-        
-        # Filter transcript segments by time range if specified
-        if start_time_seconds is not None or end_time_seconds is not None:
-            start_ms = int((start_time_seconds or 0) * 1000)
-            end_ms = int((end_time_seconds or float('inf')) * 1000)
-            
-            original_count = len(transcript)
-            transcript = [
-                seg for seg in transcript
-                if seg.start_time_ms >= start_ms and seg.end_time_ms <= end_ms
-            ]
-            logger.info(
-                f"Time range filter: {start_time_seconds}s - {end_time_seconds}s, "
-                f"filtered {original_count} -> {len(transcript)} transcript segments"
-            )
-            
-            # Also filter frames by time range
-            if frames:
-                original_frame_count = len(frames)
-                frames = [
-                    f for f in frames
-                    if f.timestamp_ms >= start_ms and f.timestamp_ms <= end_ms
-                ]
-                logger.info(
-                    f"Time range filter: filtered {original_frame_count} -> {len(frames)} frames"
-                )
+        if discovery_feedback is None:
+            self.audit = {'requests': []}
+        self._discovery_feedback = discovery_feedback
 
         if not transcript and len(frames) < 3:
             return ClipPlanResponse(
@@ -489,20 +480,13 @@ class IntelligencePlannerService:
                     f"{effective_duration_seconds:.0f}s fits at most {max_fit} clips of {min_duration_seconds}s+"
                 )
                 clip_count = max_fit
+        if discovery_feedback is not None:
+            clip_count = min(clip_count, 8)
+        self.discovery_limit = clip_count
         longform = bool(transcript) and is_longform(aspect_ratio, min_duration_seconds)
         self._current_longform = longform
         if longform:
             logger.info("Planning longform edits (16:9, 5+ minute clips)")
-
-        # A range shorter than the shortest allowed clip can't yield a clip;
-        # don't pay for a planner call to find that out.
-        if duration_source != "fallback" and effective_duration_seconds < min_duration_seconds:
-            reason = (
-                f"Selected range ({effective_duration_seconds:.0f}s) is shorter than the "
-                f"minimum clip length ({min_duration_seconds}s)"
-            )
-            logger.warning(f"{reason}; skipping clip planning")
-            return ClipPlanResponse(segments=[], total_clips=0, target_platform=target_platform, insights=reason)
 
         self._current_target_platform = target_platform
         self._current_min_duration = min_duration_seconds
@@ -520,6 +504,33 @@ class IntelligencePlannerService:
             if transcript else
             self._build_visual_only_system_prompt(clip_count, min_duration_seconds, max_duration_seconds, duration_ranges)
         )
+        system_prompt += (
+            f'\nPreferred discovery range: {start_time_seconds if start_time_seconds is not None else "source start"}'
+            f' to {end_time_seconds if end_time_seconds is not None else "source end"} seconds. '
+            'Prioritize ideas around this range but extend either boundary to preserve meaning. '
+            'Length and clip count are preferences, never quotas. Return no clips rather than force one.'
+            ' Exclude sponsor reads, paid promotions, affiliate pitches and advertising segments entirely, '
+            'even if they teach something useful or their sponsor disclosure is outside the proposed excerpt. '
+            'Ordinary independent product discussion is allowed; use the surrounding narrative to distinguish it from advertising.'
+        )
+        if transcript:
+            system_prompt += (
+                '\nMOMENT DISCOVERY AND BOUNDARIES: First identify distinct topic episodes in the source. '
+                'For each promising moment, populate moment with a concise topic, the topic_start_segment and topic_end_segment IDs, '
+                'then the setup_segment and payoff_segment IDs within that topic. These must refer to the numbered transcript lines. '
+                'Build the excerpt around both anchors, including qualifications and the host reaction to watched footage. '
+                'If an opening refers to an earlier example (such as "the reason I gave you this example is because"), '
+                'include the actual example and its setup, not just the later explanation of why it matters. '
+                'The payoff must complete this specific idea, not merely be the last available line. '
+                'Mark requires_visual_context when the point depends on something shown rather than described. '
+                'Speaker labels distinguish voices within a transcription chunk; do not invent identities or merge quoted claims with the host. '
+                'Overlapping alternative boundaries are allowed during discovery; selection happens after coherence review. '
+                'Return an empty clips array if there is no complete supported moment.')
+        if discovery_feedback is not None:
+            system_prompt += ('\nSECOND AND FINAL DISCOVERY PASS: Search the listed underexplored intervals for different moments. '
+                'The previous candidates have already been reviewed. Do not repeat or overlap them by more than 5 seconds. '
+                'Use surrounding transcript only for needed setup/payoff. Never fill a quota. '
+                + json.dumps(discovery_feedback))
         transcript_text = self._build_transcript_text(transcript)
         
         logger.info("Transcript text length: %s chars", len(transcript_text))
@@ -571,7 +582,7 @@ class IntelligencePlannerService:
             f"reasoning: {'model default' if self.settings.clipping_mode == 'advanced' else self.settings.planner_reasoning_effort}) for clip planning..."
         )
 
-        max_attempts = 3
+        max_attempts = 1 if discovery_feedback is not None else 3
         cumulative_prompt_tokens = 0
         cumulative_completion_tokens = 0
         cumulative_total_tokens = 0
@@ -583,6 +594,14 @@ class IntelligencePlannerService:
 
         for attempt in range(max_attempts):
             attempts_made += 1
+            parameters = self._build_request_payload(model_name, fallback_models, messages)
+            record = {'discovery_pass': 2 if discovery_feedback is not None else 1, 'model': model_name, 'requested_model': model_name,
+                'request_parameters': json.dumps({k: v for k, v in parameters.items() if k != 'messages'}),
+                'status': 'unavailable', 'messages': [
+                {'role': m['role'], 'content': m['content'] if isinstance(m['content'], str) else [
+                    item for item in m['content'] if item.get('type') == 'text']} for m in messages],
+                'response': None, 'usage': None}
+            self.audit['requests'].append(record)
             try:
                 response, usage_data = await self._call_openrouter(
                     model=model_name,
@@ -590,6 +609,7 @@ class IntelligencePlannerService:
                     messages=messages,
                 )
                 served_by = response.get("model") or model_name
+                record.update(model=served_by, status='received', response=message_text(response)[0], usage=usage_data)
                 cumulative_prompt_tokens += usage_data["prompt_tokens"]
                 cumulative_completion_tokens += usage_data["completion_tokens"]
                 cumulative_total_tokens += usage_data["total_tokens"]
@@ -614,6 +634,7 @@ class IntelligencePlannerService:
                         )
 
                 result = self._parse_clip_plan_response(response)
+                record['status'] = 'parsed'
             except IntelligencePlanningError as e:
                 if not e.retryable or attempt == max_attempts - 1:
                     logger.error(f"Clip planning failed after {attempts_made} attempt(s): {e}")
@@ -625,7 +646,12 @@ class IntelligencePlannerService:
                 await asyncio.sleep(delay)
                 continue
 
-            result.segments = self._finalize_clips(result.segments, clip_count)
+            if discovery_feedback is not None:
+                result.segments = [c for c in result.segments
+                    if any(overlaps([c.start_time_ms, c.end_time_ms], span) for span in discovery_feedback['search_intervals'])
+                    and not any(overlaps([c.start_time_ms, c.end_time_ms], old['interval']) for old in discovery_feedback['previous_candidates'])]
+            # Keep boundary alternatives until review; deduplicate only exact proposals here.
+            result.segments = self._finalize_clips(result.segments, clip_count, allow_alternatives=bool(transcript))
             result.total_clips = len(result.segments)
             result.api_costs = PlanningApiCosts(
                 provider="openrouter",
@@ -653,22 +679,11 @@ class IntelligencePlannerService:
     ) -> str:
         """Build the system prompt for the planner model."""
         min_duration, max_duration = resolve_clip_duration_bounds(duration_ranges, min_duration, max_duration)
-        strict_bounds_text = f"STRICTLY between {min_duration} and {max_duration} seconds"
-
-        duration_guidance = ""
-        selected_ranges = [DURATION_RANGES[r][2] for r in duration_ranges or [] if r in DURATION_RANGES]
-        if selected_ranges:
-            duration_guidance = f"""
-CRITICAL DURATION REQUIREMENTS:
-The user has selected specific clip lengths. You MUST follow these EXACTLY:
-{chr(10).join(f'- {r}' for r in selected_ranges)}
-
-Each clip MUST be {strict_bounds_text}. Clips outside this range will be REJECTED.
-Do NOT generate clips shorter than {min_duration} seconds or longer than {max_duration} seconds."""
+        duration_guidance = f"Preferred length: {min_duration}–{max_duration} seconds. Completeness takes priority."
 
         return f"""## YOUR ROLE
 
-You are AI-Clipping-Agent, an elite virality analyst who identifies the most engaging, scroll-stopping segments from long-form videos for short-form content (TikTok, Reels, Shorts).
+You are a video editor selecting complete, faithful excerpts for short-form content (TikTok, Reels, Shorts). Establish context, a resolved central thought and a supported title before considering engagement scores. Never sacrifice meaning for a hook.
 
 Before selecting clips, classify the video content type:
 - Podcast/Interview: Prioritize quotable opinions, debate moments, surprising admissions, hot takes
@@ -722,7 +737,7 @@ Prioritize clips whose opening matches one of these proven hook patterns:
 ## CLIP DIVERSITY RULES
 
 - SPREAD: Distribute clips across the full video timeline. Do not cluster multiple clips from the same section.
-- NO OVERLAP: No two clips should share more than 5 seconds of content. If two great moments are adjacent, pick the stronger one.
+- BOUNDARY ALTERNATIVES: Distinct moments or alternative boundaries may overlap during discovery. Approval and final selection resolve overlaps.
 - TOPIC VARIETY: If the video covers multiple topics, represent different topics across clips.
 - TONE MIX: Prefer a mix of tones across the clip set — not all high-energy or all calm. Include variety.
 
@@ -731,12 +746,12 @@ Prioritize clips whose opening matches one of these proven hook patterns:
 The "summary" field is the title displayed on screen. It must be 2-7 words.
 
 Rules:
-- Use curiosity gaps: "Why Most Developers Get This Wrong", "The Truth About AI Coding"
-- Use power words when appropriate: "brutal", "insane", "secret", "truth", "nobody", "actual"
-- Match the speaker's energy — if they are calm and analytical, do NOT use hyperbolic clickbait
+- State a specific idea actually established inside the retained excerpt.
+- Do not invent scandal, causation, regret, certainty or a confession to make a title more exciting. Preserve the speaker's qualifications.
+- A title cannot supply context or a conclusion missing from the spoken excerpt.
 - NEVER use generic titles: "Great Advice", "Important Point", "Good Tip", "Interesting Thought"
 - Each title across all clips must be unique — no repeated words or patterns
-- Think: would this title make someone stop scrolling on TikTok?
+- Prefer an accurate plain title over a curiosity gap that overstates the evidence.
 
 ## CAPTION EMPHASIS
 
@@ -744,7 +759,7 @@ For each clip, list 2-5 single words, exactly as spoken inside the clip, that ca
 
 ## OUTPUT FORMAT
 
-Return exactly {clip_count} clips as JSON:
+Return at most {clip_count} clips as JSON; return fewer or none if no complete moments qualify:
 {{
   "insights": "<content type classification + brief analysis of the video's key themes and why these clips were selected>",
   "clips": [
@@ -759,14 +774,13 @@ Return exactly {clip_count} clips as JSON:
   ]
 }}
 {duration_guidance}
-## STRICT RULES
+## ACCEPTANCE RULES
 
-- DURATION: Each clip MUST be {strict_bounds_text}. This is NON-NEGOTIABLE.
-- Verify: (end_time - start_time) >= {min_duration} AND (end_time - start_time) <= {max_duration}
-- Return times in SECONDS (not milliseconds), taken from the transcript timestamps
-- Start each clip at the beginning of a transcript line and end it at the end of one
-- Clips that violate the duration requirements will be REJECTED
-- Order clips best first"""
+- Duration targets are suggestions. Never pad, hard-truncate, or cut a thought to fit them.
+- Return times in SECONDS, taken from complete transcript boundaries.
+- Include the necessary setup, qualifications, and payoff in each excerpt.
+- Prefer coherent ideas over hook scores. Return an empty clips array when necessary.
+- Order candidates best first. Every candidate will undergo independent Jev review."""
 
     def _build_longform_system_prompt(
         self,
@@ -800,7 +814,7 @@ Inside an episode you may list "skip" ranges to cut out: tangents that leave the
 - Start a skip right after a sentence ends and end it right before a sentence starts, so the jump is clean.
 - Only skip what a viewer would not miss; the episode must still flow without it. Most episodes need zero to three skips. Never skip the setup of a later payoff.
 - Skips together remove at most 40% of the episode.
-- RUNTIME: (end_time - start_time) minus all skips must still be at least {min_duration} seconds, and (end_time - start_time) must be at most {max_duration} seconds.
+- RUNTIME: Aim for {min_duration}-{max_duration} seconds; extend or shorten as necessary for a complete idea. Never pad or truncate to reach that target.
 Do not list pauses or filler words; those are removed automatically.
 
 ## CHAPTERS
@@ -825,7 +839,7 @@ Score each episode 0-10 on these keys (be calibrated; reserve 8-10 for exception
 
 ## OUTPUT
 
-Return JSON with "insights" and "clips" (up to {clip_count}, best first). Times are in SECONDS taken from the transcript timestamps. Start each clip at the beginning of a transcript line and end it at the end of one. Clips outside {min_duration}-{max_duration} seconds are REJECTED."""
+Return JSON with "insights" and "clips" (up to {clip_count}, best first). Times are in SECONDS taken from the transcript timestamps. Start each clip at the beginning of a transcript line and end it at the end of one. Duration is a preference. Independent Jev review will reject incomplete or misleading edits."""
 
     def _build_visual_only_system_prompt(
         self,
@@ -843,8 +857,8 @@ self-contained action, reveal, transformation, demonstration, or scene with a cl
 Static slides, a still image, and visually ambiguous footage do not qualify. If the evidence
 is too sparse, return an empty clips array. Never invent a spoken quote or caption words.
 
-Return JSON with "insights" and "clips". Return at most {clip_count} clips. Each clip must be
-{minimum} to {maximum} seconds long, contained within the video's duration, and grounded in
+Return JSON with "insights" and "clips". Return at most {clip_count} clips. Aim for
+{minimum} to {maximum} seconds, allowing complete ideas to run shorter or longer. Stay within the source and ground edits in
 the timestamps of the sample frames. Prefer intervals with multiple relevant frames.
 Each clip needs start_time and end_time in seconds, a factual 2-7 word summary, tags,
 an empty emphasis array, and scores with hook, standalone, arc, quotability, and ending
@@ -857,12 +871,12 @@ Do not overlap clips by more than 5 seconds."""
             return "[No transcript available]"
 
         lines = []
-        for seg in transcript:
+        for index, seg in enumerate(transcript):
             time_str = f"[{seg.start_time_ms / 1000:.1f} - {seg.end_time_ms / 1000:.1f}]"
             speaker = f"({seg.speaker_label}) " if seg.speaker_label else ""
             events = getattr(seg, "audio_events", None) or []
             event_str = f" {' '.join(events)}" if events else ""
-            lines.append(f"{time_str} {speaker}{seg.text}{event_str}")
+            lines.append(f"[segment {index}] {time_str} {speaker}{seg.text}{event_str}")
 
         return "\n".join(lines)
 
@@ -954,7 +968,7 @@ Do not overlap clips by more than 5 seconds."""
                 "Return fewer rather than pad with weak material. Return your response as JSON."
                 if longform else
                 f"\nBased on the {'transcript and frames' if frame_images else 'transcript'} above, "
-                f"identify the {clip_count} most viral-worthy segments. Return your response as JSON."
+                f"identify up to {clip_count} coherent, self-contained segments. Return fewer or none rather than force a clip. Return JSON."
                 if transcript else
                 f"\nSelect up to {clip_count} visually compelling segments supported by these frames. "
                 "Return an empty clips array if none qualify. Return your response as JSON."
@@ -1054,247 +1068,55 @@ Do not overlap clips by more than 5 seconds."""
             
             logger.info(f"Found {len(clips_data)} clips in response before validation")
             
-            # Duration bounds resolved in plan_clips (re-resolved so direct
-            # callers can't disagree with the prompt).
-            duration_ranges = getattr(self, '_current_duration_ranges', None)
-            min_duration, max_duration = resolve_clip_duration_bounds(
-                duration_ranges,
-                getattr(self, '_current_min_duration', None),
-                getattr(self, '_current_max_duration', None),
-            )
-            start_time_limit = getattr(self, '_start_time_seconds', None)
-            end_time_limit = getattr(self, '_end_time_seconds', None)
             transcript = getattr(self, '_current_transcript', [])
             video_duration = getattr(self, '_current_video_duration', None)
-            if video_duration is not None and video_duration > 0:
-                end_time_limit = min(end_time_limit, video_duration) if end_time_limit is not None else video_duration
-            snapping = self.settings.sentence_snapping_enabled and bool(transcript)
-
-            # Pre-process clips (filter invalid ones and enforce duration bounds)
-            valid_clips_data = []
+            source_end = video_duration * 1000 if video_duration else max((s.end_time_ms for s in transcript), default=86400000)
+            clips = []
             for clip in clips_data:
-                start = clip.get("start_time", clip.get("startTime", clip.get("start", 0)))
-                end = clip.get("end_time", clip.get("endTime", clip.get("end", 0)))
-                
-                # Convert to seconds if needed (check if values are too large for seconds)
-                if start > 100000:  # Likely milliseconds
-                    start = start / 1000
-                if end > 100000:
-                    end = end / 1000
-                
-                duration = end - start
-                
-                # Skip clips that are way too short (less than 5 seconds)
-                if duration < 5:
-                    logger.warning(f"Filtering clip with duration {duration}s - too short (< 5s)")
+                if not isinstance(clip, dict):
                     continue
-                
-                # Validate clip is within time range if specified
-                if start_time_limit is not None and start < start_time_limit:
-                    logger.warning(
-                        f"Adjusting clip start from {start}s to {start_time_limit}s (before selected range)"
-                    )
-                    start = start_time_limit
-                    duration = end - start
-                
-                if end_time_limit is not None and end > end_time_limit:
-                    logger.warning(
-                        f"Adjusting clip end from {end}s to {end_time_limit}s (after selected range)"
-                    )
-                    end = end_time_limit
-                    duration = end - start
-
+                start, end = clip.get('start_time'), clip.get('end_time')
+                if any(isinstance(t, bool) or not isinstance(t, (int, float)) or not math.isfinite(t) for t in (start, end)):
+                    continue
+                start_ms, end_ms = round(start * 1000), round(end * 1000)
+                for boundary, attr in [('start', 'start_time_ms'), ('end', 'end_time_ms')]:
+                    current = start_ms if boundary == 'start' else end_ms
+                    nearby = [getattr(t, attr) for t in transcript if abs(getattr(t, attr) - current) <= 100]
+                    if nearby:
+                        nearest = min(nearby, key=lambda x: abs(x - current))
+                        if boundary == 'start': start_ms = nearest
+                        else: end_ms = nearest
+                if not 0 <= start_ms < end_ms <= source_end:
+                    continue
+                overlapping = [t for t in transcript if t.start_time_ms < end_ms and t.end_time_ms > start_ms]
+                if transcript and not overlapping:
+                    continue
+                if overlapping:
+                    start_ms = max(0, min(start_ms, overlapping[0].start_time_ms))
+                    end_ms = min(round(source_end), max(end_ms, overlapping[-1].end_time_ms))
                 visual_times = getattr(self, '_current_visual_frame_times', [])
                 if not transcript and visual_times:
-                    supporting = [time for time in visual_times if start <= time <= end]
-                    if len(supporting) < 2 or any(
-                        right - left > 45 for left, right in zip(supporting, supporting[1:])
-                    ):
-                        logger.warning("Filtering visual-only clip without two nearby sampled frames")
+                    supporting = [t for t in visual_times if start_ms <= t * 1000 <= end_ms]
+                    if len(supporting) < 2 or any(b - a > 45 for a, b in zip(supporting, supporting[1:])):
                         continue
-                
-                # Enforce duration bounds with adjustment
-                original_duration = duration
-                adjusted = False
-                
-                # If clip is too short, try to extend it
-                if duration < min_duration:
-                    extension_needed = min_duration - duration
-                    # Try to extend end time
-                    new_end = end + extension_needed
-                    # Respect end time limit if set
-                    if end_time_limit is not None and new_end > end_time_limit:
-                        new_end = end_time_limit
-                    # Check if extension is sufficient
-                    if new_end - start >= min_duration:
-                        logger.info(
-                            f"Extended short clip ({original_duration:.1f}s -> {new_end - start:.1f}s) "
-                            f"to meet minimum duration {min_duration}s"
-                        )
-                        end = new_end
-                        duration = end - start
-                        adjusted = True
-                    else:
-                        logger.warning(
-                            f"Filtering clip ({original_duration:.1f}s) - too short and cannot extend "
-                            f"to minimum {min_duration}s"
-                        )
+                moment = None
+                if transcript and 'moment' in clip:
+                    try:
+                        moment = parse_moment(clip['moment'], transcript)
+                    except ValueError:
                         continue
-                
-                # If clip is too long, end it on the last sentence that fits
-                # (falling back to a hard cut only when none ends in range)
-                if duration > max_duration:
-                    end = start + max_duration
-                    if snapping:
-                        sentence_end_ms = last_sentence_end_between(
-                            transcript, int((start + min_duration) * 1000), int(end * 1000),
-                        )
-                        if sentence_end_ms is not None:
-                            end = sentence_end_ms / 1000
-                    duration = end - start
-                    logger.info(
-                        f"Trimmed long clip ({original_duration:.1f}s -> {duration:.1f}s) "
-                        f"to meet maximum duration {max_duration}s"
-                    )
-                    adjusted = True
-                
-                valid_clips_data.append({
-                    **clip,
-                    "start_time": start,
-                    "end_time": end,
-                })
-                if adjusted:
-                    logger.info(f"Adjusted clip: {start:.1f}s - {end:.1f}s (duration: {duration:.1f}s)")
-                else:
-                    logger.info(f"Valid clip found: {start:.1f}s - {end:.1f}s (duration: {duration:.1f}s)")
-            
-            layout_type = "center_crop"
-
-            clips = []
-            for clip in valid_clips_data:
-                start_sec = clip.get("start_time", 0)
-                end_sec = clip.get("end_time", 0)
-                
-                start_time_ms = int(start_sec * 1000)
-                end_time_ms = int(end_sec * 1000)
-                
-                # Apply sentence/word boundary snapping to prevent cutting off mid-word
-                if snapping:
-                    max_extension_ms = int(self.settings.sentence_extension_max_seconds * 1000)
-                    
-                    # 1. Snap START time to word/sentence boundary (prevent cutting mid-word)
-                    original_start_ms = start_time_ms
-                    adjusted_start_ms = find_sentence_start_boundary(
-                        segments=transcript,
-                        timestamp_ms=start_time_ms,
-                        max_adjustment_ms=int(self.settings.start_boundary_max_adjustment_seconds * 1000),
-                    )
-                    
-                    # Ensure we don't go negative
-                    if adjusted_start_ms < 0:
-                        adjusted_start_ms = 0
-                    
-                    if adjusted_start_ms != original_start_ms:
-                        logger.info(
-                            f"Clip start time adjusted for word boundary: "
-                            f"{original_start_ms}ms -> {adjusted_start_ms}ms "
-                            f"({adjusted_start_ms - original_start_ms:+d}ms)"
-                        )
-                        start_time_ms = adjusted_start_ms
-
-                    # Snapping back must not leave the user's selected range:
-                    # start on the next sentence (or at least word) inside it,
-                    # keeping the raw time only if the clip would get too short.
-                    if start_time_limit is not None and start_time_ms < start_time_limit * 1000:
-                        limit_ms = int(start_time_limit * 1000)
-                        start_time_ms = original_start_ms
-                        lookahead_ms = int(self.settings.start_boundary_max_adjustment_seconds * 1000)
-                        for within_ms in (lookahead_ms, 0):
-                            moved_ms = next_start_at_or_after(transcript, limit_ms, within_ms)
-                            if moved_ms is not None and end_time_ms - moved_ms >= min_duration * 1000:
-                                start_time_ms = moved_ms
-                                break
-
-                    # 2. Snap END time to sentence boundary (prevent cutting mid-sentence)
-                    original_end_ms = end_time_ms
-                    adjusted_end_ms = find_sentence_end_boundary(
-                        segments=transcript,
-                        timestamp_ms=end_time_ms,
-                        max_extension_ms=max_extension_ms,
-                        search_direction="forward",
-                    )
-                    
-                    # Ensure we don't exceed max clip duration or the selected
-                    # range: end on the last complete sentence that fits rather
-                    # than cutting mid-sentence
-                    max_end_ms = start_time_ms + (max_duration * 1000)
-                    if end_time_limit is not None:
-                        max_end_ms = min(max_end_ms, int(end_time_limit * 1000))
-                    if adjusted_end_ms > max_end_ms:
-                        fitting_end_ms = last_sentence_end_between(
-                            transcript, start_time_ms + min_duration * 1000, max_end_ms,
-                        )
-                        capped_ms = fitting_end_ms if fitting_end_ms is not None else min(original_end_ms, max_end_ms)
-                        logger.debug(
-                            f"Sentence boundary at {adjusted_end_ms}ms would exceed max duration, "
-                            f"ending at {capped_ms}ms"
-                        )
-                        adjusted_end_ms = capped_ms
-                    
-                    if adjusted_end_ms != original_end_ms:
-                        logger.info(
-                            f"Clip end time adjusted for sentence boundary: "
-                            f"{original_end_ms}ms -> {adjusted_end_ms}ms "
-                            f"(+{adjusted_end_ms - original_end_ms}ms)"
-                        )
-                        end_time_ms = adjusted_end_ms
-
-                # Snapping can move either edge after the initial duration
-                # check. Find a complete sentence within the allowed window
-                # before accepting a clip that has become too short.
-                minimum_end_ms = start_time_ms + min_duration * 1000
-                maximum_end_ms = start_time_ms + max_duration * 1000
-                if end_time_limit is not None:
-                    maximum_end_ms = min(maximum_end_ms, int(end_time_limit * 1000))
-                if end_time_ms < minimum_end_ms and snapping and minimum_end_ms <= maximum_end_ms:
-                    sentence_end_ms = find_sentence_end_boundary(
-                        transcript,
-                        minimum_end_ms,
-                        max_extension_ms=maximum_end_ms - minimum_end_ms,
-                        tolerance_ms=0,
-                    )
-                    if last_sentence_end_between(
-                        transcript, minimum_end_ms, sentence_end_ms,
-                    ) == sentence_end_ms:
-                        end_time_ms = sentence_end_ms
-                if end_time_ms < minimum_end_ms or end_time_ms > maximum_end_ms:
-                    logger.warning(
-                        "Filtering clip after boundary snapping: duration falls outside %s-%ss",
-                        min_duration, max_duration,
-                    )
-                    continue
-
-                segment = ClipPlanSegment(
-                    start_time_ms=start_time_ms,
-                    end_time_ms=end_time_ms,
-                    virality_score=self._score_clip(clip),
-                    layout_type=layout_type,
-                    summary=clip.get("summary"),
-                    tags=clip.get("tags", []),
-                    emphasis_words=(
-                        [w for w in clip.get("emphasis", []) if isinstance(w, str)][:5]
-                        if transcript else []
-                    ),
-                )
-                if getattr(self, "_current_longform", False):
-                    segment.skip_ranges_ms = self._clean_skips(
-                        clip.get("skip"), start_time_ms, end_time_ms, min_duration * 1000, transcript,
-                    )
-                    segment.chapters = self._clean_chapters(
-                        clip.get("chapters"), start_time_ms, end_time_ms, segment.skip_ranges_ms,
-                        segment.summary,
-                    )
-                    description = clip.get("description")
+                    # Anchors construct the full moment before the first review.
+                    start_ms = min(start_ms, moment['setup']['start_ms'])
+                    end_ms = max(end_ms, moment['payoff']['end_ms'])
+                    if not (0 <= start_ms < end_ms <= source_end and moment['topic_interval'][0] <= start_ms < end_ms <= moment['topic_interval'][1]):
+                        continue
+                segment = ClipPlanSegment(start_ms, end_ms, self._score_clip(clip), moment=moment,
+                    summary=clip.get('summary'), tags=clip.get('tags', []),
+                    emphasis_words=[w for w in clip.get('emphasis', []) if isinstance(w, str)][:5] if transcript else [])
+                if getattr(self, '_current_longform', False):
+                    segment.skip_ranges_ms = self._clean_skips(clip.get('skip'), start_ms, end_ms, 0, transcript)
+                    segment.chapters = self._clean_chapters(clip.get('chapters'), start_ms, end_ms, segment.skip_ranges_ms, segment.summary)
+                    description = clip.get('description')
                     if isinstance(description, str) and description.strip():
                         segment.description = description.strip()[:1500]
                 clips.append(segment)
@@ -1433,12 +1255,9 @@ Do not overlap clips by more than 5 seconds."""
         self,
         clips: list[ClipPlanSegment],
         clip_count: int,
+        allow_alternatives: bool = False,
     ) -> list[ClipPlanSegment]:
-        """Rank clips best-first, drop heavy overlaps, and cap to clip_count.
-
-        The prompt asks for no overlap, but after boundary snapping two clips
-        can still end up covering the same moment; keep the stronger one.
-        """
+        """Bound ranked discovery; retain alternatives until review when requested."""
         ranked = sorted(clips, key=lambda c: c.virality_score, reverse=True)
         kept: list[ClipPlanSegment] = []
         for clip in ranked:
@@ -1447,7 +1266,7 @@ Do not overlap clips by more than 5 seconds."""
                 - max(clip.start_time_ms, other.start_time_ms) > MAX_CLIP_OVERLAP_MS
                 for other in kept
             )
-            if overlaps:
+            if (overlaps and not allow_alternatives) or any((clip.start_time_ms, clip.end_time_ms) == (other.start_time_ms, other.end_time_ms) for other in kept):
                 logger.info(
                     f"Dropping overlapping clip {clip.start_time_ms}-{clip.end_time_ms}ms "
                     f"(score {clip.virality_score:.2f})"

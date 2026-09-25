@@ -36,7 +36,7 @@ const LAYOUT_STYLES = [
 const MAX_CLIPS = 100
 
 export const WIZARD_STEPS: { id: WizardStep; label: string; title: string; description: string }[] = [
-  { id: 'video', label: 'Video', title: 'Choose a video', description: 'A local file, YouTube link or Twitch VOD link. Optionally clip only part of it.' },
+  { id: 'video', label: 'Video', title: 'Choose a video', description: 'A local file, YouTube link or Twitch VOD link. Optionally suggest where to find clips.' },
   { id: 'format', label: 'Format', title: 'Format, framing and speed', description: 'Choose the look and pace of every clip in this job.' },
   { id: 'clips', label: 'Clips', title: 'Clip length and count', description: 'Pick one or more lengths, or leave them all off for any length.' },
   { id: 'captions', label: 'Captions', title: 'Captions', description: 'Word-by-word captions burned into each clip. Silent videos are clipped without them.' },
@@ -67,6 +67,7 @@ export function buildJobRequest(draft: ClipDraft, trim: { start: number | null; 
     durationRanges: draft.durations.length > 0 ? draft.durations : null,
     aspectRatio: draft.aspectRatio,
     layoutStyle: draft.layoutStyle,
+    debugCapture: draft.debugCapture ?? false,
     layoutVision: draft.clippingMode !== 'economy' && draft.aspectRatio === '9:16' && draft.layoutStyle === 'auto' && draft.layoutVision,
     pacing: draft.pacing,
     videoSpeed: draft.videoSpeed ?? 1,
@@ -235,9 +236,9 @@ function VideoStep({ draft, update, trimError, disabled }: { draft: ClipDraft; u
     <div className="space-y-3">
       <SourcePicker value={draft.source} onChange={(source) => update({ source })} disabled={disabled} />
       <SettingRow
-        title="Clip only part of the video"
-        description="Set a start and end time. Leave either empty for an open range."
-        control={<Switch label="Trim the source" checked={draft.trimOpen} onChange={(trimOpen) => update({ trimOpen })} />}
+        title="Preferred part of the video"
+        description="Suggest where to find clips. The full source is transcribed; boundaries may expand to preserve complete ideas."
+        control={<Switch label="Prefer a source range" checked={draft.trimOpen} onChange={(trimOpen) => update({ trimOpen })} />}
       />
       {draft.trimOpen && (
         <div className="animate-fade-in">
@@ -355,12 +356,17 @@ export function FormatStep({ draft, update }: { draft: ClipDraft; update: Update
       <Group label="Pacing">
         <SettingRow
           title="Cut dead air"
-          description="Trims long pauses and filler words, keeps demos."
+          description="Proposes pause and filler cuts; Jev must approve each removal."
           control={
             <Switch label="Cut dead air and filler words" checked={draft.pacing === 'tight'} onChange={(on) => update({ pacing: on ? 'tight' : 'natural' })} />
           }
         />
       </Group>
+      <SettingRow
+        title="Capture framing diagnostics"
+        description="Keeps a lower-resolution copy of the full source video and framing decisions in this run’s output folder. Adds processing time and disk usage. Shared across clips; delete the run folder to remove it. Inspecting a saved run makes no AI calls."
+        control={<Switch label="Capture framing diagnostics" checked={draft.debugCapture ?? false} onChange={(debugCapture) => update({ debugCapture })} />}
+      />
 
       <Group label="Video speed" aside="All clips in this job">
         <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-6" role="radiogroup" aria-label="Video speed" aria-describedby="video-speed-help">
@@ -393,7 +399,7 @@ export function ClipsStep({ draft, update }: { draft: ClipDraft; update: Update 
       <Group label="Clipping mode">
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-3" role="radiogroup" aria-label="Clipping mode">
           {([
-            { id: 'quality', label: 'Quality', hint: 'Opus 5.5 planning · MAI Transcribe 2' },
+            { id: 'quality', label: 'Quality', hint: 'GPT-6 Sol planning & repairs · Jev review · MAI Transcribe 2' },
             { id: 'economy', label: 'Economy', hint: 'GLM 5.3 Flash planning · Whisper Turbo' },
             { id: 'advanced', label: 'Advanced', hint: 'Choose your OpenRouter models' }
           ] as const).map((mode) => {

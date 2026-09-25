@@ -589,6 +589,8 @@ class Settings(BaseSettings):
 
     # API Keys (required)
     openrouter_api_key: Optional[str] = None
+    jev_enabled: bool = True
+    jev_visual_context: bool = False
 
     # Security - API authentication
     bridgeclip_api_key: Optional[str] = None  # API key for authenticating incoming requests
@@ -637,15 +639,11 @@ class Settings(BaseSettings):
     # AI MODELS (override via env to swap models without a release)
     # ============================================================
 
-    # Clip planner (OpenRouter slugs). PLANNER_FALLBACK_MODELS is a
-    # comma-separated list OpenRouter tries in order if the primary errors,
-    # is rate limited, or is down. Defaults chosen 2026-09 from the Artificial
-    # Analysis Intelligence Index (v4.3) and a live A/B on a real transcript:
-    # Opus 5.5 @ medium was fastest (~11s) and the most discriminating scorer
-    # at ~$0.07 per 20 min of video. Fallbacks are cross-vendor. Every model in
-    # the chain must accept the configured reasoning effort.
-    planner_model: str = "anthropic/claude-opus-5.5"
-    planner_fallback_models: str = "google/gemini-3.8-flash,openai/gpt-6-sol"
+    # Quality mode uses Sol for context-sensitive selection and boundary repair.
+    # Jev independently gates every edit; Economy keeps its cheaper presets.
+    planner_model: str = "openai/gpt-6-sol"
+    planner_fallback_models: str = ""
+    editorial_repair_model: str = "openai/gpt-6-sol"
     # none | minimal | low | medium | high | xhigh
     planner_reasoning_effort: str = "medium"
     # Includes reasoning tokens; 100 clips of JSON is ~15k on its own.

@@ -99,6 +99,12 @@ FAILURES = (
     (("exceeds maximum allowed duration",),
      "This video is longer than BridgeClip can process.",
      "Choose a shorter source video, or trim a downloaded file before adding it."),
+    (("review could not finish",),
+     "Clip review could not finish; no clips were exported.",
+     "A review or repair response was incomplete, unavailable, or hit a limit. This does not mean the video has no suitable clips. Inspect transcript & edits in Jobs for the failed requests, then retry."),
+    (("no clips passed the coherence review", "clip omitted:"),
+     "No clips passed the coherence review.",
+     "Inspect transcript & edits in Jobs to see which context, ending, title or cut checks failed. No clip was forced."),
     (("no clip-worthy moments",),
      "BridgeClip couldn't find any clips in this video.",
      "No clear spoken or visual moment met the selected clip length. If you set a start and end time, widen it or pick a shorter clip length."),
@@ -174,6 +180,7 @@ async def run(config: dict) -> bool:
         # Each job has its own bridge process, so model choices cannot leak to
         # another queued or concurrent run. Do not fall back to higher-cost planners.
         os.environ["PLANNER_MODEL"] = "z-ai/glm-5.3-flash"
+        os.environ["EDITORIAL_REPAIR_MODEL"] = "google/gemini-3.8-flash"
         os.environ["PLANNER_FALLBACK_MODELS"] = ""
         os.environ["LAYOUT_VISION_ENABLED"] = "false"
     elif config.get("clipping_mode") == "advanced":
@@ -238,6 +245,7 @@ async def run(config: dict) -> bool:
         duration_ranges=duration_ranges,
         aspect_ratio=config.get("aspect_ratio", "9:16"),
         layout_style=config.get("layout_style") or "auto",
+        debug_capture=config.get("debug_capture", False),
         pacing=config.get("pacing") or "tight",
         video_speed=config.get("video_speed", 1.0),
         include_captions=config.get("include_captions", True),
@@ -312,7 +320,7 @@ def validate_config(config: object) -> dict:
     output = config.get("output_dir")
     if output is not None and (not isinstance(output, str) or not os.path.isabs(output) or "\0" in output):
         raise ValueError("Output directory must be an absolute path")
-    for field in ("include_captions", "auto_clip_count", "layout_vision_enabled"):
+    for field in ("include_captions", "auto_clip_count", "layout_vision_enabled", "debug_capture"):
         if field in config and not isinstance(config[field], bool):
             raise ValueError(f"{field} must be a boolean")
     count = config.get("max_clips")

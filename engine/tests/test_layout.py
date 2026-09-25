@@ -41,6 +41,8 @@ from clip_engine.services.layout_renderer import (
     person_crop,
     piecewise_expr,
     screen_crop,
+    screen_view,
+    shot_views,
     shot_chain,
     stacked_panel_heights,
     step_expr,
@@ -271,7 +273,8 @@ class TestGeometry:
         assert x >= mid - 2 and x + w <= SRC_W
         # Face kept at or above ~58% of the panel even near the bottom edge.
         assert (right.cy * SRC_H - y) / h <= 0.6
-        assert w / h == pytest.approx(1080 / 960, rel=0.02)
+        fit_w, fit_h = panel_fit((w, h, x, y), 1080, 960) or (1080, 960)
+        assert fit_w / fit_h == pytest.approx(w / h, rel=0.02)
 
     def test_cam_crop_stays_inside_webcam(self):
         cam = Box(0.75, 0.72, 0.22, 0.22)
@@ -314,7 +317,7 @@ class TestGeometry:
         top_h, bottom_h = stacked_panel_heights(shot, SRC_H, 1920)
         assert (top_h, bottom_h) == (expected_top, 1920 - expected_top)
         assert top_h % 2 == bottom_h % 2 == 0
-        assert f"scale=1080:{top_h}:flags=lanczos[top0]" in shot_chain(0, shot, SRC_W, SRC_H, 1080, 1920)
+        assert f"pad=1080:{top_h}:" in shot_chain(0, shot, SRC_W, SRC_H, 1080, 1920)
         assert caption_anchor(shot, SRC_W, SRC_H, 1080, 1920) == (5, top_h)
 
     def test_two_shot_keeps_equal_panels_and_caption_seam(self):
@@ -344,20 +347,23 @@ class TestGeometry:
         w, h, x, y = screen_crop(Box(0, 0, 1, 1), None, SRC_W, SRC_H, 1080, 960, avoid=cam)
         # Keeps a 15%-of-webcam-width margin: overlay boxes are estimates.
         assert x + w <= (cam.x - 0.15 * cam.w) * SRC_W + 2
-        assert w / h == pytest.approx(1080 / 960, rel=0.02)
+        fit_w, fit_h = panel_fit((w, h, x, y), 1080, 960) or (1080, 960)
+        assert fit_w / fit_h == pytest.approx(w / h, rel=0.02)
         assert 1080 / w <= MAX_UPSCALE
 
     def test_screen_crop_covers_focus(self):
         focus = Box(0.3, 0.2, 0.3, 0.4)
         w, h, x, y = screen_crop(Box(0, 0, 1, 1), focus, SRC_W, SRC_H, 1080, 960)
         assert x <= focus.x * SRC_W and x + w >= (focus.x + focus.w) * SRC_W
-        assert w / h == pytest.approx(1080 / 960, rel=0.02)
+        fit_w, fit_h = panel_fit((w, h, x, y), 1080, 960) or (1080, 960)
+        assert fit_w / fit_h == pytest.approx(w / h, rel=0.02)
 
     def test_screen_crop_slides_away_from_webcam(self):
         cam = Box(0.75, 0.72, 0.22, 0.22)
         focus = Box(0.55, 0.3, 0.25, 0.4)  # centered crop would reach the webcam
         w, h, x, y = screen_crop(Box(0, 0, 1, 1), focus, SRC_W, SRC_H, 1080, 960, avoid=cam)
-        assert x + w <= (cam.x - 0.15 * cam.w) * SRC_W + 2
+        assert x <= focus.x * SRC_W and x + w >= (focus.x + focus.w) * SRC_W - 2
+        assert y + h <= cam.y * SRC_H + 2, 'preserve the full focus above the webcam instead of sliding text offscreen'
 
     def test_screen_crop_avoids_bottom_center_webcam_vertically(self):
         # Neither side has enough width at MAX_UPSCALE, but the screen above
@@ -392,6 +398,56 @@ def mixed_plan() -> ClipLayoutPlan:
 
 
 class TestFilterGraph:
+    @pytest.mark.skipif(not TEST_FFMPEG, reason="ffmpeg not installed")
+    def test_render_preserves_all_four_corners_of_wide_content(self):
+        # Each corner represents text/axis labels that a fill crop used to lose.
+        frame = np.zeros((360, 640, 3), dtype=np.uint8)
+        colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0)]
+        for (x, y), color in zip([(40, 20), (520, 20), (40, 120), (520, 120)], colors):
+            frame[y:y + 20, x:x + 20] = color
+        shot = ShotLayout(0, 1000, LayoutType.SCREEN_CAM,
+                          screen_box=Box(0, 0, 1, 1), screen_focus=Box(40 / 640, 20 / 360, 500 / 640, 120 / 360),
+                          cam_box=Box(.76, .7, .23, .29))
+        graph = '[0:v]null[t0];' + shot_chain(0, shot, 640, 360, 360, 640)
+        result = subprocess.run([TEST_FFMPEG, '-v', 'error', '-f', 'rawvideo', '-pix_fmt', 'rgb24',
+            '-s', '640x360', '-i', 'pipe:0', '-filter_complex', graph, '-map', '[v0]',
+            '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'],
+            input=frame.tobytes(), capture_output=True, check=True, timeout=20)
+        output = np.frombuffer(result.stdout, dtype=np.uint8).reshape(640, 360, 3)
+        top, _ = stacked_panel_heights(shot, 360, 640)
+        for color in colors:
+            matching = np.max(np.abs(output[:top].astype(int) - color), axis=2) < 20
+            assert matching.sum() >= 25, f'The screen crop lost the {color} content corner'
+
+    @pytest.mark.parametrize('focus', [Box(.04, .12, .88, .4), Box(.02, .03, .2, .92)])
+    def test_wide_text_and_tall_documents_keep_all_edges(self, focus):
+        shot = ShotLayout(0, 1000, LayoutType.SCREEN_CAM,
+                          screen_box=Box(0, 0, 1, 1), screen_focus=focus,
+                          cam_box=Box(.77, .76, .22, .23))
+        top, _ = stacked_panel_heights(shot, SRC_H, 1920)
+        (w, h, x, y), (dx, dy, dw, dh) = screen_view(shot, SRC_W, SRC_H, 1080, top)
+        assert x <= focus.x * SRC_W and y <= focus.y * SRC_H
+        assert x + w >= (focus.x + focus.w) * SRC_W - 2
+        assert y + h >= (focus.y + focus.h) * SRC_H - 2
+        assert dw / dh == pytest.approx(w / h, rel=.01)
+        assert dw / w <= MAX_UPSCALE and dh / h <= MAX_UPSCALE
+        assert dx >= 0 and dy >= 0 and dx + dw <= 1080 and dy + dh <= top
+        assert shot_views(shot, 0, SRC_W, SRC_H, 1080, 1920)[0] == ((x, y, w, h), (dx, dy, dw, dh))
+
+    def test_unknown_focus_preserves_full_screen_and_tiny_focus_cannot_overzoom(self):
+        for focus in (None, Box(.48, .48, .015, .025)):
+            w, h, _, _ = screen_crop(Box(0, 0, 1, 1), focus, SRC_W, SRC_H, 1080, 1344)
+            assert w >= SRC_W * .6 - 2 and h >= SRC_H * .6 - 2
+            if focus is None:
+                assert (w, h) == (SRC_W, SRC_H)
+
+    def test_webcam_avoidance_never_removes_overlapping_focus(self):
+        focus = Box(.1, .1, .8, .7)
+        w, h, x, y = screen_crop(Box(0, 0, 1, 1), focus, SRC_W, SRC_H, 1080, 1344, Box(.7, .6, .25, .35))
+        assert x <= focus.x * SRC_W and y <= focus.y * SRC_H
+        assert x + w >= (focus.x + focus.w) * SRC_W - 2
+        assert y + h >= (focus.y + focus.h) * SRC_H - 2
+
     def test_graph_has_every_shot(self):
         graph = build_layout_graph(mixed_plan(), 1080, 1920)
         assert graph.count("trim=") == 4
@@ -410,8 +466,8 @@ class TestFilterGraph:
             source_height=360,
         )
         graph = build_layout_graph(plan, 360, 640)
-        assert "scale=360:384:flags=lanczos[top0]" in graph
-        assert "scale=360:448:flags=lanczos[top1]" in graph
+        assert "pad=360:384:" in graph
+        assert "pad=360:448:" in graph
         out = tmp_path / "adaptive.mp4"
         subprocess.run([
             TEST_FFMPEG, "-v", "error", "-y",

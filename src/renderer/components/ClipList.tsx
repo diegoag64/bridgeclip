@@ -5,6 +5,10 @@ import { getApi } from '../lib/ipc'
 import { clipFilePath } from '../lib/thumbnails'
 import type { ApiCosts, ClipArtifact, JobOutput } from '../store/use-job-store'
 import { ClipCard } from './ClipCard'
+import { EditInspector } from './EditInspector'
+import { FramingInspector } from './FramingInspector'
+import { EditorialWeights } from './EditorialReview'
+import { defaultWeights, editorialScore } from '../../shared/editorial'
 import { RunStats } from './RunStats'
 import { AddToAutomationDialog } from './AddToAutomationDialog'
 import { PostDialog, type PostableClip } from './PostDialog'
@@ -17,7 +21,7 @@ import { Callout } from './ui/Callout'
 import { Segmented } from './ui/Segmented'
 import type { Page as AppPage } from './Sidebar'
 
-type Sort = 'score' | 'timeline'
+type Sort = 'score' | 'timeline' | 'editorial'
 
 interface ClipListProps {
   output: JobOutput
@@ -40,6 +44,9 @@ function toPostable(clip: ClipArtifact): PostableClip {
 
 export function ClipList({ output, outputDir: runDirectory, leading, onNewClip, onNavigate }: ClipListProps): React.JSX.Element {
   const [sort, setSort] = useState<Sort>('score')
+  const [weights, setWeights] = useState({ ...defaultWeights })
+  const hasEditorial = output.clips.some((c) => c.editorial?.status === 'success')
+  const [inspecting, setInspecting] = useState<ClipArtifact | null>(null)
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [exporting, setExporting] = useState(false)
   const [posting, setPosting] = useState<PostableClip[] | null>(null)
@@ -65,6 +72,8 @@ export function ClipList({ output, outputDir: runDirectory, leading, onNewClip, 
   useEffect(() => {
     if (noticeTimer.current) clearTimeout(noticeTimer.current)
     setSelected(new Set())
+    setInspecting(null)
+    setInspectEdits(false)
     setAspect(null)
     setPosting(null)
     setBankClips(null)
@@ -73,6 +82,7 @@ export function ClipList({ output, outputDir: runDirectory, leading, onNewClip, 
     setNotice(null)
   }, [output])
 
+  const [inspectEdits, setInspectEdits] = useState(false)
   const firstClip = output.clips[0]
   const outputDir = runDirectory ?? (firstClip ? clipFilePath(firstClip.s3_url).replace(/[\\/][^\\/]+$/, '') : '')
 
@@ -84,10 +94,11 @@ export function ClipList({ output, outputDir: runDirectory, leading, onNewClip, 
 
   const clips = useMemo(() => {
     const list = [...output.clips]
+    if (sort === 'editorial') return list.sort((a, b) => (editorialScore(b.editorial, weights) ?? -1) - (editorialScore(a.editorial, weights) ?? -1))
     return sort === 'score'
       ? list.sort((a, b) => b.virality_score - a.virality_score)
       : list.sort((a, b) => a.start_time_ms - b.start_time_ms)
-  }, [output.clips, sort])
+  }, [output.clips, sort, weights])
 
   const allSelected = selected.size > 0 && selected.size === clips.length
 
@@ -138,6 +149,7 @@ export function ClipList({ output, outputDir: runDirectory, leading, onNewClip, 
         title={output.source_video_title || 'Untitled video'}
         actions={
           <>
+            {outputDir && <Button onClick={() => setInspectEdits(true)}>Inspect transcript & edits</Button>}
             {outputDir && (
               <Button icon={<FolderOpen className="h-3.5 w-3.5" />} onClick={() => getApi().shell.openPath(outputDir)}>
                 Open folder
@@ -247,12 +259,14 @@ export function ClipList({ output, outputDir: runDirectory, leading, onNewClip, 
             onChange={setSort}
             options={[
               { value: 'score', label: 'Best first' },
+              ...(hasEditorial ? [{ value: 'editorial' as const, label: 'Editorial' }] : []),
               { value: 'timeline', label: 'Timeline' }
             ]}
           />
         </div>
       </div>
 
+      {hasEditorial && <EditorialWeights value={weights} onChange={setWeights} />}
       {clips.length === 0 ? (
         <EmptyState
           className="mt-4"
@@ -280,6 +294,7 @@ export function ClipList({ output, outputDir: runDirectory, leading, onNewClip, 
               onToggleSelect={() => toggle(clip.clip_index)}
               onAspect={aspect == null ? setAspect : undefined}
               onPost={() => setPosting([toPostable(clip)])}
+              onInspectFraming={() => setInspecting(clip)}
               onAddToAutomation={outputDir ? () => setBankClips([clip.clip_index]) : undefined}
             />
           ))}
@@ -287,6 +302,8 @@ export function ClipList({ output, outputDir: runDirectory, leading, onNewClip, 
       )}
 
       {posting && <PostDialog clips={posting} onClose={() => setPosting(null)} onNavigate={onNavigate} />}
+      {inspectEdits && <EditInspector outputDir={outputDir} onClose={() => setInspectEdits(false)} />}
+      {inspecting && <FramingInspector outputDir={outputDir} clip={inspecting} onClose={() => setInspecting(null)} />}
       {bankClips && outputDir && <AddToAutomationDialog
         outputDir={outputDir}
         clipIndices={bankClips}
@@ -343,6 +360,12 @@ function readCosts(value: unknown): ApiCosts | null {
   const layoutVision = section('layout_vision')
   if (layoutVision && typeof layoutVision.model === 'string' && validMoney(layoutVision.estimated_cost_usd)) {
     result.layout_vision = layoutVision as unknown as NonNullable<ApiCosts['layout_vision']>
+  }
+  for (const key of ['editorial', 'editorial_vision', 'editorial_repair'] as const) {
+    const part = section(key)
+    if (part && typeof part.provider === 'string' && typeof part.model === 'string' && validMoney(part.estimated_cost_usd)) {
+      result[key] = { provider: part.provider, model: part.model, estimated_cost_usd: part.estimated_cost_usd }
+    }
   }
   return result
 }

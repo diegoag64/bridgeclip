@@ -1,4 +1,6 @@
+import type { EditAudit } from '../shared/editorial'
 import { contextBridge, ipcRenderer } from 'electron'
+import type { FramingInspection } from '../shared/framing-trace'
 import type {
   ZernioConnectOptions,
   ZernioConnectResult,
@@ -11,13 +13,15 @@ import type {
 } from '../shared/zernio'
 import type { ClipMediaInfo, PostClipRequest, PostClipResult, PostProgress, PostRecord, PostsRefreshResult, TikTokCreatorInfo, TikTokLegalLink } from '../shared/zernio-posts'
 import type { ClipJobRequest, JobSnapshot } from '../shared/jobs'
-import type { Automation, AutomationUpdate, AutomationTikTokReview, AutomationTikTokReviewUpdate } from '../shared/automations'
+import type { AutomationSourceGroup, AutomationBatchResult, AutomationSourceContext, Automation, AutomationUpdate, AutomationTikTokReview, AutomationTikTokReviewUpdate } from '../shared/automations'
 import type { OpenRouterCatalog } from '../shared/openrouter-models'
 import type { UpdateState } from '../shared/updates'
 
 export interface ClipSettings {
   openrouterConfigured: boolean
   zernioConfigured: boolean
+  jevEnabled: string
+  jevVisualContext: string
   outputDirectory: string
   pythonPath: string
   customVocabulary: string
@@ -54,8 +58,15 @@ export interface ToolStatus {
 }
 
 export interface BridgeClipAPI {
+  edits: { inspect: (outputDir: string) => Promise<EditAudit> }
+  framing: { inspect: (outputDir: string, clipIndex: number) => Promise<FramingInspection> }
   models: { list: (refresh?: boolean) => Promise<OpenRouterCatalog> }
   automations: {
+    enhancementGroups: (id: string) => Promise<AutomationSourceGroup[]>
+    enhanceBatch: (id: string, contentIds: string[], key: string) => Promise<AutomationBatchResult>
+    source: (id: string, contentId: string) => Promise<AutomationSourceContext | null>
+    enhance: (id: string, contentId: string, options: { source?: AutomationSourceContext | null; research: boolean }) => Promise<Automation[]>
+    resolveDraft: (id: string, contentId: string, draftId: string, apply: boolean) => Promise<Automation[]>
     list: () => Promise<Automation[]>
     create: (name: string) => Promise<Automation[]>
     update: (id: string, update: AutomationUpdate) => Promise<Automation[]>
@@ -173,8 +184,15 @@ function subscribe<T>(channel: string, callback: (data: T) => void): () => void 
 }
 
 const api: BridgeClipAPI = {
+  edits: { inspect: (outputDir) => ipcRenderer.invoke('edits:inspect', outputDir) },
+  framing: { inspect: (outputDir, clipIndex) => ipcRenderer.invoke('framing:inspect', outputDir, clipIndex) },
   models: { list: (refresh = false) => ipcRenderer.invoke('models:list', refresh) },
   automations: {
+    enhancementGroups: (id) => ipcRenderer.invoke('automations:enhancementGroups', id),
+    enhanceBatch: (id, contentIds, key) => ipcRenderer.invoke('automations:enhanceBatch', id, contentIds, key),
+    source: (id, contentId) => ipcRenderer.invoke('automations:source', id, contentId),
+    enhance: (id, contentId, options) => ipcRenderer.invoke('automations:enhance', id, contentId, options),
+    resolveDraft: (id, contentId, draftId, apply) => ipcRenderer.invoke('automations:resolveDraft', id, contentId, draftId, apply),
     list: () => ipcRenderer.invoke('automations:list'),
     create: (name) => ipcRenderer.invoke('automations:create', name),
     update: (id, update) => ipcRenderer.invoke('automations:update', id, update),

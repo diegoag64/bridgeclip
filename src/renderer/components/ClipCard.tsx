@@ -5,6 +5,7 @@ import { getApi } from '../lib/ipc'
 import { clipFilePath, loadThumbnail } from '../lib/thumbnails'
 import type { ClipArtifact } from '../store/use-job-store'
 import { Checkbox } from './ui/Checkbox'
+import { Button } from './ui/Button'
 import { Badge } from './ui/Badge'
 import { Skeleton } from './ui/Skeleton'
 
@@ -30,6 +31,7 @@ interface ClipCardProps {
   /** Opens the post dialog for this clip. */
   onPost?: () => void
   onAddToAutomation?: () => void
+  onInspectFraming?: () => void
 }
 
 export function ClipCard({
@@ -41,7 +43,8 @@ export function ClipCard({
   onToggleSelect,
   onAspect,
   onPost,
-  onAddToAutomation
+  onAddToAutomation,
+  onInspectFraming
 }: ClipCardProps): React.JSX.Element {
   const filePath = clipFilePath(clip.s3_url)
   const [thumb, setThumb] = useState<string | null | undefined>(undefined)
@@ -195,7 +198,10 @@ export function ClipCard({
         <h3 className="line-clamp-2 text-sm font-medium leading-[18px] text-ink" title={title}>
           {title}
         </h3>
-        <p className="mt-1 truncate text-2xs text-ink-subtle">
+        {clip.editorial && clip.editorial.flags.length > 0 && <p className="mt-2 text-2xs text-amber-200" title={clip.editorial.flags.map((f) => f.replaceAll('_', ' ')).join('; ')}>
+          Editorial review: {clip.editorial.flags.includes('incomplete_reaction_context') ? 'incomplete reaction context' : `${clip.editorial.flags.length} flag${clip.editorial.flags.length === 1 ? '' : 's'}`}
+        </p>}
+        <p className="mt-1.5 truncate text-2xs text-ink-subtle">
           <span className="font-mono tabular" title="Position in the source video">
             {formatTimecode(clip.start_time_ms)} – {formatTimecode(clip.end_time_ms)}
           </span>
@@ -212,6 +218,7 @@ export function ClipCard({
             </span>
           </Badge>
         )}
+        {onInspectFraming && <Button size="sm" className="mt-2 w-full" onClick={onInspectFraming}>Inspect framing</Button>}
         {actionError && <p role="alert" className="mt-1.5 text-xs text-danger">{actionError}</p>}
       </div>
     </article>

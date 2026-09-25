@@ -53,6 +53,7 @@ class ClipArtifact:
     description: Optional[str] = None
     chapters: Optional[list[dict]] = None
     subtitle_url: Optional[str] = None
+    editorial: Optional[dict] = None
 
 
 @dataclass
@@ -71,6 +72,8 @@ class JobOutput:
     processing_time_seconds: float = 0
     metrics: Optional[dict[str, Any]] = None
     created_at: str = None
+    source_video_description: Optional[str] = None
+    source_video_channel: Optional[str] = None
     
     def __post_init__(self):
         if self.created_at is None:

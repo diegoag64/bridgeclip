@@ -18,7 +18,7 @@ import re
 import shutil
 import sys
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from typing import Optional, Union
 
@@ -37,6 +37,11 @@ from clip_engine.services.clip_editor import (
     window_words,
 )
 from clip_engine.services.layout_analyzer import ClipLayoutPlan, LayoutAnalyzer, LayoutType, ShotLayout
+from clip_engine.services.framing_trace import make_trace, save_trace
+from clip_engine.services.editorial_context import window_protection, record_prevented_cuts
+from clip_engine.services.editorial_review import review_retained_clip
+from clip_engine.services.jev_service import JevService
+from clip_engine.services.coherence_review import CoherenceReviewer, CoherenceRejected
 from clip_engine.services.media_process import MEDIA_INPUT_OPTIONS, PROBE_TIMEOUT_SECONDS, media_process, run_media, validate_video_dimensions
 from clip_engine.services.layout_renderer import (
     AUDIO_FORMAT,
@@ -111,6 +116,10 @@ class RenderRequest:
     longform: bool = False
     skip_ranges_ms: list[tuple[int, int]] = field(default_factory=list)
     chapters: list[tuple[int, str]] = field(default_factory=list)
+    debug_capture: bool = False
+    editorial_context: Optional[dict] = None
+    editorial_service: Optional[JevService] = field(default=None, repr=False)
+    coherence_reviewer: Optional[CoherenceReviewer] = field(default=None, repr=False)
 
 
 @dataclass
@@ -133,6 +142,7 @@ class RenderResult:
     subtitle_path: Optional[str] = None
     output_width: int = 0
     output_height: int = 0
+    framing_trace_path: Optional[str] = None
 
 
 class RenderingService:
@@ -218,6 +228,26 @@ class RenderingService:
         return ["-c:v", "libx264", "-preset", self.settings.ffmpeg_preset,
                 "-crf", str(self.settings.ffmpeg_crf), *gop]
 
+    async def capture_framing_source(self, video_path: str, output_path: str) -> None:
+        """One uncropped preview per captured run, on the original source clock."""
+        width, height = await self._get_video_dimensions(video_path)
+        scale = min(1, 1280 / width, 720 / height)
+        out_w, out_h = max(2, int(width * scale / 2) * 2), max(2, int(height * scale / 2) * 2)
+        temporary = output_path + ".partial.mp4"
+        try:
+            await self._run_cmd([
+                "ffmpeg", "-nostdin", "-v", "error", "-n", *MEDIA_INPUT_OPTIONS, "-i", video_path,
+                "-map", "0:v:0", "-map", "0:a:0?", "-vf",
+                f"fps=30:start_time=0:round=near,scale={out_w}:{out_h},setsar=1",
+                *self._video_codec_args(out_w, out_h, "30"), "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-af", AUDIO_SYNC, "-b:a", "96k", "-movflags", "+faststart", temporary,
+            ])
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, output_path)
+        finally:
+            if os.path.isfile(temporary):
+                os.remove(temporary)
+
     async def render_clip(self, request: RenderRequest) -> RenderResult:
         """
         Render a clip in the requested aspect ratio.
@@ -271,6 +301,8 @@ class RenderingService:
         pacing_plan = plan
         if pacing_plan is None and (is_landscape or request.layout_style == LayoutStyle.FIT) and self._paces(request):
             pacing_plan = await self._content_plan(request, source_w, source_h, window_start_ms, window_ms)
+        if request.debug_capture and pacing_plan is None:
+            pacing_plan = await self._content_plan(request, source_w, source_h, window_start_ms, window_ms)
         # Faces seen while analyzing, kept by every fallback so captions still
         # stay off them.
         face_samples = pacing_plan.face_samples if pacing_plan is not None else []
@@ -282,10 +314,20 @@ class RenderingService:
 
         skips = self._window_skips(request, window_start_ms, window_ms)
         keeps = self._keep_intervals(request, pacing_plan, window_start_ms, window_ms)
-        time_map = TimeMap(subtract_intervals(keeps, skips), window_ms)
+        protected = window_protection(request.editorial_context or {}, window_start_ms, window_ms)
+        # Existing audio-event protection must survive explicit skips too.
+        protected += reaction_intervals(request.transcript_segments or [], window_start_ms, window_ms)
+        if request.editorial_context is not None:
+            baseline = self._keep_intervals(replace(request, editorial_context=None), pacing_plan, window_start_ms, window_ms)
+            record_prevented_cuts(request.editorial_context, baseline, skips, protected, window_start_ms, window_ms, pacing_plan)
+        time_map = TimeMap(subtract_intervals(keeps, skips, protected, window_ms), window_ms)
         # Natural timing still honours the planner's skips: they're edit
         # decisions, not pacing.
-        natural_map = TimeMap(subtract_intervals([(0, window_ms)], skips), window_ms)
+        natural_map = TimeMap(subtract_intervals([(0, window_ms)], skips, protected, window_ms), window_ms)
+        if request.coherence_reviewer:
+            time_map = await request.coherence_reviewer.audit_edit(request.title_text, time_map,
+                window_start_ms, window_ms, request.editorial_context, pacing_plan)
+            natural_map = TimeMap([(0, window_ms)], window_ms)
         smart = analyzed and not plan.is_letterbox_only
         vision_cost = plan.vision_cost_usd if analyzed else 0.0
 
@@ -308,13 +350,21 @@ class RenderingService:
             ladder.append((letterbox, natural_map, "letterbox_natural"))
 
         render_fallback: Optional[str] = None
+        attempted_plan = plan
+        attempts = []
         for step, (step_plan, step_map, fallback) in enumerate(ladder):
+            if request.coherence_reviewer and step_map.keeps != time_map.keeps:
+                source_keeps = [(window_start_ms + a, window_start_ms + b) for a, b in step_map.keeps]
+                if not await request.coherence_reviewer.judge(request.title_text, source_keeps, request.editorial_context, 'render_fallback'):
+                    request.editorial_context['coherence']['status'] = 'rejected'
+                    raise CoherenceRejected('Clip omitted: rendering fallback failed coherence review.')
             try:
                 await self._render_edit(
                     request, step_plan, step_map, window_start_ms, window_ms,
                     target_width, target_height, is_landscape, fps, loudness_filter,
                 )
             except Exception as e:
+                attempts.append({"fallback": fallback, "status": "failed", "failure": "render_failed"})
                 # Any failure (FFmpeg, or a bug building the graph, captions or
                 # overlays) moves down the ladder; only the last step raises.
                 if step == len(ladder) - 1:
@@ -325,6 +375,7 @@ class RenderingService:
                 )
                 continue
             plan, time_map, render_fallback = step_plan, step_map, fallback
+            attempts.append({"fallback": fallback, "status": "rendered", "failure": None})
             break
         if render_fallback:
             smart, analyzed = False, False
@@ -333,6 +384,20 @@ class RenderingService:
         removed_ms = time_map.removed_ms
         chapters = self._output_chapters(request, window_start_ms, time_map)
         subtitle_path = await self._write_subtitles(request, window_start_ms, time_map)
+        if request.editorial_context is not None and request.editorial_service is not None:
+            retained = remap_segments(request.transcript_segments or [], window_start_ms, time_map)
+            await review_retained_clip(request.editorial_service, request.title_text, retained, request.editorial_context)
+            request.editorial_context['retained_source'] = [[window_start_ms + a, window_start_ms + b] for a, b in time_map.keeps]
+        trace_path = None
+        if request.debug_capture or (request.editorial_context and request.editorial_service and request.editorial_service.enabled):
+            trace_path = request.output_path + ".framing.json"
+            try:
+                trace = make_trace(request, pacing_plan, attempted_plan, plan, time_map, window_start_ms,
+                                   window_ms, target_width, target_height, fps, attempts, self.settings)
+                await asyncio.to_thread(save_trace, trace_path, trace)
+            except Exception:
+                logger.warning("Framing trace could not be saved")
+                trace_path = None
         logger.info(
             f"Clip rendered: {request.output_path} ({file_size / 1024 / 1024:.1f} MB, "
             f"{scaled_duration_ms(time_map.output_ms, request.video_speed) / 1000:.1f}s at {request.video_speed:g}x"
@@ -354,6 +419,7 @@ class RenderingService:
             subtitle_path=subtitle_path,
             output_width=target_width,
             output_height=target_height,
+            framing_trace_path=trace_path,
         )
 
     @staticmethod
@@ -471,6 +537,7 @@ class RenderingService:
         try:
             return await self.layout_analyzer.analyze(
                 request.video_path, window_start_ms, window_ms, source_w, source_h, request.layout_style,
+                **({"capture": True} if request.debug_capture else {}),
             )
         except Exception as e:
             logger.warning(f"Layout analysis failed, falling back to letterbox: {e}", exc_info=True)
@@ -488,6 +555,7 @@ class RenderingService:
         try:
             return await self.layout_analyzer.analyze(
                 request.video_path, window_start_ms, window_ms, source_w, source_h, LayoutStyle.AUTO, vision=False,
+                **({"capture": True} if request.debug_capture else {}),
             )
         except Exception as e:
             logger.warning(f"Content analysis for pacing failed; using the default pause limit: {e}", exc_info=True)
@@ -510,6 +578,7 @@ class RenderingService:
             return [(0, window_ms)]
         words = window_words(request.transcript_segments, window_start_ms, window_ms)
         protected = reaction_intervals(request.transcript_segments, window_start_ms, window_ms)
+        protected += window_protection(request.editorial_context or {}, window_start_ms, window_ms)
         return compute_keep_intervals(words, window_ms, plan, protected, longform=request.longform)
 
     def _overlays(

@@ -616,6 +616,31 @@ test('TikTok automations require per-clip review, preserve approved copy, and pu
     assert.equal(posting.state.creates[1].body.tiktokSettings.draft, true)
     assert.equal(delivered.content[0].tiktokApproval.options.draft, true)
 
+    // Enhanced copy and TikTok consent must be reviewed together, even in manual mode.
+    const [extended] = await restarted.automations.addAutomationContent(created.id, [clip])
+    const third = extended.content.at(-1)
+    const thirdReview = await restarted.automations.prepareAutomationTikTokReview(created.id, third.id)
+    await restarted.automations.approveAutomationTikTokReview(created.id, third.id, { ...inboxApproval, reviewId: thirdReview.reviewId })
+    const [enhanced] = await restarted.automations.enhanceAutomationContent(created.id, third.id, { research: false })
+    const draft = enhanced.content.at(-1).metadataDraft
+    assert.ok(draft)
+    const heldSlot = { time: '12:00', date: '2026-09-26' }
+    const [held] = await restarted.automations.runAutomation(created.id, heldSlot)
+    assert.match(held.lastError, /enhanced metadata draft/)
+    assert.notEqual(held.lastSlots['12:00'], heldSlot.date, 'draft review does not consume the due slot')
+    await assert.rejects(restarted.automations.prepareAutomationTikTokReview(created.id, third.id), /Apply or discard/)
+    const [applied] = restarted.automations.resolveAutomationMetadataDraft(created.id, third.id, draft.id, true)
+    assert.equal(applied.content.at(-1).tiktokApproval, null, 'applying new copy invalidates older TikTok consent')
+    const callsBeforeReview = generations
+    const enhancedReview = await restarted.automations.prepareAutomationTikTokReview(created.id, third.id)
+    assert.equal(enhancedReview.caption, draft.posts.find(post => post.platform === 'tiktok').caption)
+    assert.equal(generations, callsBeforeReview, 'manual mode reuses applied metadata without generating new copy')
+    await restarted.automations.approveAutomationTikTokReview(created.id, third.id, { ...inboxApproval, reviewId: enhancedReview.reviewId, caption: enhancedReview.caption })
+    const [enhancedPosted] = await restarted.automations.runAutomation(created.id, heldSlot)
+    assert.equal(enhancedPosted.content.at(-1).status, 'posted')
+    assert.equal(posting.state.creates.at(-1).body.platforms[0].customContent, enhancedReview.caption)
+
+
   } finally {
     for (const [name, value] of Object.entries(previous)) {
       if (value === undefined) delete process.env[name]

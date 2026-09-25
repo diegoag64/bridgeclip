@@ -25,6 +25,7 @@ export interface ClipDraft {
   layoutStyle: 'auto' | 'fill' | 'fit'
   /** Paid vision verification for ambiguous shots in Smart framing. */
   layoutVision: boolean
+  debugCapture: boolean
   /** tight: cut dead air and filler words; natural: original timing. */
   pacing: 'tight' | 'natural'
   videoSpeed: number
@@ -58,6 +59,7 @@ export const useDraftStore = create<DraftState>((set) => ({
   aspectRatio: '9:16',
   layoutStyle: 'auto',
   layoutVision: true,
+  debugCapture: false,
   pacing: 'tight',
   videoSpeed: 1,
   durations: ['short'],

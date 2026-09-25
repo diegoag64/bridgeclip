@@ -255,3 +255,34 @@ class TestPacingWithoutSmartFraming:
         )
         render(plain_service, request)
         assert calls == []
+
+
+@pytest.mark.parametrize('failures', [0, 1, 2])
+def test_editorial_protection_survives_every_render_path(service, monkeypatch, tmp_path, failures):
+    from clip_engine.services.jev_service import JevService
+    from clip_engine.services import rendering_service as module
+    calls, retained = [], []
+    async def render_edit(request, plan, time_map, *args):
+        calls.append(time_map)
+        # Both pacing and planner skips must keep this watched interval.
+        assert any(a <= 3400 and b >= 6600 for a, b in time_map.keeps)
+        if len(calls) <= failures:
+            raise RenderingError('fixture fallback')
+        with open(request.output_path, 'wb') as output:
+            output.write(b'fixture')
+    async def review(client, title, segments, report):
+        retained.extend(segments)
+    monkeypatch.setattr(service, '_render_edit', render_edit)
+    monkeypatch.setattr(module, 'review_retained_clip', review)
+    report = {'protected_source': [[3400, 6600]], 'candidates': [], 'flags': []}
+    request = request_for(tmp_path, apply_padding=False, editorial_context=report,
+                          editorial_service=JevService(), skip_ranges_ms=[(3500, 6000)])
+    request.end_time_ms = 14000  # Leave a removable tail to exercise natural fallback.
+    result = render(service, request)
+    assert len(calls) == failures + 1
+    assert report['retained_source'] == [list(pair) for pair in calls[-1].keeps]
+    assert any(c['kind'] == 'planner_skip' for c in report['prevented_cuts'])
+    assert len(retained) == 2
+    # QA reads the actual edited timestamps, including the final fallback's map.
+    assert retained[-1].start_time_ms == calls[-1].to_output(6500)
+    assert result.duration_ms == calls[-1].output_ms

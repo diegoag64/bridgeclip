@@ -3,6 +3,7 @@ import { Ban, FolderOpen, ListVideo, Plus, RefreshCw, RotateCcw, Search, X } fro
 import type { HistoryEntry } from '../../preload/index'
 import { parseJobOutput } from '../../shared/job-output'
 import { MAX_PARALLEL_JOBS } from '../../shared/jobs'
+import { InspectEditsButton } from '../components/EditInspector'
 import { BackLink, ClipList } from '../components/ClipList'
 import { JobFailure, JobProgress, STAGE_LABELS } from '../components/JobProgress'
 import type { Page as AppPage } from '../components/Sidebar'
@@ -143,7 +144,7 @@ export function JobsPage({ onNavigate }: { onNavigate: (page: AppPage) => void }
       return <ClipList output={focused.output} outputDir={focused.outputDir} onNavigate={onNavigate} leading={back} />
     }
     if (focused.status === 'failed') {
-      return <>{errorCallout}<JobFailure job={focused} leading={back} onRetry={() => { void runAgain(focused) }} /></>
+      return <>{errorCallout}<div className="px-6 pt-3"><InspectEditsButton outputDir={focused.outputDir} /></div><JobFailure job={focused} leading={back} onRetry={() => { void runAgain(focused) }} /></>
     }
     return <>{errorCallout}<JobCancelled job={focused} leading={back} onRetry={() => { void runAgain(focused) }} /></>
   }
@@ -454,6 +455,7 @@ function PreviousJobRow({ entry, hasDetails, onOpen, onOpenFolder }: { entry: Hi
       ) : (
         <div className={cellClass}>{cells}</div>
       )}
+      <InspectEditsButton outputDir={entry.outputDir} />
       <Button
         size="sm"
         variant="ghost"
