@@ -25,6 +25,12 @@ from typing import Any, Callable, Optional
 
 from clip_engine.config import CaptionStyle, LayoutStyle, get_settings, is_longform, resolve_clip_duration_bounds
 from clip_engine.error_policy import safe_failure_code, safe_processing_error
+from clip_engine.services.editorial_evidence import discovery_feedback, overlaps
+from clip_engine.services.jev_service import JevService, MODEL as JEV_MODEL
+from clip_engine.services.coherence_review import CoherenceReviewer, CoherenceRejected, no_approved_clips_message
+from clip_engine.services.editorial_context import analyze_reactions, repair_context_boundaries
+from clip_engine.services.editorial_vision import EditorialVision
+from clip_engine.services.editorial_review import protect_acknowledgments, review_duplicate_candidates, editorial_summary
 from clip_engine.services.intelligence_planner import (
     ClipPlanResponse,
     ClipPlanSegment,
@@ -102,6 +108,7 @@ class ClippingJobRequest:
     aspect_ratio: str = "9:16"
     keyterms: Optional[list[str]] = None
     layout_style: str = LayoutStyle.AUTO
+    debug_capture: bool = False
     # "tight" cuts dead air and filler words; "natural" keeps original timing.
     pacing: str = "tight"
 
@@ -177,12 +184,15 @@ class AIClippingPipeline:
         """
         start_time = time.time()
         job_id = request.job_id
+        editorial_service = JevService.from_settings(self.settings)
+        coherence_service = JevService(self.settings.openrouter_api_key if getattr(self.settings, 'jev_enabled', True) else '', max_requests=256, token_budget=1536000)
         work_dir = os.path.join(self.settings.temp_directory, job_id)
         stage_timings: dict[str, float] = {}
         stage_memory_mb: dict[str, float] = {}
         clip_render_durations_seconds: list[float] = []
         clip_upload_durations_seconds: list[float] = []
         clip_layouts: list[dict] = []
+        clip_trace_paths: dict[int, str] = {}
         clip_durations_ms: dict[int, int] = {}
         layout_vision_cost = 0.0
         peak_rss_mb = 0.0
@@ -190,6 +200,7 @@ class AIClippingPipeline:
         visual_frames = []
         saved_local_output: Optional[JobOutput] = None
         current_stage = "setup"
+        edit_audit = None
 
         def capture_memory(stage_name: str) -> dict[str, float]:
             nonlocal peak_rss_mb
@@ -249,7 +260,7 @@ class AIClippingPipeline:
 
             # Step 2: Transcribe audio
             current_stage = "transcription"
-            self._update_progress(job_id, JobStatus.TRANSCRIBING, 15, "Transcribing audio...")
+            self._update_progress(job_id, JobStatus.TRANSCRIBING, 15, "Transcribing the full source for context...")
             stage_start = time.perf_counter()
             previous_transcription_progress = getattr(self.transcription_service, "progress_callback", None)
             self.transcription_service.progress_callback = lambda message: self._update_progress(
@@ -260,8 +271,8 @@ class AIClippingPipeline:
                     video_path=download_result.video_path,
                     work_dir=work_dir,
                     keyterms=request.keyterms,
-                    start_seconds=request.start_time_seconds,
-                    end_seconds=effective_end_time,
+                    start_seconds=None,
+                    end_seconds=None,
                 )
             except NoAudioTrackError:
                 logger.info("Source has no audio track; trying visual-only planning")
@@ -280,7 +291,7 @@ class AIClippingPipeline:
                 stage_start = time.perf_counter()
                 visual_frames = await sample_visual_planning_frames(
                     download_result.video_path, video_duration, work_dir,
-                    request.start_time_seconds, effective_end_time,
+                    None, None,
                 )
                 stage_timings["visual_sampling"] = time.perf_counter() - stage_start
                 logger.info("Visual-only planning has %s sampled frames", len(visual_frames))
@@ -314,9 +325,19 @@ class AIClippingPipeline:
 
             # Step 3: Plan clips using AI
             current_stage = "planning"
-            self._update_progress(job_id, JobStatus.PLANNING, 30, "Planning viral clips...")
+            self._update_progress(job_id, JobStatus.PLANNING, 30, "Finding complete ideas near your preferred range...")
             stage_start = time.perf_counter()
-            clip_plan = await self.intelligence_planner.plan_clips(
+            edit_audit = {'version': 1, 'title': download_result.metadata.title,
+                'duration_ms': round(video_duration * 1000),
+                'preferred_range': [request.start_time_seconds, effective_end_time],
+                'transcript': [{'start_ms': t.start_time_ms, 'end_ms': t.end_time_ms, 'text': t.text, 'speaker': t.speaker_label} for t in transcription_result.segments],
+                'planner': getattr(self.intelligence_planner, 'audit', {'requests': []}),
+                'candidates': [], 'outcome': 'reviewing'}
+            def save_edit_audit():
+                if self.local_mode:
+                    self._save_local_json(job_id, 'edit_audit', edit_audit)
+            save_edit_audit()
+            planning_args = dict(
                 transcript_result=transcription_result,
                 video_metadata=download_result.metadata,
                 max_clips=request.max_clips,
@@ -333,13 +354,87 @@ class AIClippingPipeline:
                 end_time_seconds=request.end_time_seconds,
                 aspect_ratio=request.aspect_ratio,
             )
+            clip_plan = await self.intelligence_planner.plan_clips(**planning_args)
+            edit_audit['planner'] = getattr(self.intelligence_planner, 'audit', {'requests': []})
             stage_timings["planning"] = time.perf_counter() - stage_start
             logger.info(f"Planned {len(clip_plan.segments)} clips")
-            if not clip_plan.segments:
-                raise RuntimeError(
-                    "No clip-worthy moments found (visual evidence may be insufficient, "
-                    "or the selected time range is too short for the chosen clip length)"
-                )
+            reviewer = CoherenceReviewer(coherence_service, self.settings, transcription_result.segments, round(video_duration * 1000))
+            editorial_vision = EditorialVision(self.settings, download_result.video_path, work_dir, round(video_duration * 1000))
+            reviewer.visual_observer = editorial_vision.observe if getattr(self.settings, 'jev_visual_context', False) else None
+            accepted = []
+            limit = getattr(self.intelligence_planner, 'discovery_limit', None) or request.max_clips or self.settings.max_clips_absolute
+            pending = clip_plan.segments
+            for discovery_pass in (1, 2):
+                for segment in pending:
+                    i = len(edit_audit['candidates'])
+                    self._update_progress(job_id, JobStatus.PLANNING, 35, f"Reviewing candidate {i + 1} for coherence (discovery {discovery_pass})...")
+                    segment.editorial = await analyze_reactions(transcription_result.segments,
+                        segment.start_time_ms, segment.end_time_ms, JevService())
+                    entry = {'candidate_index': i, 'title': segment.summary or '', 'discovery_pass': discovery_pass,
+                        'original_interval': [segment.start_time_ms, segment.end_time_ms],
+                        'clip_index': None, 'status': 'reviewing', 'report': segment.editorial}
+                    edit_audit['candidates'].append(entry)
+                    if len(accepted) >= limit:
+                        entry['status'] = 'selection_limit'
+                        save_edit_audit()
+                        continue
+                    segment.start_time_ms, segment.end_time_ms = repair_context_boundaries(
+                        segment.start_time_ms, segment.end_time_ms, segment.editorial, 0, round(video_duration * 1000), round(video_duration * 1000))
+                    if await reviewer.prepare(segment, segment.editorial):
+                        entry['title'] = segment.summary or ''
+                        if any(overlaps([segment.start_time_ms, segment.end_time_ms], [c.start_time_ms, c.end_time_ms]) for c in accepted):
+                            entry['status'] = 'overlap_not_selected'
+                        else:
+                            entry['status'] = 'accepted'
+                            accepted.append(segment)
+                            await protect_acknowledgments(editorial_service, transcription_result.segments,
+                                                          segment.start_time_ms, segment.end_time_ms, segment.editorial)
+                    else:
+                        entry['status'] = 'rejected'
+                    save_edit_audit()
+                # One bounded search for overlooked moments, not repeated attempts to fill a quota.
+                if (discovery_pass == 2 or len(accepted) >= limit or not coherence_service.enabled
+                        or not any(c['status'] == 'rejected' for c in edit_audit['candidates'])
+                        or coherence_service.requests >= coherence_service.max_requests
+                        or coherence_service.reserved_tokens >= coherence_service.token_budget
+                        or not any((a.get('judgment') or {}).get('status') == 'success'
+                            for c in edit_audit['candidates'] for a in c['report'].get('coherence', {}).get('attempts', []))):
+                    break
+                feedback = discovery_feedback(edit_audit['candidates'], round(video_duration * 1000))
+                edit_audit['discovery'] = {'status': 'searching' if feedback['search_intervals'] else 'exhausted', **feedback}
+                if not feedback['search_intervals']:
+                    break
+                try:
+                    extra = await self.intelligence_planner.plan_clips(**{**planning_args,
+                        'max_clips': min(8, limit - len(accepted)), 'auto_clip_count': False,
+                        'discovery_feedback': feedback})
+                    # Also enforce exclusions at the pipeline boundary, including mocked/custom planners.
+                    pending = [c for c in extra.segments[:8]
+                        if any(overlaps([c.start_time_ms, c.end_time_ms], span) for span in feedback['search_intervals'])
+                        and not any(overlaps([c.start_time_ms, c.end_time_ms], old['interval']) for old in feedback['previous_candidates'])]
+                    edit_audit['discovery']['status'] = 'completed'
+                    if extra.api_costs:
+                        if clip_plan.api_costs:
+                            for field in ('prompt_tokens', 'completion_tokens', 'total_tokens', 'estimated_cost_usd', 'attempts'):
+                                setattr(clip_plan.api_costs, field, getattr(clip_plan.api_costs, field) + getattr(extra.api_costs, field))
+                        else:
+                            clip_plan.api_costs = extra.api_costs
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    # A failed optional search must not discard already approved clips.
+                    edit_audit['discovery']['status'] = 'unavailable'
+                    pending = []
+                edit_audit['planner'] = getattr(self.intelligence_planner, 'audit', {'requests': []})
+                save_edit_audit()
+                if not pending:
+                    break
+            clip_plan.segments = accepted
+            clip_plan.total_clips = len(accepted)
+            if not accepted:
+                edit_audit['outcome'] = 'no_approved_clips'
+                save_edit_audit()
+                raise CoherenceRejected(no_approved_clips_message([entry['report'] for entry in edit_audit['candidates']]))
 
             plan_data = {
                 "segments": [asdict(s) for s in clip_plan.segments],
@@ -427,13 +522,20 @@ class AIClippingPipeline:
                         banner_channel_url=request.banner_channel_url,
                         aspect_ratio=request.aspect_ratio,
                         layout_style=request.layout_style,
+                        debug_capture=request.debug_capture,
                         pacing=request.pacing,
                         longform=longform,
                         skip_ranges_ms=segment.skip_ranges_ms,
                         chapters=segment.chapters,
+                        editorial_context=segment.editorial,
+                        editorial_service=editorial_service,
+                        coherence_reviewer=reviewer,
+                        apply_padding=False,
                     )
 
                     render_result = await self.rendering_service.render_clip(render_request)
+                    if getattr(render_result, "framing_trace_path", None):
+                        clip_trace_paths[i] = render_result.framing_trace_path
                     segment.layout_type = render_result.layout_type
                     segment.render_fallback = render_result.render_fallback
                     segment.output_chapters = render_result.chapters
@@ -479,9 +581,33 @@ class AIClippingPipeline:
             )
             for i, error in failures:
                 logger.error(f"Clip {i + 1} failed to render, skipping it: {error}")
+            for entry in edit_audit['candidates']:
+                matched = next(((k, segment) for k, (_, _, segment) in enumerate(successes) if segment.editorial is entry['report']), None)
+                if matched:
+                    entry.update(status='rendered', clip_index=matched[0])
+                elif entry['status'] == 'accepted':
+                    entry['status'] = 'rejected' if entry['report'].get('coherence', {}).get('status') == 'rejected' else 'render_failed'
+            edit_audit['outcome'] = 'completed' if successes else 'no_approved_clips'
+            save_edit_audit()
             if not successes:
                 raise failures[0][1]
             rendered_clips = [(path, segment) for _, path, segment in successes]
+            await review_duplicate_candidates(editorial_service, [segment for _, _, segment in successes])
+            save_edit_audit()
+            # Duplicate review consumes final retained dialogue, after rendering.
+            # Update only this job's private trace before copying it to the library.
+            for original_index, _, segment in successes:
+                trace_path = clip_trace_paths.get(original_index)
+                if trace_path and segment.editorial:
+                    try:
+                        with open(trace_path, encoding='utf-8') as trace_file:
+                            trace = json.load(trace_file)
+                        trace['editorial'] = segment.editorial
+                        from clip_engine.services.framing_trace import save_trace
+                        save_trace(trace_path + '.editorial', trace)
+                        os.replace(trace_path + '.editorial', trace_path)
+                    except Exception:
+                        logger.warning('Editorial trace update unavailable')
             # Output clips are renumbered 0..n-1; carry their durations and
             # layout records across so they still line up after a failure.
             new_index = {orig_i: k for k, (orig_i, _, _) in enumerate(successes)}
@@ -511,6 +637,27 @@ class AIClippingPipeline:
                 )
                 stage_start = time.perf_counter()
                 clip_artifacts = self._save_clips_locally(job_id, rendered_clips, clip_durations_ms)
+                if request.debug_capture:
+                    output_dir = self._get_local_output_dir(job_id)
+                    preview_status = "available"
+                    try:
+                        await self.rendering_service.capture_framing_source(
+                            download_result.video_path, os.path.join(output_dir, "framing-source.mp4"))
+                    except Exception:
+                        preview_status = "failed"
+                        logger.warning("Framing source preview could not be saved")
+                    for original, index in new_index.items():
+                        trace_path = clip_trace_paths.get(original)
+                        if trace_path:
+                            try:
+                                with open(trace_path, encoding="utf-8") as trace_file:
+                                    trace = json.load(trace_file)
+                                trace["clip_index"] = index
+                                trace["source"].update({"duration_ms": round(video_duration * 1000),
+                                                         "preview_status": preview_status})
+                                self._save_local_json(job_id, f"clip_{index:02d}.framing", trace, compact=True)
+                            except (OSError, ValueError):
+                                logger.warning("Framing decisions could not be saved")
                 stage_timings["local_save"] = time.perf_counter() - stage_start
                 logger.info(f"All {len(clip_artifacts)} clips saved locally")
                 # Commit a usable manifest before optional metrics and cost
@@ -520,6 +667,8 @@ class AIClippingPipeline:
                     job_id=job_id,
                     source_video_url=request.video_url,
                     source_video_title=download_result.metadata.title,
+                    source_video_description=(getattr(download_result.metadata, "description", None) or "")[:20000],
+                    source_video_channel=getattr(download_result.metadata, "uploader", None),
                     source_video_duration_seconds=download_result.metadata.duration_seconds,
                     total_clips=len(clip_artifacts),
                     clips=clip_artifacts,
@@ -574,6 +723,7 @@ class AIClippingPipeline:
                         render_fallback=segment.render_fallback,
                         description=segment.description,
                         chapters=self._chapter_dicts(segment),
+                        editorial=editorial_summary(segment.editorial),
                     )
 
                 upload_tasks = [
@@ -628,6 +778,23 @@ class AIClippingPipeline:
                 }
                 total_cost += layout_vision_cost
 
+            if editorial_service.requests or coherence_service.requests:
+                api_costs['editorial'] = {
+                    'provider': 'openrouter', 'model': JEV_MODEL,
+                    'prompt_tokens': editorial_service.input_tokens + coherence_service.input_tokens,
+                    'completion_tokens': editorial_service.output_tokens + coherence_service.output_tokens,
+                    'estimated_cost_usd': editorial_service.estimated_cost_usd + coherence_service.estimated_cost_usd,
+                    'attempts': editorial_service.requests + coherence_service.requests,
+                }
+                total_cost += editorial_service.estimated_cost_usd + coherence_service.estimated_cost_usd
+            if reviewer.repair_requests:
+                api_costs['editorial_repair'] = {'provider': 'openrouter', 'model': self.settings.editorial_repair_model,
+                    'estimated_cost_usd': reviewer.repair_cost, 'attempts': reviewer.repair_requests}
+                total_cost += reviewer.repair_cost
+            if editorial_vision.requests:
+                api_costs['editorial_vision'] = {'provider': 'openrouter', 'model': self.settings.layout_vision_model,
+                    'estimated_cost_usd': editorial_vision.cost_usd, 'attempts': editorial_vision.requests}
+                total_cost += editorial_vision.cost_usd
             api_costs["total_estimated_cost_usd"] = round(total_cost, 6)
 
             logger.info(f"Job {job_id} total API cost: ${total_cost:.6f}")
@@ -674,6 +841,8 @@ class AIClippingPipeline:
                 job_id=job_id,
                 source_video_url=request.video_url,
                 source_video_title=download_result.metadata.title,
+                source_video_description=(getattr(download_result.metadata, "description", None) or "")[:20000],
+                source_video_channel=getattr(download_result.metadata, "uploader", None),
                 source_video_duration_seconds=download_result.metadata.duration_seconds,
                 total_clips=len(clip_artifacts),
                 clips=clip_artifacts,
@@ -692,6 +861,9 @@ class AIClippingPipeline:
             webhook_output = {
                 "total_clips": len(clip_artifacts),
                 "source_video_title": job_output.source_video_title,
+                "source_video_url": job_output.source_video_url,
+                "source_video_description": job_output.source_video_description,
+                "source_video_channel": job_output.source_video_channel,
                 "source_video_duration_seconds": job_output.source_video_duration_seconds,
                 "processing_time_seconds": processing_time,
                 "metrics": metrics,
@@ -752,7 +924,12 @@ class AIClippingPipeline:
             if type(http_status) is not int or not 100 <= http_status <= 599:
                 http_status = None
             logger.error("Job %s failed at %s: %s (HTTP %s)", job_id, current_stage, failure_code, http_status)
-            public_error = safe_processing_error(e)
+            public_error = str(e) if isinstance(e, CoherenceRejected) else safe_processing_error(e)
+            if edit_audit is not None:
+                edit_audit['planner'] = getattr(self.intelligence_planner, 'audit', {'requests': []})
+                if edit_audit['outcome'] == 'reviewing': edit_audit['outcome'] = 'review_failed'
+                try: save_edit_audit()
+                except Exception: logger.warning('Edit audit could not be saved')
 
             self._update_progress(
                 job_id, JobStatus.FAILED, 0,
@@ -792,7 +969,7 @@ class AIClippingPipeline:
         os.makedirs(output_dir, exist_ok=True)
         return output_dir
 
-    def _save_local_json(self, job_id: str, name: str, data: dict) -> str:
+    def _save_local_json(self, job_id: str, name: str, data: dict, compact: bool = False) -> str:
         """Save a JSON artifact to the local output directory."""
         output_dir = self._get_local_output_dir(job_id)
         path = os.path.join(output_dir, f"{name}.json")
@@ -803,7 +980,8 @@ class AIClippingPipeline:
                 prefix=f".{name}.", suffix=".tmp", delete=False,
             ) as f:
                 temporary_path = f.name
-                json.dump(data, f, indent=2, default=str)
+                json.dump(data, f, indent=None if compact else 2, default=str,
+                          separators=(",", ":") if compact else None)
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(temporary_path, path)
@@ -863,6 +1041,7 @@ class AIClippingPipeline:
                 description=segment.description,
                 chapters=self._chapter_dicts(segment),
                 subtitle_url=subtitle_url,
+                editorial=editorial_summary(segment.editorial),
             ))
 
         return artifacts

@@ -128,7 +128,7 @@ class TestPlanning:
     def test_short_form_prompt_and_schema_are_unchanged(self, monkeypatch):
         transcript = make_transcript(300)
         _, payload = self.run_plan(monkeypatch, transcript, ["short"], "16:9")
-        assert "scroll-stopping" in payload["messages"][0]["content"]
+        assert "complete, faithful excerpts" in payload["messages"][0]["content"]
         item = payload["response_format"]["json_schema"]["schema"]["properties"]["clips"]["items"]
         assert "skip" not in item["properties"]
 
@@ -162,14 +162,15 @@ class TestPlanning:
         assert seg.chapters[1][0] == e_ms                        # moved out of the skip
         assert seg.description == "About things."
 
-    def test_skips_never_cut_below_the_minimum_runtime(self):
+    def test_skips_may_cross_duration_preference_for_later_jev_review(self):
         tr = make_transcript(200)
         planner = planner_for(tr, ["extended"])                 # 600 s minimum
         start = tr[0].start_time_ms / 1000
         end = tr[125].end_time_ms / 1000                        # ~10.5 min
         big = (tr[20].start_time_ms / 1000, tr[60].start_time_ms / 1000)   # ~3.3 min
         seg = planner._parse_clip_plan_response(completion([longform_clip(start, end, skip=[big])])).segments[0]
-        assert seg.skip_ranges_ms == []
+        assert seg.skip_ranges_ms
+        assert sum(b - a for a, b in seg.skip_ranges_ms) < seg.end_time_ms - seg.start_time_ms
 
 
 class TestPacing:

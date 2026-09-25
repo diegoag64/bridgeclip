@@ -23,6 +23,8 @@ let latestToolCheck = 0
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   openrouterConfigured: false,
   zernioConfigured: false,
+  jevEnabled: 'on',
+  jevVisualContext: 'off',
   outputDirectory: '',
   pythonPath: 'python3',
   customVocabulary: '',
@@ -86,6 +88,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 function pickSettings(s: ClipSettings): ClipSettings {
   return {
     openrouterConfigured: s.openrouterConfigured,
+    jevEnabled: s.jevEnabled ?? 'on',
+    jevVisualContext: s.jevVisualContext ?? 'off',
     zernioConfigured: s.zernioConfigured,
     outputDirectory: s.outputDirectory,
     pythonPath: s.pythonPath,

@@ -6,7 +6,7 @@ shots are concatenated back into one 9:16 stream:
 
     talking_head  full-frame crop that pans with the speaker
     two_shot      each person in their own panel, stacked
-    screen_cam    screen (zoomed on the active area) over the webcam
+    screen_cam    screen (complete active area fitted without clipping) over the webcam
     screen        whole frame over a blurred copy of itself
 
 Also provides per-shot positions for captions, the title card and the
@@ -19,6 +19,7 @@ FFmpeg.
 from bisect import bisect_left
 from dataclasses import dataclass
 from fractions import Fraction
+from math import ceil
 from typing import Optional
 
 from clip_engine.services.layout_analyzer import Box, ClipLayoutPlan, LayoutType, ShotLayout
@@ -122,7 +123,7 @@ def _fit_rect(cx: float, cy: float, w: float, h: float, bounds: tuple[float, flo
     w, h = min(w, bw), min(h, bh)
     x = _clamp(cx - w / 2, bx, bx + bw - w)
     y = _clamp(cy - h / 2, by, by + bh - h)
-    return even(w), even(h), even(x), even(y)
+    return even(w), even(h), max(0, int(x) // 2 * 2), max(0, int(y) // 2 * 2)
 
 
 def person_crop(
@@ -164,7 +165,14 @@ def cam_crop(cam: Box, face: Optional[Box], src_w: int, src_h: int, panel_w: int
     blurred fill rather than blowing the face up to mush.
     """
     aspect = panel_w / panel_h
-    bounds = (cam.x * src_w, cam.y * src_h, cam.w * src_w, cam.h * src_h)
+    # Dimensions round down, but the left/top bounds must round INWARD.
+    # Rounding a fractional webcam origin down includes screen pixels outside
+    # the overlay, which become a conspicuous strip after enlargement.
+    cam = cam.clamp()
+    left, top = ceil(cam.x * src_w / 2) * 2, ceil(cam.y * src_h / 2) * 2
+    right = int((cam.x + cam.w) * src_w) // 2 * 2
+    bottom = int((cam.y + cam.h) * src_h) // 2 * 2
+    bounds = (left, top, max(2, right - left), max(2, bottom - top))
     bw, bh = bounds[2], bounds[3]
     if bw / bh > aspect:
         crop_h, crop_w = bh, bh * aspect
@@ -174,6 +182,15 @@ def cam_crop(cam: Box, face: Optional[Box], src_w: int, src_h: int, panel_w: int
         crop_w, crop_h = min(bw, panel_w / MAX_UPSCALE), min(bh, panel_h / MAX_UPSCALE)
     fx = (face.cx if face else cam.cx) * src_w
     fy = (face.cy if face else cam.cy) * src_h
+    if face and cam.contains(face.cx, face.cy):
+        centered_w = 2 * min(fx - left, right - fx)
+        centered_h = centered_w / aspect
+        # Ignore small off-center poses. For larger offsets, tighten within
+        # the real camera bounds. panel_fit still caps enlargement and adds
+        # a centered blurred fill if the resulting crop is too small.
+        if (centered_w < crop_w * .9 and centered_w >= face.w * src_w * 1.5
+                and centered_h >= face.h * src_h * 1.8):
+            crop_w, crop_h = centered_w, min(crop_h, centered_h)
     return _fit_rect(fx, fy + crop_h * (0.5 - PERSON_FACE_Y), crop_w, crop_h, bounds)
 
 
@@ -215,76 +232,59 @@ def screen_crop(
     panel_h: int,
     avoid: Optional[Box] = None,
 ) -> tuple[int, int, int, int]:
-    """Crop of the screen at the panel's aspect, covering the focus area if known.
+    """Keep the entire semantic focus region; fit it rather than crop to fill.
 
-    `avoid` (the webcam overlay) is slid out of the crop horizontally when the
-    screen has room, so the webcam doesn't show twice.
+    Webcam avoidance is secondary to preserving the text/chart. If no clean
+    rectangle contains the focus, retain it rather than cutting off its labels.
+    Without a reliable focus, show the largest unobscured screen region.
     """
-    aspect = panel_w / panel_h
-    screen = screen or Box(0, 0, 1, 1)
+    screen = (screen or Box(0, 0, 1, 1)).clamp()
     bounds = (screen.x * src_w, screen.y * src_h, screen.w * src_w, screen.h * src_h)
-    bw, bh = bounds[2], bounds[3]
-
-    # Largest panel-aspect crop that fits the screen...
-    if bw / bh > aspect:
-        max_h, max_w = bh, bh * aspect
-    else:
-        max_w, max_h = bw, bw / aspect
-    crop_w, crop_h = max_w, max_h
-    cx, cy = bounds[0] + bw / 2, bounds[1] + bh / 2
-
+    bx, by, bw, bh = bounds
+    target = None
     if focus is not None:
-        # ...shrunk to the focus area (padded), but never past MAX_UPSCALE
-        # and never below 60% of the screen height so text stays in context.
-        fw, fh = focus.w * src_w * 1.1, focus.h * src_h * 1.1
-        need_w = max(fw, fh * aspect)
-        min_w = max(panel_w / MAX_UPSCALE, 0.6 * max_h * aspect)
-        crop_w = _clamp(need_w, min_w, max_w)
-        crop_h = crop_w / aspect
-        cx, cy = focus.cx * src_w, focus.cy * src_h
-    w, h, x, y = _fit_rect(cx, cy, crop_w, crop_h, bounds)
+        left, top = max(bx, focus.x * src_w), max(by, focus.y * src_h)
+        right = min(bx + bw, (focus.x + focus.w) * src_w)
+        bottom = min(by + bh, (focus.y + focus.h) * src_h)
+        if right > left and bottom > top:
+            target = (left, top, right - left, bottom - top)
 
     if avoid is not None:
-        # Overlay boxes are estimates and overlays have borders/shadows: keep
-        # a margin so no sliver of the webcam lands in the screen panel.
-        mx, my = avoid.w * AVOID_MARGIN * src_w, avoid.h * AVOID_MARGIN * src_h
-        ax0, ax1 = avoid.x * src_w - mx, (avoid.x + avoid.w) * src_w + mx
-        ay0, ay1 = avoid.y * src_h - my, (avoid.y + avoid.h) * src_h + my
-        if x < ax1 and x + w > ax0 and y < ay1 and y + h > ay0:
-            on_right = avoid.cx * src_w > x + w / 2
-            if on_right and ax0 - w >= bounds[0]:
-                x = even(ax0 - w)          # webcam on the right: slide left
-            elif not on_right and ax1 + w <= bounds[0] + bw:
-                x = even(ax1)              # webcam on the left: slide right
-            else:
-                # No room to slide: narrow the crop to the webcam's edge if
-                # that stays within MAX_UPSCALE, keeping the panel's aspect.
-                room = (ax0 - bounds[0]) if on_right else (bounds[0] + bw - ax1)
-                if room >= panel_w / MAX_UPSCALE:
-                    new_w = even(room)
-                    new_h = even(new_w / aspect)
-                    x = even(bounds[0]) if on_right else even(ax1)
-                    y = even(_clamp(y + (h - new_h) / 2, bounds[1], bounds[1] + bh - new_h))
-                    w, h = new_w, new_h
-        # A centered webcam leaves too little room on either side. Screen
-        # shares often have usable content above it, so crop vertically before
-        # allowing the same webcam to appear in both panels. Keep the output
-        # resolution budget when choosing either side.
-        if x < ax1 and x + w > ax0 and y < ay1 and y + h > ay0:
-            min_h = panel_h / MAX_UPSCALE
-            choices = []
-            for top, bottom in ((bounds[1], ay0), (ay1, bounds[1] + bh)):
-                available_h = bottom - top
-                candidate_h = min(h, available_h, bw / aspect)
-                if candidate_h < min_h:
-                    continue
-                candidate_w = candidate_h * aspect
-                candidate_x = _clamp(cx - candidate_w / 2, bounds[0], bounds[0] + bw - candidate_w)
-                candidate_y = _clamp(cy - candidate_h / 2, top, bottom - candidate_h)
-                choices.append((candidate_h, (even(candidate_w), even(candidate_h), even(candidate_x), even(candidate_y))))
+        # Try a border margin first, then the actual camera edge. Never slide
+        # a complete paragraph out of view merely to hide a repeated webcam.
+        for margin in (AVOID_MARGIN, 0):
+            ax0 = (avoid.x - avoid.w * margin) * src_w
+            ax1 = (avoid.x + avoid.w * (1 + margin)) * src_w
+            ay0 = (avoid.y - avoid.h * margin) * src_h
+            ay1 = (avoid.y + avoid.h * (1 + margin)) * src_h
+            if ax1 <= bx or ax0 >= bx + bw or ay1 <= by or ay0 >= by + bh:
+                break
+            regions = [(bx, by, min(bw, ax0 - bx), bh),
+                       (max(bx, ax1), by, bx + bw - max(bx, ax1), bh),
+                       (bx, by, bw, min(bh, ay0 - by)),
+                       (bx, max(by, ay1), bw, by + bh - max(by, ay1))]
+            choices = [r for r in regions if r[2] >= 2 and r[3] >= 2 and
+                       (target is None or (r[0] <= target[0] and r[1] <= target[1] and
+                        r[0] + r[2] >= target[0] + target[2] and r[1] + r[3] >= target[1] + target[3]))]
             if choices:
-                _, (w, h, x, y) = max(choices, key=lambda choice: choice[0])
-    return w, h, x, y
+                bounds = max(choices, key=lambda r: r[2] * r[3])
+                break
+    bx, by, bw, bh = bounds
+    if target is None:
+        return _fit_rect(bx + bw / 2, by + bh / 2, bw, bh, bounds)
+    tx, ty, tw, th = target
+    # Keep surrounding context even if vision selects a single word. Width and
+    # height are independent: a wide paragraph must not become a narrow slice.
+    w = min(bw, max(tw * 1.12, bw * .6, panel_w / MAX_UPSCALE))
+    h = min(bh, max(th * 1.12, bh * .6, panel_h / MAX_UPSCALE))
+    return _fit_rect(tx + tw / 2, ty + th / 2, w, h, bounds)
+
+
+def screen_view(shot: ShotLayout, src_w: int, src_h: int, panel_w: int, panel_h: int):
+    """Identical contained screen geometry for rendering and inspection."""
+    rect = screen_crop(shot.screen_box, shot.screen_focus, src_w, src_h, panel_w, panel_h, shot.cam_box)
+    width, height = panel_fit(rect, panel_w, panel_h) or (panel_w, panel_h)
+    return rect, ((panel_w - width) // 2, (panel_h - height) // 2, width, height)
 
 
 # ------------------------------------------------------------------
@@ -301,6 +301,25 @@ def letterbox_geometry(src_w: int, src_h: int, out_w: int, out_h: int) -> tuple[
     """(scaled video height, y offset) of the fit layout."""
     scaled_h = min(out_h, even(out_w * src_h / src_w + 1))
     return scaled_h, (out_h - scaled_h) // 2
+
+
+def content_view(
+    shot: ShotLayout, src_w: int, src_h: int, out_w: int, out_h: int,
+) -> tuple[tuple[int, int, int, int], tuple[int, int, int, int]]:
+    """The complete inset and its fitted destination, shared with diagnostics."""
+    box = shot.content_box.clamp()
+    x, y = max(0, int(box.x * src_w) // 2 * 2), max(0, int(box.y * src_h) // 2 * 2)
+    w, h = min(even(box.w * src_w), src_w - x), min(even(box.h * src_h), src_h - y)
+    scale = min(out_w / w, out_h / h)
+    fw, fh = min(out_w, even(w * scale)), min(out_h, even(h * scale))
+    return (x, y, w, h), ((out_w - fw) // 2, (out_h - fh) // 2, fw, fh)
+
+
+def foreground_geometry(shot: ShotLayout, src_w: int, src_h: int, out_w: int, out_h: int) -> tuple[int, int]:
+    if shot.content_box is not None:
+        _, (_, y, _, h) = content_view(shot, src_w, src_h, out_w, out_h)
+        return h, y
+    return letterbox_geometry(src_w, src_h, out_w, out_h)
 
 
 def shot_chain(
@@ -321,6 +340,16 @@ def shot_chain(
             f"gblur=sigma=10,lutyuv=y=val-20,scale={out_w}:{out_h}[lbg{i}];"
             f"[lf{i}]scale={out_w}:{out_h}:force_original_aspect_ratio=decrease:{scale}[lfg{i}];"
             f"[lbg{i}][lfg{i}]overlay=(W-w)/2:(H-h)/2,setsar=1[v{i}]"
+        )
+    if shot.content_box is not None:
+        (x, y, w, h), (dx, dy, fw, fh) = content_view(shot, src_w, src_h, out_w, out_h)
+        bg_w, bg_h = even(out_w // 4), even(out_h // 4)
+        return (
+            f"[t{i}]crop={w}:{h}:{x}:{y},split=2[ib{i}][if{i}];"
+            f"[ib{i}]scale={bg_w}:{bg_h}:force_original_aspect_ratio=increase,crop={bg_w}:{bg_h},"
+            f"gblur=sigma=10,lutyuv=y=val-20,scale={out_w}:{out_h}[ibg{i}];"
+            f"[if{i}]scale={fw}:{fh}:{scale}[ifg{i}];"
+            f"[ibg{i}][ifg{i}]overlay={dx}:{dy},setsar=1[v{i}]"
         )
     if shot.layout == LayoutType.TALKING_HEAD:
         w, h, x_expr, y_expr = fill_crop(shot, src_w, src_h, out_w, out_h)
@@ -357,10 +386,11 @@ def shot_chain(
                 f"[cf{i}]scale={fit_w}:{fit_h}:{scale}[cfg{i}];"
                 f"[cbg{i}][cfg{i}]overlay={(out_w - fit_w) // 2}:{(bottom_h - fit_h) // 2}[bot{i}]"
             )
+        screen_rect, (dx, dy, fw, fh) = screen_view(shot, src_w, src_h, out_w, top_h)
         return (
             f"[t{i}]split=2[sa{i}][sb{i}];"
-            f"[sa{i}]{_crop(screen_crop(shot.screen_box, shot.screen_focus, src_w, src_h, out_w, top_h, shot.cam_box))},"
-            f"scale={out_w}:{top_h}:{scale}[top{i}];"
+            f"[sa{i}]{_crop(screen_rect)},scale={fw}:{fh}:{scale},"
+            f"pad={out_w}:{top_h}:{dx}:{dy}:color=0x12151b[top{i}];"
             f"{cam_panel};"
             f"[top{i}][bot{i}]vstack=inputs=2,setsar=1[v{i}]"
         )
@@ -446,29 +476,9 @@ def _audio_fades(duration_s: float, first: bool, last: bool) -> str:
     )
 
 
-def build_layout_graph(
-    plan: ClipLayoutPlan,
-    out_w: int,
-    out_h: int,
-    keeps: Optional[list[tuple[int, int]]] = None,
-    with_audio: bool = False,
-    landscape: bool = False,
-    fps: str = "30",
-    loudness_filter: Optional[str] = None,
-) -> str:
-    """Filter graph from [0:v] (and [0:a]) to [base] (and [aout]).
-
-    `fps` is the output frame rate (a number or rational like "30000/1001");
-    `loudness_filter` replaces the default single-pass loudnorm.
-
-    Video uses a single frame grid before trimming. Piece lengths are rounded
-    on the cumulative output timeline, so rounding never accumulates at cuts.
-    Audio uses the same window clock and exact keep intervals; framing changes
-    must neither splice speech nor add concat's longest-stream padding.
-    """
-    src_w, src_h = plan.source_width, plan.source_height
+def video_frame_pieces(plan: ClipLayoutPlan, keeps: Optional[list[tuple[int, int]]], fps: str) -> list[tuple[int, int, int]]:
+    """Exact (shot index, source start frame, frame count) used by the renderer."""
     pieces = timeline_pieces(plan, keeps)
-    window_end = plan.shots[-1].end_ms
     if not pieces:
         raise ValueError("The edit contains no video")
     rate = Fraction(fps)
@@ -494,6 +504,32 @@ def build_layout_graph(
         frame_end = next_frame
     if not video_pieces:
         raise ValueError("The edit is shorter than one video frame")
+    return video_pieces
+
+
+def build_layout_graph(
+    plan: ClipLayoutPlan,
+    out_w: int,
+    out_h: int,
+    keeps: Optional[list[tuple[int, int]]] = None,
+    with_audio: bool = False,
+    landscape: bool = False,
+    fps: str = "30",
+    loudness_filter: Optional[str] = None,
+) -> str:
+    """Filter graph from [0:v] (and [0:a]) to [base] (and [aout]).
+
+    `fps` is the output frame rate (a number or rational like "30000/1001");
+    `loudness_filter` replaces the default single-pass loudnorm.
+
+    Video uses a single frame grid before trimming. Piece lengths are rounded
+    on the cumulative output timeline, so rounding never accumulates at cuts.
+    Audio uses the same window clock and exact keep intervals; framing changes
+    must neither splice speech nor add concat's longest-stream padding.
+    """
+    src_w, src_h = plan.source_width, plan.source_height
+    window_end = plan.shots[-1].end_ms
+    video_pieces = video_frame_pieces(plan, keeps, fps)
     n = len(video_pieces)
     # Fill delayed/sparse video using its timestamps, without speeding it up.
     # Tail padding is bounded by the requested window and trimmed per piece.
@@ -558,7 +594,7 @@ def caption_anchor(shot: ShotLayout, src_w: int, src_h: int, out_w: int, out_h: 
     if shot.layout == LayoutType.TWO_SHOT or (shot.layout == LayoutType.SCREEN_CAM and shot.cam_box is not None):
         return 5, stacked_panel_heights(shot, src_h, out_h)[0]  # centered on the seam
     if shot.layout in (LayoutType.SCREEN, LayoutType.SCREEN_CAM):
-        scaled_h, overlay_y = letterbox_geometry(src_w, src_h, out_w, out_h)
+        scaled_h, overlay_y = foreground_geometry(shot, src_w, src_h, out_w, out_h)
         bar = out_h - (overlay_y + scaled_h)
         if bar >= 200:
             return 2, out_h - int(bar * 0.55)
@@ -567,7 +603,7 @@ def caption_anchor(shot: ShotLayout, src_w: int, src_h: int, out_w: int, out_h: 
 
 def title_y(shot: ShotLayout, src_w: int, src_h: int, out_w: int, out_h: int, title_h: int) -> int:
     if shot.layout == LayoutType.SCREEN:
-        _, overlay_y = letterbox_geometry(src_w, src_h, out_w, out_h)
+        _, overlay_y = foreground_geometry(shot, src_w, src_h, out_w, out_h)
         if overlay_y > title_h + 20:
             return max(10, overlay_y // 2 - title_h // 2)
     return int(out_h * TOP_TITLE_Y / 1920)
@@ -575,7 +611,7 @@ def title_y(shot: ShotLayout, src_w: int, src_h: int, out_w: int, out_h: int, ti
 
 def banner_y(shot: ShotLayout, src_w: int, src_h: int, out_w: int, out_h: int) -> int:
     if shot.layout == LayoutType.SCREEN:
-        scaled_h, overlay_y = letterbox_geometry(src_w, src_h, out_w, out_h)
+        scaled_h, overlay_y = foreground_geometry(shot, src_w, src_h, out_w, out_h)
         if out_h - (overlay_y + scaled_h) >= 120:
             return overlay_y + scaled_h + 25
     return int(out_h * FILL_BANNER_Y / 1920)
@@ -620,6 +656,8 @@ def shot_views(
     One (source crop, output rect) pair per panel, both as (x, y, w, h). Mirrors
     the 9:16 branches of shot_chain.
     """
+    if shot.content_box is not None:
+        return [content_view(shot, src_w, src_h, out_w, out_h)]
     if shot.layout == LayoutType.TALKING_HEAD:
         crop_w, crop_h, xs, ys = _fill_crop_path(shot, src_w, src_h, out_w, out_h)
         t = t_ms / 1000
@@ -638,7 +676,7 @@ def shot_views(
             ((bottom[2], bottom[3], bottom[0], bottom[1]), (0, top_h, out_w, bottom_h)),
         ]
     if shot.layout == LayoutType.SCREEN_CAM and shot.cam_box is not None:
-        screen = screen_crop(shot.screen_box, shot.screen_focus, src_w, src_h, out_w, top_h, shot.cam_box)
+        screen, screen_dest = screen_view(shot, src_w, src_h, out_w, top_h)
         cam = cam_crop(shot.cam_box, shot.cam_face, src_w, src_h, out_w, bottom_h)
         fit = panel_fit(cam, out_w, bottom_h)
         if fit is None:
@@ -646,7 +684,7 @@ def shot_views(
         else:
             cam_dest = ((out_w - fit[0]) // 2, top_h + (bottom_h - fit[1]) // 2, fit[0], fit[1])
         return [
-            ((screen[2], screen[3], screen[0], screen[1]), (0, 0, out_w, top_h)),
+            ((screen[2], screen[3], screen[0], screen[1]), screen_dest),
             ((cam[2], cam[3], cam[0], cam[1]), cam_dest),
         ]
 

@@ -1,0 +1,789 @@
+{
+  "description": "Eight explicitly approved live OpenRouter/Jev regression probes, 2026-09-25. First three are saved candidate excerpts; five are deliberately broken contrasts. Small development set, not held-out accuracy validation.",
+  "cases": [
+    {
+      "name": "candidate-0",
+      "expected_accept": true,
+      "judgment": {
+        "status": "success",
+        "model": "typesafe/jev-1.13-20260917",
+        "requested_model": "typesafe/jev-1.13",
+        "rule_version": "editorial-v2-openrouter",
+        "cache_id": "7de3e91e4c67e757a88887578a81eb5a186c1ffbc4456ff46a089a5269a79242",
+        "cache_hit": false,
+        "latency_ms": 562,
+        "input_tokens": 1667,
+        "output_tokens": 133,
+        "cost_usd": 7.0014e-05,
+        "estimated_cost_usd": 7.001400000000001e-05,
+        "answers": {
+          "self_contained": {
+            "type": "noul",
+            "noul": 0.8
+          },
+          "complete_ending": {
+            "type": "noul",
+            "noul": 0.79
+          },
+          "logical_flow": {
+            "type": "noul",
+            "noul": 0.89
+          },
+          "faithful_to_source": {
+            "type": "noul",
+            "noul": 0.88
+          },
+          "title_supported": {
+            "type": "noul",
+            "noul": 0.85
+          },
+          "evidence": {
+            "type": "choice",
+            "probabilities": {
+              "insufficient": 0.02,
+              "sufficient": 0.98
+            },
+            "confidence": 0.96,
+            "choice": "sufficient"
+          }
+        },
+        "questions": {
+          "self_contained": {
+            "type": "noul",
+            "instructions": "Can a viewer identify the subject and understand the main point from `retained_dialogue` alone?",
+            "criteria": {
+              "true": "The main point and its essential referents are understandable. Ordinary discourse openings (and, so, but), rhetorical questions and references explained inside the excerpt are acceptable. Background or a full lecture is not required.",
+              "false": "An unidentified person, object, event or premise is essential to understanding the main point and is only explained outside the excerpt."
+            }
+          },
+          "complete_ending": {
+            "type": "noul",
+            "instructions": "Does the main point in `retained_dialogue` reach a completed statement, answer or reaction?",
+            "criteria": {
+              "true": "The point lands before the excerpt ends. A following elaboration, example, transition or separate question in after does not invalidate a completed point.",
+              "false": "The excerpt ends mid-sentence or with an unfinished explanation, unanswered central question or promised payoff that is essential to this excerpt."
+            }
+          },
+          "logical_flow": {
+            "type": "noul",
+            "instructions": "Can the statements in `retained_dialogue` be followed in the order presented?",
+            "criteria": {
+              "true": "The statements form a connected sequence. Conversational disfluencies and rhetorical questions are acceptable.",
+              "false": "An edit or abrupt topic change makes the sequence unintelligible or changes who says what."
+            }
+          },
+          "faithful_to_source": {
+            "type": "noul",
+            "instructions": "Is the main point in `retained_dialogue` consistent with the actual statements in `before` and `after`?",
+            "criteria": {
+              "true": "No supplied statement contradicts or materially qualifies the excerpt in a way that changes its meaning. Omitting another example or later topic is acceptable. Judge faithful attribution, not whether the speaker is objectively correct.",
+              "false": "A specific omitted statement reverses, corrects, negates or materially qualifies the retained claim, making the excerpt misleading."
+            }
+          },
+          "title_supported": {
+            "type": "noul",
+            "instructions": "Does `title` accurately describe the main point of `retained_dialogue`?",
+            "criteria": {
+              "true": "A fair concise description without invented facts or exaggerated claims.",
+              "false": "The title claims something not said or contradicts or exaggerates what is said."
+            }
+          },
+          "evidence": {
+            "type": "choice",
+            "instructions": "Can the meaning and completeness of this spoken excerpt be assessed from `retained_dialogue`, `before`, `after` and `visual_observations`?",
+            "criteria": {
+              "sufficient": "Spoken words carry the main point. An ordinary spoken explanation or opinion can be judged from a transcript without seeing the speaker or hearing their tone.",
+              "insufficient": "Understanding the main point requires a specific unseen demonstration, object, gesture, or missing/garbled speech. Do not imagine the missing content."
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "candidate-1",
+      "expected_accept": false,
+      "judgment": {
+        "status": "success",
+        "model": "typesafe/jev-1.13-20260917",
+        "requested_model": "typesafe/jev-1.13",
+        "rule_version": "editorial-v2-openrouter",
+        "cache_id": "3fb7e31f2646d716dce3dbcdef72962e9d8d72370558cd2f857ea99c7c34086a",
+        "cache_hit": false,
+        "latency_ms": 360,
+        "input_tokens": 1635,
+        "output_tokens": 133,
+        "cost_usd": 6.867e-05,
+        "estimated_cost_usd": 6.867e-05,
+        "answers": {
+          "self_contained": {
+            "type": "noul",
+            "noul": 0.8
+          },
+          "complete_ending": {
+            "type": "noul",
+            "noul": 0.22
+          },
+          "logical_flow": {
+            "type": "noul",
+            "noul": 0.88
+          },
+          "faithful_to_source": {
+            "type": "noul",
+            "noul": 0.77
+          },
+          "title_supported": {
+            "type": "noul",
+            "noul": 0.85
+          },
+          "evidence": {
+            "type": "choice",
+            "probabilities": {
+              "sufficient": 0.94,
+              "insufficient": 0.06
+            },
+            "confidence": 0.87,
+            "choice": "sufficient"
+          }
+        },
+        "questions": {
+          "self_contained": {
+            "type": "noul",
+            "instructions": "Can a viewer identify the subject and understand the main point from `retained_dialogue` alone?",
+            "criteria": {
+              "true": "The main point and its essential referents are understandable. Ordinary discourse openings (and, so, but), rhetorical questions and references explained inside the excerpt are acceptable. Background or a full lecture is not required.",
+              "false": "An unidentified person, object, event or premise is essential to understanding the main point and is only explained outside the excerpt."
+            }
+          },
+          "complete_ending": {
+            "type": "noul",
+            "instructions": "Does the main point in `retained_dialogue` reach a completed statement, answer or reaction?",
+            "criteria": {
+              "true": "The point lands before the excerpt ends. A following elaboration, example, transition or separate question in after does not invalidate a completed point.",
+              "false": "The excerpt ends mid-sentence or with an unfinished explanation, unanswered central question or promised payoff that is essential to this excerpt."
+            }
+          },
+          "logical_flow": {
+            "type": "noul",
+            "instructions": "Can the statements in `retained_dialogue` be followed in the order presented?",
+            "criteria": {
+              "true": "The statements form a connected sequence. Conversational disfluencies and rhetorical questions are acceptable.",
+              "false": "An edit or abrupt topic change makes the sequence unintelligible or changes who says what."
+            }
+          },
+          "faithful_to_source": {
+            "type": "noul",
+            "instructions": "Is the main point in `retained_dialogue` consistent with the actual statements in `before` and `after`?",
+            "criteria": {
+              "true": "No supplied statement contradicts or materially qualifies the excerpt in a way that changes its meaning. Omitting another example or later topic is acceptable. Judge faithful attribution, not whether the speaker is objectively correct.",
+              "false": "A specific omitted statement reverses, corrects, negates or materially qualifies the retained claim, making the excerpt misleading."
+            }
+          },
+          "title_supported": {
+            "type": "noul",
+            "instructions": "Does `title` accurately describe the main point of `retained_dialogue`?",
+            "criteria": {
+              "true": "A fair concise description without invented facts or exaggerated claims.",
+              "false": "The title claims something not said or contradicts or exaggerates what is said."
+            }
+          },
+          "evidence": {
+            "type": "choice",
+            "instructions": "Can the meaning and completeness of this spoken excerpt be assessed from `retained_dialogue`, `before`, `after` and `visual_observations`?",
+            "criteria": {
+              "sufficient": "Spoken words carry the main point. An ordinary spoken explanation or opinion can be judged from a transcript without seeing the speaker or hearing their tone.",
+              "insufficient": "Understanding the main point requires a specific unseen demonstration, object, gesture, or missing/garbled speech. Do not imagine the missing content."
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "candidate-2",
+      "expected_accept": true,
+      "judgment": {
+        "status": "success",
+        "model": "typesafe/jev-1.13-20260917",
+        "requested_model": "typesafe/jev-1.13",
+        "rule_version": "editorial-v2-openrouter",
+        "cache_id": "a97c9fae0e9c152147ce7067d0714c3ef6b345816732e807780d39a9ff91785a",
+        "cache_hit": false,
+        "latency_ms": 448,
+        "input_tokens": 1577,
+        "output_tokens": 133,
+        "cost_usd": 6.6234e-05,
+        "estimated_cost_usd": 6.6234e-05,
+        "answers": {
+          "self_contained": {
+            "type": "noul",
+            "noul": 0.76
+          },
+          "complete_ending": {
+            "type": "noul",
+            "noul": 0.87
+          },
+          "logical_flow": {
+            "type": "noul",
+            "noul": 0.91
+          },
+          "faithful_to_source": {
+            "type": "noul",
+            "noul": 0.88
+          },
+          "title_supported": {
+            "type": "noul",
+            "noul": 0.88
+          },
+          "evidence": {
+            "type": "choice",
+            "probabilities": {
+              "sufficient": 0.97,
+              "insufficient": 0.03
+            },
+            "confidence": 0.94,
+            "choice": "sufficient"
+          }
+        },
+        "questions": {
+          "self_contained": {
+            "type": "noul",
+            "instructions": "Can a viewer identify the subject and understand the main point from `retained_dialogue` alone?",
+            "criteria": {
+              "true": "The main point and its essential referents are understandable. Ordinary discourse openings (and, so, but), rhetorical questions and references explained inside the excerpt are acceptable. Background or a full lecture is not required.",
+              "false": "An unidentified person, object, event or premise is essential to understanding the main point and is only explained outside the excerpt."
+            }
+          },
+          "complete_ending": {
+            "type": "noul",
+            "instructions": "Does the main point in `retained_dialogue` reach a completed statement, answer or reaction?",
+            "criteria": {
+              "true": "The point lands before the excerpt ends. A following elaboration, example, transition or separate question in after does not invalidate a completed point.",
+              "false": "The excerpt ends mid-sentence or with an unfinished explanation, unanswered central question or promised payoff that is essential to this excerpt."
+            }
+          },
+          "logical_flow": {
+            "type": "noul",
+            "instructions": "Can the statements in `retained_dialogue` be followed in the order presented?",
+            "criteria": {
+              "true": "The statements form a connected sequence. Conversational disfluencies and rhetorical questions are acceptable.",
+              "false": "An edit or abrupt topic change makes the sequence unintelligible or changes who says what."
+            }
+          },
+          "faithful_to_source": {
+            "type": "noul",
+            "instructions": "Is the main point in `retained_dialogue` consistent with the actual statements in `before` and `after`?",
+            "criteria": {
+              "true": "No supplied statement contradicts or materially qualifies the excerpt in a way that changes its meaning. Omitting another example or later topic is acceptable. Judge faithful attribution, not whether the speaker is objectively correct.",
+              "false": "A specific omitted statement reverses, corrects, negates or materially qualifies the retained claim, making the excerpt misleading."
+            }
+          },
+          "title_supported": {
+            "type": "noul",
+            "instructions": "Does `title` accurately describe the main point of `retained_dialogue`?",
+            "criteria": {
+              "true": "A fair concise description without invented facts or exaggerated claims.",
+              "false": "The title claims something not said or contradicts or exaggerates what is said."
+            }
+          },
+          "evidence": {
+            "type": "choice",
+            "instructions": "Can the meaning and completeness of this spoken excerpt be assessed from `retained_dialogue`, `before`, `after` and `visual_observations`?",
+            "criteria": {
+              "sufficient": "Spoken words carry the main point. An ordinary spoken explanation or opinion can be judged from a transcript without seeing the speaker or hearing their tone.",
+              "insufficient": "Understanding the main point requires a specific unseen demonstration, object, gesture, or missing/garbled speech. Do not imagine the missing content."
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "broken-ending",
+      "expected_accept": false,
+      "judgment": {
+        "status": "success",
+        "model": "typesafe/jev-1.13-20260917",
+        "requested_model": "typesafe/jev-1.13",
+        "rule_version": "editorial-v2-openrouter",
+        "cache_id": "b8f989d9eec1bd63ac6a1d3fe0f7dba011499138957ad6a3380181a3c4fba15f",
+        "cache_hit": false,
+        "latency_ms": 382,
+        "input_tokens": 1480,
+        "output_tokens": 133,
+        "cost_usd": 6.216e-05,
+        "estimated_cost_usd": 6.216000000000001e-05,
+        "answers": {
+          "self_contained": {
+            "type": "noul",
+            "noul": 0.78
+          },
+          "complete_ending": {
+            "type": "noul",
+            "noul": 0.23
+          },
+          "logical_flow": {
+            "type": "noul",
+            "noul": 0.71
+          },
+          "faithful_to_source": {
+            "type": "noul",
+            "noul": 0.8
+          },
+          "title_supported": {
+            "type": "noul",
+            "noul": 0.82
+          },
+          "evidence": {
+            "type": "choice",
+            "probabilities": {
+              "sufficient": 0.86,
+              "insufficient": 0.14
+            },
+            "confidence": 0.73,
+            "choice": "sufficient"
+          }
+        },
+        "questions": {
+          "self_contained": {
+            "type": "noul",
+            "instructions": "Can a viewer identify the subject and understand the main point from `retained_dialogue` alone?",
+            "criteria": {
+              "true": "The main point and its essential referents are understandable. Ordinary discourse openings (and, so, but), rhetorical questions and references explained inside the excerpt are acceptable. Background or a full lecture is not required.",
+              "false": "An unidentified person, object, event or premise is essential to understanding the main point and is only explained outside the excerpt."
+            }
+          },
+          "complete_ending": {
+            "type": "noul",
+            "instructions": "Does the main point in `retained_dialogue` reach a completed statement, answer or reaction?",
+            "criteria": {
+              "true": "The point lands before the excerpt ends. A following elaboration, example, transition or separate question in after does not invalidate a completed point.",
+              "false": "The excerpt ends mid-sentence or with an unfinished explanation, unanswered central question or promised payoff that is essential to this excerpt."
+            }
+          },
+          "logical_flow": {
+            "type": "noul",
+            "instructions": "Can the statements in `retained_dialogue` be followed in the order presented?",
+            "criteria": {
+              "true": "The statements form a connected sequence. Conversational disfluencies and rhetorical questions are acceptable.",
+              "false": "An edit or abrupt topic change makes the sequence unintelligible or changes who says what."
+            }
+          },
+          "faithful_to_source": {
+            "type": "noul",
+            "instructions": "Is the main point in `retained_dialogue` consistent with the actual statements in `before` and `after`?",
+            "criteria": {
+              "true": "No supplied statement contradicts or materially qualifies the excerpt in a way that changes its meaning. Omitting another example or later topic is acceptable. Judge faithful attribution, not whether the speaker is objectively correct.",
+              "false": "A specific omitted statement reverses, corrects, negates or materially qualifies the retained claim, making the excerpt misleading."
+            }
+          },
+          "title_supported": {
+            "type": "noul",
+            "instructions": "Does `title` accurately describe the main point of `retained_dialogue`?",
+            "criteria": {
+              "true": "A fair concise description without invented facts or exaggerated claims.",
+              "false": "The title claims something not said or contradicts or exaggerates what is said."
+            }
+          },
+          "evidence": {
+            "type": "choice",
+            "instructions": "Can the meaning and completeness of this spoken excerpt be assessed from `retained_dialogue`, `before`, `after` and `visual_observations`?",
+            "criteria": {
+              "sufficient": "Spoken words carry the main point. An ordinary spoken explanation or opinion can be judged from a transcript without seeing the speaker or hearing their tone.",
+              "insufficient": "Understanding the main point requires a specific unseen demonstration, object, gesture, or missing/garbled speech. Do not imagine the missing content."
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "misleading-title",
+      "expected_accept": false,
+      "judgment": {
+        "status": "success",
+        "model": "typesafe/jev-1.13-20260917",
+        "requested_model": "typesafe/jev-1.13",
+        "rule_version": "editorial-v2-openrouter",
+        "cache_id": "225ae8b85117977ff894d3111155427e8b7330e5f0992aa132718b4695775098",
+        "cache_hit": false,
+        "latency_ms": 437,
+        "input_tokens": 1670,
+        "output_tokens": 133,
+        "cost_usd": 7.014e-05,
+        "estimated_cost_usd": 7.014e-05,
+        "answers": {
+          "self_contained": {
+            "type": "noul",
+            "noul": 0.75
+          },
+          "complete_ending": {
+            "type": "noul",
+            "noul": 0.79
+          },
+          "logical_flow": {
+            "type": "noul",
+            "noul": 0.89
+          },
+          "faithful_to_source": {
+            "type": "noul",
+            "noul": 0.76
+          },
+          "title_supported": {
+            "type": "noul",
+            "noul": 0.1
+          },
+          "evidence": {
+            "type": "choice",
+            "probabilities": {
+              "insufficient": 0.04,
+              "sufficient": 0.96
+            },
+            "confidence": 0.92,
+            "choice": "sufficient"
+          }
+        },
+        "questions": {
+          "self_contained": {
+            "type": "noul",
+            "instructions": "Can a viewer identify the subject and understand the main point from `retained_dialogue` alone?",
+            "criteria": {
+              "true": "The main point and its essential referents are understandable. Ordinary discourse openings (and, so, but), rhetorical questions and references explained inside the excerpt are acceptable. Background or a full lecture is not required.",
+              "false": "An unidentified person, object, event or premise is essential to understanding the main point and is only explained outside the excerpt."
+            }
+          },
+          "complete_ending": {
+            "type": "noul",
+            "instructions": "Does the main point in `retained_dialogue` reach a completed statement, answer or reaction?",
+            "criteria": {
+              "true": "The point lands before the excerpt ends. A following elaboration, example, transition or separate question in after does not invalidate a completed point.",
+              "false": "The excerpt ends mid-sentence or with an unfinished explanation, unanswered central question or promised payoff that is essential to this excerpt."
+            }
+          },
+          "logical_flow": {
+            "type": "noul",
+            "instructions": "Can the statements in `retained_dialogue` be followed in the order presented?",
+            "criteria": {
+              "true": "The statements form a connected sequence. Conversational disfluencies and rhetorical questions are acceptable.",
+              "false": "An edit or abrupt topic change makes the sequence unintelligible or changes who says what."
+            }
+          },
+          "faithful_to_source": {
+            "type": "noul",
+            "instructions": "Is the main point in `retained_dialogue` consistent with the actual statements in `before` and `after`?",
+            "criteria": {
+              "true": "No supplied statement contradicts or materially qualifies the excerpt in a way that changes its meaning. Omitting another example or later topic is acceptable. Judge faithful attribution, not whether the speaker is objectively correct.",
+              "false": "A specific omitted statement reverses, corrects, negates or materially qualifies the retained claim, making the excerpt misleading."
+            }
+          },
+          "title_supported": {
+            "type": "noul",
+            "instructions": "Does `title` accurately describe the main point of `retained_dialogue`?",
+            "criteria": {
+              "true": "A fair concise description without invented facts or exaggerated claims.",
+              "false": "The title claims something not said or contradicts or exaggerates what is said."
+            }
+          },
+          "evidence": {
+            "type": "choice",
+            "instructions": "Can the meaning and completeness of this spoken excerpt be assessed from `retained_dialogue`, `before`, `after` and `visual_observations`?",
+            "criteria": {
+              "sufficient": "Spoken words carry the main point. An ordinary spoken explanation or opinion can be judged from a transcript without seeing the speaker or hearing their tone.",
+              "insufficient": "Understanding the main point requires a specific unseen demonstration, object, gesture, or missing/garbled speech. Do not imagine the missing content."
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "missing-referent",
+      "expected_accept": false,
+      "judgment": {
+        "status": "success",
+        "model": "typesafe/jev-1.13-20260917",
+        "requested_model": "typesafe/jev-1.13",
+        "rule_version": "editorial-v2-openrouter",
+        "cache_id": "685445d78f0e904b69c46e73c4e425d3dd344baa7c251b31033e448d100c020b",
+        "cache_hit": false,
+        "latency_ms": 362,
+        "input_tokens": 1473,
+        "output_tokens": 133,
+        "cost_usd": 6.1866e-05,
+        "estimated_cost_usd": 6.186600000000001e-05,
+        "answers": {
+          "self_contained": {
+            "type": "noul",
+            "noul": 0.05
+          },
+          "complete_ending": {
+            "type": "noul",
+            "noul": 0.7
+          },
+          "logical_flow": {
+            "type": "noul",
+            "noul": 0.62
+          },
+          "faithful_to_source": {
+            "type": "noul",
+            "noul": 0.24
+          },
+          "title_supported": {
+            "type": "noul",
+            "noul": 0.06
+          },
+          "evidence": {
+            "type": "choice",
+            "probabilities": {
+              "sufficient": 0.59,
+              "insufficient": 0.41
+            },
+            "confidence": 0.19,
+            "choice": "sufficient"
+          }
+        },
+        "questions": {
+          "self_contained": {
+            "type": "noul",
+            "instructions": "Can a viewer identify the subject and understand the main point from `retained_dialogue` alone?",
+            "criteria": {
+              "true": "The main point and its essential referents are understandable. Ordinary discourse openings (and, so, but), rhetorical questions and references explained inside the excerpt are acceptable. Background or a full lecture is not required.",
+              "false": "An unidentified person, object, event or premise is essential to understanding the main point and is only explained outside the excerpt."
+            }
+          },
+          "complete_ending": {
+            "type": "noul",
+            "instructions": "Does the main point in `retained_dialogue` reach a completed statement, answer or reaction?",
+            "criteria": {
+              "true": "The point lands before the excerpt ends. A following elaboration, example, transition or separate question in after does not invalidate a completed point.",
+              "false": "The excerpt ends mid-sentence or with an unfinished explanation, unanswered central question or promised payoff that is essential to this excerpt."
+            }
+          },
+          "logical_flow": {
+            "type": "noul",
+            "instructions": "Can the statements in `retained_dialogue` be followed in the order presented?",
+            "criteria": {
+              "true": "The statements form a connected sequence. Conversational disfluencies and rhetorical questions are acceptable.",
+              "false": "An edit or abrupt topic change makes the sequence unintelligible or changes who says what."
+            }
+          },
+          "faithful_to_source": {
+            "type": "noul",
+            "instructions": "Is the main point in `retained_dialogue` consistent with the actual statements in `before` and `after`?",
+            "criteria": {
+              "true": "No supplied statement contradicts or materially qualifies the excerpt in a way that changes its meaning. Omitting another example or later topic is acceptable. Judge faithful attribution, not whether the speaker is objectively correct.",
+              "false": "A specific omitted statement reverses, corrects, negates or materially qualifies the retained claim, making the excerpt misleading."
+            }
+          },
+          "title_supported": {
+            "type": "noul",
+            "instructions": "Does `title` accurately describe the main point of `retained_dialogue`?",
+            "criteria": {
+              "true": "A fair concise description without invented facts or exaggerated claims.",
+              "false": "The title claims something not said or contradicts or exaggerates what is said."
+            }
+          },
+          "evidence": {
+            "type": "choice",
+            "instructions": "Can the meaning and completeness of this spoken excerpt be assessed from `retained_dialogue`, `before`, `after` and `visual_observations`?",
+            "criteria": {
+              "sufficient": "Spoken words carry the main point. An ordinary spoken explanation or opinion can be judged from a transcript without seeing the speaker or hearing their tone.",
+              "insufficient": "Understanding the main point requires a specific unseen demonstration, object, gesture, or missing/garbled speech. Do not imagine the missing content."
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "omitted-negation",
+      "expected_accept": false,
+      "judgment": {
+        "status": "success",
+        "model": "typesafe/jev-1.13-20260917",
+        "requested_model": "typesafe/jev-1.13",
+        "rule_version": "editorial-v2-openrouter",
+        "cache_id": "e008187e92b918b450e53f972f3078c81d4fa0c441db2e68e137332e570b45c0",
+        "cache_hit": false,
+        "latency_ms": 337,
+        "input_tokens": 945,
+        "output_tokens": 133,
+        "cost_usd": 3.969e-05,
+        "estimated_cost_usd": 3.969000000000001e-05,
+        "answers": {
+          "self_contained": {
+            "type": "noul",
+            "noul": 0.93
+          },
+          "complete_ending": {
+            "type": "noul",
+            "noul": 0.89
+          },
+          "logical_flow": {
+            "type": "noul",
+            "noul": 0.73
+          },
+          "faithful_to_source": {
+            "type": "noul",
+            "noul": 0.09
+          },
+          "title_supported": {
+            "type": "noul",
+            "noul": 0.87
+          },
+          "evidence": {
+            "type": "choice",
+            "probabilities": {
+              "insufficient": 0.06,
+              "sufficient": 0.94
+            },
+            "confidence": 0.89,
+            "choice": "sufficient"
+          }
+        },
+        "questions": {
+          "self_contained": {
+            "type": "noul",
+            "instructions": "Can a viewer identify the subject and understand the main point from `retained_dialogue` alone?",
+            "criteria": {
+              "true": "The main point and its essential referents are understandable. Ordinary discourse openings (and, so, but), rhetorical questions and references explained inside the excerpt are acceptable. Background or a full lecture is not required.",
+              "false": "An unidentified person, object, event or premise is essential to understanding the main point and is only explained outside the excerpt."
+            }
+          },
+          "complete_ending": {
+            "type": "noul",
+            "instructions": "Does the main point in `retained_dialogue` reach a completed statement, answer or reaction?",
+            "criteria": {
+              "true": "The point lands before the excerpt ends. A following elaboration, example, transition or separate question in after does not invalidate a completed point.",
+              "false": "The excerpt ends mid-sentence or with an unfinished explanation, unanswered central question or promised payoff that is essential to this excerpt."
+            }
+          },
+          "logical_flow": {
+            "type": "noul",
+            "instructions": "Can the statements in `retained_dialogue` be followed in the order presented?",
+            "criteria": {
+              "true": "The statements form a connected sequence. Conversational disfluencies and rhetorical questions are acceptable.",
+              "false": "An edit or abrupt topic change makes the sequence unintelligible or changes who says what."
+            }
+          },
+          "faithful_to_source": {
+            "type": "noul",
+            "instructions": "Is the main point in `retained_dialogue` consistent with the actual statements in `before` and `after`?",
+            "criteria": {
+              "true": "No supplied statement contradicts or materially qualifies the excerpt in a way that changes its meaning. Omitting another example or later topic is acceptable. Judge faithful attribution, not whether the speaker is objectively correct.",
+              "false": "A specific omitted statement reverses, corrects, negates or materially qualifies the retained claim, making the excerpt misleading."
+            }
+          },
+          "title_supported": {
+            "type": "noul",
+            "instructions": "Does `title` accurately describe the main point of `retained_dialogue`?",
+            "criteria": {
+              "true": "A fair concise description without invented facts or exaggerated claims.",
+              "false": "The title claims something not said or contradicts or exaggerates what is said."
+            }
+          },
+          "evidence": {
+            "type": "choice",
+            "instructions": "Can the meaning and completeness of this spoken excerpt be assessed from `retained_dialogue`, `before`, `after` and `visual_observations`?",
+            "criteria": {
+              "sufficient": "Spoken words carry the main point. An ordinary spoken explanation or opinion can be judged from a transcript without seeing the speaker or hearing their tone.",
+              "insufficient": "Understanding the main point requires a specific unseen demonstration, object, gesture, or missing/garbled speech. Do not imagine the missing content."
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "unseen-demo",
+      "expected_accept": false,
+      "judgment": {
+        "status": "success",
+        "model": "typesafe/jev-1.13-20260917",
+        "requested_model": "typesafe/jev-1.13",
+        "rule_version": "editorial-v2-openrouter",
+        "cache_id": "ff3c218a6061516386d1e6d0d01b3e571f52b172bb077a2363ebc7c9c84e7e7c",
+        "cache_hit": false,
+        "latency_ms": 375,
+        "input_tokens": 938,
+        "output_tokens": 133,
+        "cost_usd": 3.9396e-05,
+        "estimated_cost_usd": 3.939600000000001e-05,
+        "answers": {
+          "self_contained": {
+            "type": "noul",
+            "noul": 0.16
+          },
+          "complete_ending": {
+            "type": "noul",
+            "noul": 0.81
+          },
+          "logical_flow": {
+            "type": "noul",
+            "noul": 0.89
+          },
+          "faithful_to_source": {
+            "type": "noul",
+            "noul": 0.82
+          },
+          "title_supported": {
+            "type": "noul",
+            "noul": 0.79
+          },
+          "evidence": {
+            "type": "choice",
+            "probabilities": {
+              "sufficient": 0.03,
+              "insufficient": 0.97
+            },
+            "confidence": 0.94,
+            "choice": "insufficient"
+          }
+        },
+        "questions": {
+          "self_contained": {
+            "type": "noul",
+            "instructions": "Can a viewer identify the subject and understand the main point from `retained_dialogue` alone?",
+            "criteria": {
+              "true": "The main point and its essential referents are understandable. Ordinary discourse openings (and, so, but), rhetorical questions and references explained inside the excerpt are acceptable. Background or a full lecture is not required.",
+              "false": "An unidentified person, object, event or premise is essential to understanding the main point and is only explained outside the excerpt."
+            }
+          },
+          "complete_ending": {
+            "type": "noul",
+            "instructions": "Does the main point in `retained_dialogue` reach a completed statement, answer or reaction?",
+            "criteria": {
+              "true": "The point lands before the excerpt ends. A following elaboration, example, transition or separate question in after does not invalidate a completed point.",
+              "false": "The excerpt ends mid-sentence or with an unfinished explanation, unanswered central question or promised payoff that is essential to this excerpt."
+            }
+          },
+          "logical_flow": {
+            "type": "noul",
+            "instructions": "Can the statements in `retained_dialogue` be followed in the order presented?",
+            "criteria": {
+              "true": "The statements form a connected sequence. Conversational disfluencies and rhetorical questions are acceptable.",
+              "false": "An edit or abrupt topic change makes the sequence unintelligible or changes who says what."
+            }
+          },
+          "faithful_to_source": {
+            "type": "noul",
+            "instructions": "Is the main point in `retained_dialogue` consistent with the actual statements in `before` and `after`?",
+            "criteria": {
+              "true": "No supplied statement contradicts or materially qualifies the excerpt in a way that changes its meaning. Omitting another example or later topic is acceptable. Judge faithful attribution, not whether the speaker is objectively correct.",
+              "false": "A specific omitted statement reverses, corrects, negates or materially qualifies the retained claim, making the excerpt misleading."
+            }
+          },
+          "title_supported": {
+            "type": "noul",
+            "instructions": "Does `title` accurately describe the main point of `retained_dialogue`?",
+            "criteria": {
+              "true": "A fair concise description without invented facts or exaggerated claims.",
+              "false": "The title claims something not said or contradicts or exaggerates what is said."
+            }
+          },
+          "evidence": {
+            "type": "choice",
+            "instructions": "Can the meaning and completeness of this spoken excerpt be assessed from `retained_dialogue`, `before`, `after` and `visual_observations`?",
+            "criteria": {
+              "sufficient": "Spoken words carry the main point. An ordinary spoken explanation or opinion can be judged from a transcript without seeing the speaker or hearing their tone.",
+              "insufficient": "Understanding the main point requires a specific unseen demonstration, object, gesture, or missing/garbled speech. Do not imagine the missing content."
+            }
+          }
+        }
+      }
+    }
+  ]
+}

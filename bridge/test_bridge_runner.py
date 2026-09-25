@@ -98,7 +98,7 @@ class BridgeTests(unittest.TestCase):
         observed = []
         def get_settings():
             observed.append({key: os.environ.get(key) for key in (
-                "CLIPPING_MODE", "PLANNER_MODEL", "PLANNER_FALLBACK_MODELS", "LAYOUT_VISION_ENABLED"
+                "CLIPPING_MODE", "PLANNER_MODEL", "EDITORIAL_REPAIR_MODEL", "PLANNER_FALLBACK_MODELS", "LAYOUT_VISION_ENABLED"
             )})
             return types.SimpleNamespace(openrouter_api_key=None)
         modules = {
@@ -111,6 +111,7 @@ class BridgeTests(unittest.TestCase):
             self.assertFalse(asyncio.run(bridge.run(self.config(clipping_mode="economy"))))
         self.assertEqual(observed, [{
             "CLIPPING_MODE": "economy", "PLANNER_MODEL": "z-ai/glm-5.3-flash",
+            "EDITORIAL_REPAIR_MODEL": "google/gemini-3.8-flash",
             "PLANNER_FALLBACK_MODELS": "", "LAYOUT_VISION_ENABLED": "false",
         }])
 
@@ -155,6 +156,11 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(fallback["message"], "The clipping pipeline failed.")
         self.assertNotIn("secret-pass", json.dumps(fallback))
         self.assertEqual(bridge.describe_failure(None)["message"], "The clipping pipeline failed.")
+        incomplete = bridge.describe_failure('No clips were approved. Review could not finish for 10 of 11 candidates. ' + secret)
+        self.assertEqual(incomplete['message'], 'Clip review could not finish; no clips were exported.')
+        self.assertIn('does not mean the video has no suitable clips', incomplete['hint'])
+        self.assertNotIn('secret-pass', json.dumps(incomplete))
+        self.assertEqual(bridge.describe_failure('No clips passed the coherence review.')['message'], 'No clips passed the coherence review.')
         empty = bridge.describe_failure("No clip-worthy moments found (the video may have no speech, or the selected time range is too short for the chosen clip length)")
         self.assertEqual(empty["message"], "BridgeClip couldn't find any clips in this video.")
         self.assertEqual(bridge.describe_failure("Transcription authentication failed")["message"], "OpenRouter rejected the transcription request.")

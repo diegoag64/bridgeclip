@@ -8,6 +8,7 @@ import errno
 import json
 import os
 from types import SimpleNamespace
+import pytest
 
 from clip_engine.services import ai_clipping_pipeline as pipeline_module
 from clip_engine.services.ai_clipping_pipeline import AIClippingPipeline, ClippingJobRequest, JobStatus
@@ -16,6 +17,13 @@ from clip_engine.services.layout_analyzer import Box, ClipLayoutPlan, LayoutType
 from clip_engine.services.rendering_service import RenderingError, RenderingService, RenderRequest, RenderResult
 from clip_engine.services.transcription_service import TranscriptionResult, TranscriptSegment, TranscriptWord
 from clip_engine.services.s3_upload_service import ClipArtifact, JobOutput
+
+
+@pytest.fixture(autouse=True)
+def approved_candidates_for_render_resilience(monkeypatch):
+    # These tests isolate render/storage failures; coherence failures have their own fixtures.
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr(pipeline_module.CoherenceReviewer, 'prepare', AsyncMock(return_value=True))
 
 
 def test_failed_smart_render_falls_back_to_letterbox(monkeypatch, tmp_path):
@@ -57,7 +65,8 @@ def test_failed_smart_render_falls_back_to_letterbox(monkeypatch, tmp_path):
     assert result.layout_type == "fit"
 
 
-def test_one_failed_clip_does_not_fail_the_job(monkeypatch, tmp_path):
+@pytest.mark.parametrize("debug_capture", [False, True])
+def test_one_failed_clip_does_not_fail_the_job(monkeypatch, tmp_path, debug_capture):
     monkeypatch.setattr(RenderingService, "_verify_ffmpeg", lambda self: None)
     settings = pipeline_module.get_settings()
     monkeypatch.setattr(settings, "local_mode", True)
@@ -68,7 +77,10 @@ def test_one_failed_clip_does_not_fail_the_job(monkeypatch, tmp_path):
 
     async def download(url, output_dir):
         meta = SimpleNamespace(title="Test", duration_seconds=300.0, width=1920, height=1080)
-        return SimpleNamespace(video_path=str(tmp_path / "src.mp4"), metadata=meta, file_size_bytes=1)
+        source = os.path.join(output_dir, "source.mp4")
+        with open(source, "wb") as f:
+            f.write(b"source")
+        return SimpleNamespace(video_path=source, metadata=meta, file_size_bytes=1)
 
     async def transcribe(video_path, work_dir, keyterms=None, **_range):
         words = [TranscriptWord("hi", 0, 500)]
@@ -82,24 +94,46 @@ def test_one_failed_clip_does_not_fail_the_job(monkeypatch, tmp_path):
         if request.start_time_ms == 60_000:
             raise RenderingError("FFmpeg failed: synthetic")
         open(request.output_path, "wb").write(b"mp4")
+        assert request.debug_capture is debug_capture
+        trace_path = None
+        if debug_capture:
+            trace_path = request.output_path + ".framing.json"
+            with open(trace_path, "w") as f:
+                json.dump({"source": {}, "window": {"requested_start_ms": request.start_time_ms}}, f)
         if request.start_time_ms == 0:
             return RenderResult(output_path=request.output_path, file_size_bytes=3,
-                                duration_ms=28_000, layout_type="talking_head")
+                                duration_ms=28_000, layout_type="talking_head", framing_trace_path=trace_path)
         return RenderResult(output_path=request.output_path, file_size_bytes=3, duration_ms=27_000,
-                            layout_type="fit", render_fallback="letterbox")
+                            layout_type="fit", render_fallback="letterbox", framing_trace_path=trace_path)
+
+    preview_calls = []
+    async def preview(source, target):
+        assert os.path.isfile(source)  # captured before work-directory cleanup
+        preview_calls.append(target)
+        with open(target, "wb") as f:
+            f.write(b"preview")
 
     monkeypatch.setattr(pipeline.video_downloader, "download_video", download)
     monkeypatch.setattr(pipeline.transcription_service, "transcribe", transcribe)
     monkeypatch.setattr(pipeline.intelligence_planner, "plan_clips", plan)
     monkeypatch.setattr(pipeline.rendering_service, "render_clip", render)
+    monkeypatch.setattr(pipeline.rendering_service, "capture_framing_source", preview)
     monkeypatch.setattr(settings.__class__, "temp_directory", property(lambda self: str(tmp_path / "work")))
     completed_outputs = []
     monkeypatch.setattr(pipeline, "_update_progress", lambda *args, **kwargs: completed_outputs.append(kwargs["output"]) if kwargs.get("output") else None)
 
-    result = asyncio.run(pipeline.process_video(ClippingJobRequest(video_url="local.mp4", job_id="job1")))
+    result = asyncio.run(pipeline.process_video(ClippingJobRequest(video_url="local.mp4", job_id="job1", debug_capture=debug_capture)))
 
     assert result.status == JobStatus.COMPLETED, result.error
     assert not (tmp_path / "work" / "job1").exists()
+    assert len(preview_calls) == int(debug_capture)
+    if debug_capture:
+        for index, source_start in [(0, 0), (1, 120_000)]:
+            saved = json.loads((tmp_path / "out" / "job1" / f"clip_{index:02d}.framing.json").read_text())
+            assert saved["clip_index"] == index
+            assert saved["source"] == {"duration_ms": 300_000, "preview_status": "available"}
+            assert saved["window"]["requested_start_ms"] == source_start
+        assert (tmp_path / "out" / "job1" / "framing-source.mp4").read_bytes() == b"preview"
     assert (tmp_path / "out" / "job1" / "job_output.json").exists()
     clips = result.output.clips
     assert [c.clip_index for c in clips] == [0, 1]
@@ -208,5 +242,4 @@ def test_local_clips_link_on_same_volume_and_copy_across_volumes(monkeypatch, tm
     copied = tmp_path / "out" / "copied" / "clip_00.mp4"
     assert copied.read_bytes() == b"copied clip"
     assert os.stat(source).st_ino != os.stat(copied).st_ino
-
 

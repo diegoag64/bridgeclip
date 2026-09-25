@@ -135,7 +135,8 @@ function createWindow(): void {
 }
 
 protocol.registerSchemesAsPrivileged([
-  { scheme: 'local-file', privileges: { stream: true, supportFetchAPI: true } }
+  // Chromium needs standard URL semantics to resume and seek media range requests.
+  { scheme: 'local-file', privileges: { standard: true, stream: true, supportFetchAPI: true } }
 ])
 
 app.whenReady().then(() => {
@@ -164,7 +165,11 @@ app.whenReady().then(() => {
     let media: Awaited<ReturnType<typeof openAuthorizedMedia>> | undefined
     try {
       if (request.method !== 'GET' && request.method !== 'HEAD') return new Response(null, { status: 405 })
-      const filePath = decodeURIComponent(request.url.slice('local-file://'.length))
+      const url = new URL(request.url)
+      if (url.host !== 'media' || url.username || url.password || url.search || url.hash) {
+        return new Response('Media unavailable', { status: 403 })
+      }
+      const filePath = decodeURIComponent(url.pathname.slice(1))
       if (isAutomationMedia(filePath)) authorizeMedia(filePath)
       media = await openAuthorizedMedia(filePath, loadSettings().outputDirectory)
       const mimeType: Record<string, string> = {

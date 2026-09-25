@@ -5,6 +5,10 @@ import { getApi } from '../lib/ipc'
 import { clipFilePath } from '../lib/thumbnails'
 import type { ApiCosts, ClipArtifact, JobOutput } from '../store/use-job-store'
 import { ClipCard } from './ClipCard'
+import { EditInspector } from './EditInspector'
+import { FramingInspector } from './FramingInspector'
+import { EditorialWeights } from './EditorialReview'
+import { defaultWeights, editorialScore } from '../../shared/editorial'
 import { AddToAutomationDialog } from './AddToAutomationDialog'
 import { PostDialog, type PostableClip } from './PostDialog'
 import { Page } from './ui/Page'
@@ -17,7 +21,7 @@ import { IconTile } from './ui/IconTile'
 import { Segmented } from './ui/Segmented'
 import type { Page as AppPage } from './Sidebar'
 
-type Sort = 'score' | 'timeline'
+type Sort = 'score' | 'timeline' | 'editorial'
 
 interface ClipListProps {
   output: JobOutput
@@ -40,6 +44,9 @@ function toPostable(clip: ClipArtifact): PostableClip {
 
 export function ClipList({ output, outputDir: runDirectory, leading, onNewClip, onNavigate }: ClipListProps): React.JSX.Element {
   const [sort, setSort] = useState<Sort>('score')
+  const [weights, setWeights] = useState({ ...defaultWeights })
+  const hasEditorial = output.clips.some((c) => c.editorial?.status === 'success')
+  const [inspecting, setInspecting] = useState<ClipArtifact | null>(null)
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [exporting, setExporting] = useState(false)
   const [posting, setPosting] = useState<PostableClip[] | null>(null)
@@ -63,6 +70,8 @@ export function ClipList({ output, outputDir: runDirectory, leading, onNewClip, 
   useEffect(() => {
     if (noticeTimer.current) clearTimeout(noticeTimer.current)
     setSelected(new Set())
+    setInspecting(null)
+    setInspectEdits(false)
     setAspect(null)
     setPosting(null)
     setBankClips(null)
@@ -71,6 +80,7 @@ export function ClipList({ output, outputDir: runDirectory, leading, onNewClip, 
     setNotice(null)
   }, [output])
 
+  const [inspectEdits, setInspectEdits] = useState(false)
   const firstClip = output.clips[0]
   const outputDir = runDirectory ?? (firstClip ? clipFilePath(firstClip.s3_url).replace(/[\\/][^\\/]+$/, '') : '')
 
@@ -82,10 +92,11 @@ export function ClipList({ output, outputDir: runDirectory, leading, onNewClip, 
 
   const clips = useMemo(() => {
     const list = [...output.clips]
+    if (sort === 'editorial') return list.sort((a, b) => (editorialScore(b.editorial, weights) ?? -1) - (editorialScore(a.editorial, weights) ?? -1))
     return sort === 'score'
       ? list.sort((a, b) => b.virality_score - a.virality_score)
       : list.sort((a, b) => a.start_time_ms - b.start_time_ms)
-  }, [output.clips, sort])
+  }, [output.clips, sort, weights])
 
   const allSelected = selected.size > 0 && selected.size === clips.length
 
@@ -142,6 +153,7 @@ export function ClipList({ output, outputDir: runDirectory, leading, onNewClip, 
         }
         actions={
           <>
+            {outputDir && <Button onClick={() => setInspectEdits(true)}>Inspect transcript & edits</Button>}
             {outputDir && (
               <Button icon={<FolderOpen className="h-4 w-4" />} onClick={() => getApi().shell.openPath(outputDir)}>
                 Open folder
@@ -255,12 +267,14 @@ export function ClipList({ output, outputDir: runDirectory, leading, onNewClip, 
             onChange={setSort}
             options={[
               { value: 'score', label: 'Best first' },
+              ...(hasEditorial ? [{ value: 'editorial' as const, label: 'Editorial' }] : []),
               { value: 'timeline', label: 'Timeline' }
             ]}
           />
         </div>
       </div>
 
+      {hasEditorial && <EditorialWeights value={weights} onChange={setWeights} />}
       {clips.length === 0 ? (
         <EmptyState
           className="mt-4"
@@ -288,6 +302,7 @@ export function ClipList({ output, outputDir: runDirectory, leading, onNewClip, 
               onToggleSelect={() => toggle(clip.clip_index)}
               onAspect={aspect == null ? setAspect : undefined}
               onPost={() => setPosting([toPostable(clip)])}
+              onInspectFraming={() => setInspecting(clip)}
               onAddToAutomation={outputDir ? () => setBankClips([clip.clip_index]) : undefined}
             />
           ))}
@@ -295,6 +310,8 @@ export function ClipList({ output, outputDir: runDirectory, leading, onNewClip, 
       )}
 
       {posting && <PostDialog clips={posting} onClose={() => setPosting(null)} onNavigate={onNavigate} />}
+      {inspectEdits && <EditInspector outputDir={outputDir} onClose={() => setInspectEdits(false)} />}
+      {inspecting && <FramingInspector outputDir={outputDir} clip={inspecting} onClose={() => setInspecting(null)} />}
       {bankClips && outputDir && <AddToAutomationDialog
         outputDir={outputDir}
         clipIndices={bankClips}
@@ -351,6 +368,12 @@ function readCosts(value: unknown): ApiCosts | null {
   const layoutVision = section('layout_vision')
   if (layoutVision && typeof layoutVision.model === 'string' && validMoney(layoutVision.estimated_cost_usd)) {
     result.layout_vision = layoutVision as unknown as NonNullable<ApiCosts['layout_vision']>
+  }
+  for (const key of ['editorial', 'editorial_vision', 'editorial_repair'] as const) {
+    const part = section(key)
+    if (part && typeof part.provider === 'string' && typeof part.model === 'string' && validMoney(part.estimated_cost_usd)) {
+      result[key] = { provider: part.provider, model: part.model, estimated_cost_usd: part.estimated_cost_usd }
+    }
   }
   return result
 }
@@ -419,12 +442,17 @@ function CostDetail({ costs }: { costs: ApiCosts }): React.JSX.Element {
   if (costs.transcription) parts.push(`Transcribe ${formatUsd(costs.transcription.estimated_cost_usd)}`)
   if (costs.planning) parts.push(`Plan ${formatUsd(costs.planning.estimated_cost_usd)}`)
   if (costs.layout_vision) parts.push(`Framing ${formatUsd(costs.layout_vision.estimated_cost_usd)}`)
+  if (costs.editorial) parts.push(`Editorial estimate ${formatUsd(costs.editorial.estimated_cost_usd)}`)
+  if (costs.editorial_vision) parts.push(`Context vision ${formatUsd(costs.editorial_vision.estimated_cost_usd)}`)
+  if (costs.editorial_repair) parts.push(`Edit repair ${formatUsd(costs.editorial_repair.estimated_cost_usd)}`)
   const title = [
     costs.transcription &&
       `Transcription: ${costs.transcription.provider}/${costs.transcription.model}, ${formatDuration(costs.transcription.audio_duration_seconds * 1000)} of audio${(costs.transcription.attempts ?? 0) > 1 ? `, ${costs.transcription.attempts} attempts` : ''}`,
     costs.planning &&
       `Planning: ${costs.planning.model}, ${costs.planning.total_tokens.toLocaleString()} tokens${costs.planning.attempts > 1 ? `, ${costs.planning.attempts} attempts` : ''}`,
     costs.layout_vision && `Framing: ${costs.layout_vision.model} checked webcam and screen positions`,
+    costs.editorial && `Editorial: ${costs.editorial.model}, reported cost when available, otherwise estimated from usage`,
+    costs.editorial_vision && `Context vision: ${costs.editorial_vision.model}, reported costs only`,
     'Rendering: local FFmpeg (free)'
   ]
     .filter(Boolean)

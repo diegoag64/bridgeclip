@@ -12,6 +12,7 @@ export function validateJobConfig(value: unknown): ClipJobConfig {
   if (sourceError) throw new Error(sourceError)
   if (typeof v.autoClipCount !== 'boolean' || typeof v.includeCaptions !== 'boolean') throw new Error('Invalid job options')
   if (typeof v.layoutVision !== 'boolean') throw new Error('Invalid vision option')
+  if (v.debugCapture !== undefined && typeof v.debugCapture !== 'boolean') throw new Error('Invalid debug capture option')
   if (v.clippingMode !== undefined && v.clippingMode !== 'quality' && v.clippingMode !== 'economy') throw new Error('Invalid clipping mode')
   if (v.maxClips !== null && (!Number.isInteger(v.maxClips) || v.maxClips < 1 || v.maxClips > 100)) throw new Error('Clip count must be between 1 and 100')
   for (const [key, allowed] of Object.entries({ aspectRatio: ['9:16', '16:9'], layoutStyle: ['auto', 'fill', 'fit'], pacing: ['tight', 'natural'] })) {

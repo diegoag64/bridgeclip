@@ -4,7 +4,7 @@ import { createWriteStream, existsSync, lstatSync, mkdirSync, readFileSync, rena
 import { open, unlink } from 'fs/promises'
 import { basename, extname, join } from 'path'
 import { pipeline } from 'stream/promises'
-import { AUTOMATION_PLATFORMS, dueSlots, type Automation, type AutomationAccount, type AutomationContent, type AutomationUpdate, type GeneratedPlatformMetadata } from '../shared/automations'
+import { AUTOMATION_PLATFORMS, dueSlots, type Automation, type AutomationAccount, type AutomationContent, type AutomationUpdate, type GeneratedPlatformMetadata, type AutomationSourceContext, type MetadataEnhancement, type MetadataResearch, type AutomationSourceGroup, type AutomationBatchResult } from '../shared/automations'
 import { isPostableAccount, isZernioId, type ZernioOverview } from '../shared/zernio'
 import { defaultFacebookFormat, isValidTimeZone, youtubeTitleFor, type PostClipRequest } from '../shared/zernio-posts'
 import { loadSettings } from './settings-store'
@@ -15,7 +15,9 @@ import { probeClipForPosting, publishClip } from './zernio/posts'
 import { parsePostClipRequest } from './zernio/posts-payload'
 import { workspaceId } from './zernio/workspace-cache'
 import { logger } from './logger'
-import { generateAutomationMetadata, transcribeAutomationClip } from './automation-metadata'
+import { generateAutomationMetadata, transcribeAutomationClip, researchAutomationTopic, generateAutomationMetadataBatch, metadataFailureCode, type MetadataBatchClip } from './automation-metadata'
+
+import { completeSourceContext, parseSourceContext, recoverSourceContext, sourceFromOutput, sourceResearchKey } from './automation-source'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const TIME = /^(?:[01]\d|2[0-3]):[0-5]\d$/
@@ -46,11 +48,35 @@ function currentWorkspace(): string {
 function dataPath(workspace: string): string { return join(app.getPath('userData'), `automations-${workspace}.json`) }
 function bankPath(workspace: string, automationId: string): string { return join(app.getPath('userData'), 'automation-bank', workspace, automationId) }
 
+function validEnhancement(value: MetadataEnhancement): boolean {
+  if (!value || !UUID.test(value.id) || typeof value.createdAt !== 'string' || !Number.isFinite(Date.parse(value.createdAt)) ||
+      !Array.isArray(value.platforms) || value.platforms.length > 6 || !value.platforms.every((platform) => AUTOMATION_PLATFORMS.includes(platform)) ||
+      !Array.isArray(value.posts) || value.posts.length !== value.platforms.length ||
+      !value.posts.every((post) => post && value.platforms.includes(post.platform) && typeof post.caption === 'string' && post.caption.length <= 63206 &&
+        (post.title === null || (typeof post.title === 'string' && post.title.length <= 500)) &&
+        (post.categoryId === null || typeof post.categoryId === 'string') && (post.topicTag === null || typeof post.topicTag === 'string') &&
+        Array.isArray(post.tags) && post.tags.length <= 8 && post.tags.every((tag) => typeof tag === 'string' && tag.length <= 100))) return false
+  try { parseSourceContext(value.source) } catch { return false }
+  return validResearch(value.research)
+}
+
+function validResearch(research: MetadataResearch): boolean {
+  return research && ['complete', 'skipped', 'unavailable'].includes(research.status) && typeof research.summary === 'string' && research.summary.length <= 6000 &&
+    Array.isArray(research.sources) && research.sources.length <= 3 && research.sources.every((source) => source && typeof source.title === 'string' && source.title.length <= 300 &&
+      typeof source.url === 'string' && source.url.length <= 2048 && /^https:\/\//.test(source.url))
+}
+
 function validContent(value: unknown): value is AutomationContent {
   if (!value || typeof value !== 'object') return false
   const item = value as AutomationContent
+  try { parseSourceContext(item.sourceContext) } catch { return false }
+  for (const enhancement of [item.metadataDraft, item.metadataEnhancement]) {
+    if (enhancement === undefined || enhancement === null) continue
+    if (!validEnhancement(enhancement)) return false
+  }
   return UUID.test(item.id) && typeof item.fileName === 'string' &&
     item.fileName === `${item.id}${extname(item.fileName)}` && VIDEO_EXTENSIONS.has(extname(item.fileName)) &&
+    (item.metadataError === undefined || item.metadataError === null || (typeof item.metadataError === 'string' && item.metadataError.length <= 500)) &&
     typeof item.title === 'string' && item.title.length <= 500 &&
     typeof item.caption === 'string' && item.caption.length <= 63_206 &&
     (item.transcript === null || (typeof item.transcript === 'string' && item.transcript.length <= 20_000)) &&
@@ -69,6 +95,15 @@ function validContent(value: unknown): value is AutomationContent {
 function validAutomation(value: unknown): value is Automation {
   if (!value || typeof value !== 'object') return false
   const item = value as Automation
+  if (item.sourceResearch !== undefined) {
+    if (!Array.isArray(item.sourceResearch) || item.sourceResearch.length > 50) return false
+    for (const entry of item.sourceResearch) {
+      try {
+        if (!entry || !/^[a-f0-9]{64}$/.test(entry.key) || typeof entry.createdAt !== 'string' || !Number.isFinite(Date.parse(entry.createdAt)) ||
+            !parseSourceContext(entry.source) || !validResearch(entry.research)) return false
+      } catch { return false }
+    }
+  }
   return UUID.test(item.id) && typeof item.name === 'string' && item.name.length <= 80 &&
     typeof item.enabled === 'boolean' && (item.profileId === null || isZernioId(item.profileId)) &&
     (item.metadataMode === 'ai' || item.metadataMode === 'manual') &&
@@ -264,10 +299,10 @@ export async function addLibraryClipsToAutomation(id: unknown, outputDir: unknow
     return path
   })
   const titles = clips.map((clip) => clip!.summary || `Clip ${clip!.clip_index + 1}`)
-  return addAutomationContent(id, paths, titles)
+  return addAutomationContent(id, paths, titles, sourceFromOutput(output))
 }
 
-export async function addAutomationContent(id: unknown, paths: string[], titles?: readonly string[]): Promise<Automation[]> {
+export async function addAutomationContent(id: unknown, paths: string[], titles?: readonly string[], sourceContext?: AutomationSourceContext): Promise<Automation[]> {
   const { workspace, automation } = find(id)
   if (!Array.isArray(paths) || paths.length === 0 || paths.length > 30 || automation.content.length + paths.length > MAX_CONTENT) throw new Error('Choose up to 30 clips at a time.')
   if (busy.has(automation.id)) throw new Error('Wait for the current operation to finish.')
@@ -298,7 +333,7 @@ export async function addAutomationContent(id: unknown, paths: string[], titles?
           throw new Error('Automation changed while adding content.')
         }
         const title = Array.from(titles?.[index] || basename(path, extname(path))).filter((character) => character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127).join('').replace(/[_-]+/g, ' ').trim().slice(0, 500) || 'Untitled clip'
-        const item: AutomationContent = { id: itemId, fileName, title, caption: title, transcript: null, generatedMetadata: null, status: 'queued', addedAt: new Date().toISOString(), postedAt: null, postId: null, error: null }
+        const item: AutomationContent = { id: itemId, fileName, title, caption: title, sourceContext: sourceContext ?? null, transcript: null, generatedMetadata: null, status: 'queued', addedAt: new Date().toISOString(), postedAt: null, postId: null, error: null }
         automation.content.push(item)
         try { save(workspace) }
         catch (error) { automation.content.pop(); throw error }
@@ -316,12 +351,15 @@ export function updateAutomationContent(id: unknown, contentId: unknown, raw: un
   const item = automation.content.find((content) => content.id === contentId)
   if (!item || !raw || typeof raw !== 'object') throw new Error('Clip not found')
   if (item.status === 'posting' || busy.has(automation.id)) throw new Error('Wait for the current post to finish.')
+  if (item.metadataDraft) throw new Error('Apply or discard the enhanced draft before editing this clip.')
   const update = raw as { title?: unknown; caption?: unknown; returnToQueue?: unknown }
   if (typeof update.title !== 'string' || !update.title.trim() || update.title.length > 500 ||
       typeof update.caption !== 'string' || update.caption.length > 63_206) throw new Error('Enter a title and caption within the allowed lengths.')
   item.title = update.title.trim()
   item.caption = update.caption
   item.generatedMetadata = null
+  item.metadataDraft = null
+  item.metadataEnhancement = null
   if (update.returnToQueue === true) {
     if (item.status !== 'needs_review') throw new Error('Only clips needing review can return to the queue.')
     if (item.postId) throw new Error('This clip has a Zernio post. Use Posts on Accounts to review or retry it.')
@@ -343,6 +381,214 @@ export function removeAutomationContent(id: unknown, contentId: unknown): Automa
   return listAutomations()
 }
 
+async function completeBankSource(automation: Automation, source: AutomationSourceContext | null): Promise<AutomationSourceContext | null> {
+  if (!source || source.description) return source
+  const identity = source.url || source.videoId
+  const previous = identity && automation.content.map((item) => item.sourceContext).find((candidate) => candidate && (candidate.url || candidate.videoId) === identity && candidate.description)
+  return previous ? { ...source, description: previous.description, channel: source.channel || previous.channel } : completeSourceContext(source)
+}
+
+async function sharedSourceResearch(workspace: string, automation: Automation, source: AutomationSourceContext | null, transcript = ''): Promise<MetadataResearch> {
+  const key = sourceResearchKey(source)
+  if (!key || !source) return researchAutomationTopic(transcript, source)
+  const previous = automation.sourceResearch?.find((entry) => entry.key === key)
+  // Source terminology is stable; retry unavailable searches after a short cooldown.
+  const ttl = previous?.research.status === 'complete' ? 7 * 86400000 : 5 * 60000
+  if (previous && Date.now() - Date.parse(previous.createdAt) >= 0 && Date.now() - Date.parse(previous.createdAt) < ttl) {
+    return { ...previous.research, scope: 'source', reused: true, researchedAt: previous.createdAt }
+  }
+  const research = await researchAutomationTopic('', source, 'source')
+  if (currentWorkspace() !== workspace || cachedWorkspace !== workspace || !cached.includes(automation)) throw new Error('The Zernio workspace changed. Please try again.')
+  const createdAt = new Date().toISOString()
+  const result = { ...research, scope: 'source' as const, reused: false, researchedAt: createdAt }
+  const old = automation.sourceResearch
+  automation.sourceResearch = [...(old ?? []).filter((entry) => entry.key !== key).slice(-49), { key, createdAt, source, research: result }]
+  try { save(workspace) } catch (error) { automation.sourceResearch = old; throw error }
+  return result
+}
+
+/** Resolve legacy imports before showing video groups; this performs no AI inference. */
+export async function automationEnhancementGroups(id: unknown): Promise<AutomationSourceGroup[]> {
+  const { automation, workspace } = find(id)
+  const platforms = automation.accounts.length ? automation.accounts.map((account) => account.platform) : ['youtube' as const]
+  const needsDraft = (item: AutomationContent): boolean => item.status === 'queued' && !item.postId && !item.metadataDraft &&
+    !(item.metadataEnhancement && platforms.every((platform) => item.generatedMetadata?.some((post) => post.platform === platform)))
+  const candidates = automation.content.filter(needsDraft)
+  for (const item of candidates.slice(0, 100)) {
+    if (currentWorkspace() !== workspace || !cached.includes(automation)) throw new Error('The Zernio workspace changed. Please try again.')
+    await automationContentSource(id, item.id)
+  }
+  const groups = new Map<string, AutomationSourceGroup>()
+  for (const item of candidates) {
+    if (!needsDraft(item)) continue
+    const key = sourceResearchKey(item.sourceContext ?? null) ?? `clip:${item.id}`
+    const group = groups.get(key) ?? { key, title: item.sourceContext?.title || `Source unknown · ${item.title}`, contentIds: [] }
+    group.contentIds.push(item.id)
+    groups.set(key, group)
+  }
+  return [...groups.values()]
+}
+
+/** Keep a whole writing batch reserved, so scheduled publishing cannot race draft preparation. */
+export async function enhanceAutomationBatch(id: unknown, rawIds: unknown, rawKey: unknown): Promise<AutomationBatchResult> {
+  const { workspace, automation } = find(id)
+  if (!Array.isArray(rawIds) || !rawIds.length || rawIds.length > 5 || new Set(rawIds).size !== rawIds.length || !rawIds.every((id) => typeof id === 'string' && UUID.test(id)) || typeof rawKey !== 'string') throw new Error('Choose up to five clips from one video.')
+  if (busy.has(automation.id)) throw new Error('Wait for the current operation to finish.')
+  const selected: AutomationContent[] = []
+  const errors: AutomationBatchResult['errors'] = []
+  let skipped = 0
+  const platforms = automation.accounts.length ? [...new Set(automation.accounts.map((account) => account.platform))] : ['youtube' as const]
+  for (const id of rawIds) {
+    const item = automation.content.find((item) => item.id === id)
+    if (!item || item.status !== 'queued' || item.postId || item.metadataDraft ||
+        (item.metadataEnhancement && platforms.every((platform) => item.generatedMetadata?.some((post) => post.platform === platform)))) { skipped++; continue }
+    if ((sourceResearchKey(item.sourceContext ?? null) ?? `clip:${item.id}`) !== rawKey) {
+      errors.push({ contentId: item.id, message: 'This clip’s source context changed. Refresh the source groups and retry.' }); continue
+    }
+    selected.push(item)
+  }
+  busy.add(automation.id)
+  const ensureCurrent = (): void => {
+    if (currentWorkspace() !== workspace || cachedWorkspace !== workspace || !cached.includes(automation)) throw new Error('The Zernio workspace changed. Please try again.')
+  }
+  const recordErrors = (): void => {
+    ensureCurrent()
+    for (const failure of errors) {
+      const item = automation.content.find((item) => item.id === failure.contentId)
+      if (item && !item.metadataDraft) item.metadataError = failure.message.slice(0, 500)
+      logger.warn('automation.metadata.clip_failed', { automationId: automation.id, contentId: failure.contentId, code: metadataFailureCode(failure.message) })
+    }
+    save(workspace)
+  }
+  try {
+    const clips: MetadataBatchClip[] = []
+    for (const item of selected) {
+      ensureCurrent()
+      try {
+        const path = join(bankPath(workspace, automation.id), item.fileName)
+        if (!isAutomationMedia(path)) throw new Error('Clip file is missing from the content bank.')
+        authorizeMedia(path)
+        if (!item.transcript) {
+          const transcript = await transcribeAutomationClip(path)
+          ensureCurrent(); item.transcript = transcript; save(workspace)
+        }
+        const facebookFormat = platforms.includes('facebook') ? defaultFacebookFormat(await probeClipForPosting(path, null)) : 'feed'
+        ensureCurrent()
+        clips.push({ id: item.id, title: item.title, notes: item.caption, transcript: item.transcript, facebookFormat })
+      } catch (error) { ensureCurrent(); errors.push({ contentId: item.id, message: error instanceof Error ? error.message.slice(0, 500) : 'Clip preparation failed.' }) }
+    }
+    if (!clips.length) { recordErrors(); return { automations: listAutomations(), completed: 0, skipped, errors } }
+    const source = selected[0].sourceContext ?? null
+    const research = await sharedSourceResearch(workspace, automation, source, clips[0].transcript)
+    ensureCurrent()
+    const result = await generateAutomationMetadataBatch(clips, platforms, { source, research })
+    ensureCurrent()
+    let completed = 0
+    for (const item of selected) {
+      const posts = result.posts.get(item.id)
+      if (!posts) {
+        if (result.errors.has(item.id)) errors.push({ contentId: item.id, message: result.errors.get(item.id)! })
+        continue
+      }
+      item.metadataDraft = { id: randomUUID(), createdAt: new Date().toISOString(), platforms, posts, source, research }
+      item.metadataError = null
+      try { save(workspace); completed++ } catch (error) { item.metadataDraft = null; throw error }
+    }
+    recordErrors()
+    logger.info('automation.metadata.batch.completed', { automationId: automation.id, requested: rawIds.length, completed, skipped, failed: errors.length })
+    return { automations: listAutomations(), completed, skipped, errors }
+  } catch (error) {
+    ensureCurrent()
+    const message = error instanceof Error ? error.message.slice(0, 500) : 'Metadata enhancement failed. Try again.'
+    for (const item of selected) if (!item.metadataDraft && !errors.some((failure) => failure.contentId === item.id)) errors.push({ contentId: item.id, message })
+    recordErrors()
+    return { automations: listAutomations(), completed: selected.filter((item) => item.metadataDraft).length, skipped, errors }
+  } finally { busy.delete(automation.id) }
+}
+
+/** Resolve context separately so the user can inspect/correct it before paid generation. */
+export async function automationContentSource(id: unknown, contentId: unknown): Promise<AutomationSourceContext | null> {
+  const { workspace, automation } = find(id)
+  const item = automation.content.find((content) => content.id === contentId)
+  if (!item || item.status !== 'queued' || item.postId) throw new Error('Choose an unposted queued clip.')
+  if (busy.has(automation.id)) throw new Error('Wait for the current operation to finish.')
+  busy.add(automation.id)
+  try {
+    const path = join(bankPath(workspace, automation.id), item.fileName)
+    if (!isAutomationMedia(path)) throw new Error('Clip file is missing from the content bank.')
+    authorizeMedia(path)
+    const source = await completeBankSource(automation, item.sourceContext ?? await recoverSourceContext(path, item.title, loadSettings().outputDirectory))
+    if (currentWorkspace() !== workspace || cachedWorkspace !== workspace || !cached.includes(automation)) throw new Error('The Zernio workspace changed. Please try again.')
+    item.sourceContext = source
+    save(workspace)
+    return source
+  } finally { busy.delete(automation.id) }
+}
+
+export async function enhanceAutomationContent(id: unknown, contentId: unknown, raw: unknown): Promise<Automation[]> {
+  const { workspace, automation } = find(id)
+  const item = automation.content.find((content) => content.id === contentId)
+  if (!item || item.status !== 'queued' || item.postId) throw new Error('Choose an unposted queued clip.')
+  if (!raw || typeof raw !== 'object' || typeof (raw as { research?: unknown }).research !== 'boolean') throw new Error('Choose whether to research the topic.')
+  const options = raw as { source?: unknown; research: boolean }
+  let source = options.source === undefined ? item.sourceContext ?? null : parseSourceContext(options.source)
+  const platforms = automation.accounts.length ? [...new Set(automation.accounts.map((account) => account.platform))] : ['youtube' as const]
+  if (busy.has(automation.id)) throw new Error('Wait for the current operation to finish.')
+  busy.add(automation.id)
+  const ensureCurrent = (): void => {
+    if (currentWorkspace() !== workspace || cachedWorkspace !== workspace || !cached.includes(automation)) throw new Error('The Zernio workspace changed. Please try again.')
+  }
+  try {
+    const path = join(bankPath(workspace, automation.id), item.fileName)
+    if (!isAutomationMedia(path)) throw new Error('Clip file is missing from the content bank.')
+    authorizeMedia(path)
+    source = await completeBankSource(automation, source)
+    ensureCurrent()
+    if (!item.transcript) {
+      const transcript = await transcribeAutomationClip(path)
+      ensureCurrent()
+      item.transcript = transcript
+      save(workspace)
+    }
+    const facebookFormat = platforms.includes('facebook') ? defaultFacebookFormat(await probeClipForPosting(path, null)) : 'feed'
+    ensureCurrent()
+    const research = options.research ? await sharedSourceResearch(workspace, automation, source, item.transcript)
+      : { status: 'skipped' as const, summary: 'Web research was turned off.', sources: [] }
+    ensureCurrent()
+    const posts = await generateAutomationMetadata(item.transcript, item.title, item.caption, platforms, { facebookFormat, source, research })
+    ensureCurrent()
+    const previous = item.metadataDraft
+    item.metadataError = null
+    item.metadataDraft = { id: randomUUID(), createdAt: new Date().toISOString(), platforms, posts, source, research }
+    try { save(workspace) } catch (error) { item.metadataDraft = previous; throw error }
+    return listAutomations()
+  } finally { busy.delete(automation.id) }
+}
+
+/** Only a stored, validated draft can be applied; renderer cannot substitute generated posts. */
+export function resolveAutomationMetadataDraft(id: unknown, contentId: unknown, draftId: unknown, apply: unknown): Automation[] {
+  const { workspace, automation } = find(id)
+  const item = automation.content.find((content) => content.id === contentId)
+  if (!item || item.status !== 'queued' || item.postId || !item.metadataDraft || item.metadataDraft.id !== draftId || typeof apply !== 'boolean') throw new Error('This draft is no longer available. Refresh the bank.')
+  if (busy.has(automation.id)) throw new Error('Wait for the current operation to finish.')
+  const draft = item.metadataDraft
+  if (apply && !automation.accounts.every((account) => draft.platforms.includes(account.platform))) throw new Error('The selected platforms changed. Generate a new draft.')
+  const previous = { ...item }
+  if (apply) {
+    item.generatedMetadata = draft.posts
+    item.metadataEnhancement = draft
+    item.sourceContext = draft.source
+    const primary = draft.posts.find((post) => post.platform === 'youtube') ?? draft.posts[0]
+    item.title = primary.title || item.title
+    item.caption = primary.caption
+  }
+  item.metadataDraft = null
+  item.error = null
+  automation.lastError = null
+  try { save(workspace) } catch (error) { Object.assign(item, previous); throw error }
+  return listAutomations()
+}
+
 export async function runAutomation(id: unknown, slot?: { time: string; date: string }): Promise<Automation[]> {
   const { workspace, automation } = find(id)
   if (busy.has(automation.id)) return listAutomations()
@@ -351,6 +597,11 @@ export async function runAutomation(id: unknown, slot?: { time: string; date: st
   const item = automation.content.find((content) => content.status === 'queued')
   if (!item) {
     automation.lastError = 'No queued clips are available.'
+    save(workspace)
+    return listAutomations()
+  }
+  if (item.metadataDraft) {
+    automation.lastError = 'Review the next clip’s enhanced metadata draft: apply or discard it before posting.'
     save(workspace)
     return listAutomations()
   }
@@ -367,10 +618,16 @@ export async function runAutomation(id: unknown, slot?: { time: string; date: st
     const path = join(bankPath(workspace, automation.id), item.fileName)
     if (!isAutomationMedia(path)) throw new Error('Clip file is missing from the content bank.')
     authorizeMedia(path)
-    const facebookFormat = automation.metadataMode === 'ai' && automation.accounts.some((account) => account.platform === 'facebook')
+    const facebookFormat = (automation.metadataMode === 'ai' || Boolean(item.metadataEnhancement)) && automation.accounts.some((account) => account.platform === 'facebook')
       ? defaultFacebookFormat(await probeClipForPosting(path, null)) : 'feed'
     let generated: GeneratedPlatformMetadata[] | null = null
-    if (automation.metadataMode === 'ai') {
+    if (item.metadataEnhancement && item.generatedMetadata) {
+      const platforms = automation.accounts.map((account) => account.platform)
+      if (!platforms.every((platform) => item.generatedMetadata!.some((post) => post.platform === platform))) {
+        throw new Error('The selected platforms changed. Enhance and review this clip again before posting.')
+      }
+      generated = item.generatedMetadata
+    } else if (automation.metadataMode === 'ai') {
       const platforms = [...new Set(automation.accounts.map((account) => account.platform))]
       if (!item.transcript) {
         const transcript = await transcribeAutomationClip(path)
@@ -380,7 +637,7 @@ export async function runAutomation(id: unknown, slot?: { time: string; date: st
       }
       if (!item.generatedMetadata || item.generatedMetadata.some((post) => post.topicTag === undefined) ||
           !platforms.every((platform) => item.generatedMetadata?.some((post) => post.platform === platform))) {
-        const metadata = await generateAutomationMetadata(item.transcript, item.title, item.caption, platforms, { facebookFormat })
+        const metadata = await generateAutomationMetadata(item.transcript, item.title, item.caption, platforms, { facebookFormat, source: item.sourceContext })
         if (currentWorkspace() !== workspace || !cached.includes(automation)) return []
         item.generatedMetadata = metadata
         save(workspace)

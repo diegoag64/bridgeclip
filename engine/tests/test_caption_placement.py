@@ -88,7 +88,10 @@ class TestFaceGeometry:
                 assert f"crop={w}:{h}:{x}:{y}" in chain
         # The small webcam is letterboxed inside its panel: same offsets as the overlay.
         (_, _), (_, (dx, dy, dw, dh)) = shot_views(small_cam, 0, SRC_W, SRC_H, OUT_W, OUT_H)
-        top_h = shot_views(small_cam, 0, SRC_W, SRC_H, OUT_W, OUT_H)[0][1][3]
+        # The screen is now fitted inside a padded panel. Its visible height
+        # alone is not the seam: include the centered padding on both sides.
+        _, (_, screen_y, _, screen_h) = shot_views(small_cam, 0, SRC_W, SRC_H, OUT_W, OUT_H)[0]
+        top_h = screen_h + 2 * screen_y
         assert f"overlay={dx}:{dy - top_h}" in shot_chain(0, small_cam, SRC_W, SRC_H, OUT_W, OUT_H)
 
     def test_each_two_shot_face_lands_in_its_own_panel(self):

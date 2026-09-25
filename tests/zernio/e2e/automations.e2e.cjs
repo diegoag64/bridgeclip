@@ -27,12 +27,24 @@ test('add selected library clips to an automation and run the next one', { timeo
   })
   fs.writeFileSync(path.join(run, 'job_output.json'), JSON.stringify({
     job_id: 'automation-library-run', source_video_title: 'Automation library run',
+    source_video_description: 'A conversation about speech recognition for reliable automation.',
     clips: clips.map((file, index) => ({ clip_index: index, s3_url: `file://${file}`, duration_ms: 4000,
       start_time_ms: index * 4000, end_time_ms: (index + 1) * 4000, virality_score: 0.8 - index * 0.1,
       summary: index === 0 ? 'First library clip' : 'Second library clip' }))
   }))
   const posting = createPostingMock()
-  const mock = await createMockZernio({ apiKey: KEY, extraRoutes: posting.routes })
+  let researchCalls = 0; let batchWritingCalls = 0; let failLargeBatches = false
+  const mock = await createMockZernio({ apiKey: KEY, extraRoutes: [...posting.routes,
+    { method: 'POST', path: '/speech', auth: false, handler: (ctx) => ctx.json(200, { text: 'Accurate transcripts make automations reliable.' }) },
+    { method: 'POST', path: '/chat', auth: false, handler: (ctx) => {
+      if (ctx.body.tools) { researchCalls++; return ctx.json(200, { choices: [{ message: { content: 'Relevant terms: speech recognition and reliable automation.', annotations: [{ type: 'url_citation', url_citation: { title: 'Recognition guide', url: 'https://example.com/recognition' } }] } }] }) }
+      const input = JSON.parse(ctx.body.messages[1].content)
+      if (failLargeBatches && input.clips?.length === 5) return ctx.json(503, { error: 'test provider interruption' })
+      const posts = input.platforms.map(({ platform }) => ({ platform, title: platform === 'youtube' ? 'Why Transcript Accuracy Matters for Automation' : null, caption: 'Accurate transcripts make automations reliable. Here is the connection to speech recognition.', tags: platform === 'youtube' ? ['speech recognition'] : [], categoryId: platform === 'youtube' ? '28' : null, topicTag: null, evidence: 'Accurate transcripts make automations reliable.' }))
+      if (input.clips) batchWritingCalls++
+      ctx.json(200, { choices: [{ message: { content: JSON.stringify(input.clips ? { clips: input.clips.map((clip) => ({ id: clip.id, posts })) } : { posts }) } }] })
+    } }
+  ] })
   const [profile] = mock.state.profiles
   mock.addAccount('youtube', profile._id, { username: 'channel' })
   mock.addAccount('instagram', profile._id, { username: 'creator' })
@@ -43,9 +55,10 @@ test('add selected library clips to an automation and run the next one', { timeo
     fs.rmSync(work, { recursive: true, force: true })
   })
   const appDir = buildApp(path.join(work, 'app'))
-  session = await launchApp({ appDir, userDataDir: path.join(work, 'userData'), mock })
+  session = await launchApp({ appDir, userDataDir: path.join(work, 'userData'), mock, env: { BRIDGECLIP_E2E_TRANSCRIPTION_URL: `${mock.url}/speech`, BRIDGECLIP_E2E_OPENROUTER_URL: `${mock.url}/chat`, PATH: `${process.env.PATH}${path.delimiter}${path.join(ROOT, 'engine-bin')}` } })
   const { page, app } = session
   await page.evaluate((key) => window.bridgeclip.settings.replaceApiKey('zernioApiKey', key), KEY)
+  await page.evaluate(() => window.bridgeclip.settings.replaceApiKey('openrouterApiKey', 'e2e-only-key'))
   await page.reload()
   await page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: /Automations/ }).click()
   await page.getByLabel('Automation name').fill('BridgeMind')
@@ -107,4 +120,63 @@ test('add selected library clips to an automation and run the next one', { timeo
   assert.deepEqual(posting.state.creates[0].body.platforms.map((target) => target.platform), ['youtube', 'instagram'])
   assert.equal(posting.state.creates[0].body.platforms[0].platformSpecificData.visibility, 'unlisted')
   assert.equal(await page.getByRole('button', { name: 'Run now' }).isDisabled(), false, 'the remaining clip can be run next')
+  await page.getByRole('button', { name: 'Enhance', exact: true }).click()
+  let dialog = page.getByRole('dialog', { name: 'Enhance title & caption' })
+  await dialog.getByRole('button', { name: 'Generate draft' }).waitFor()
+  await page.waitForFunction(() => document.querySelector('input[id$="-source-title"]')?.value === 'Automation library run')
+  assert.equal(await dialog.getByLabel('Original description', { exact: true }).inputValue(), 'A conversation about speech recognition for reliable automation.')
+  await dialog.getByRole('button', { name: 'Generate draft' }).click()
+  dialog = page.getByRole('dialog', { name: 'Review enhanced metadata' })
+  await dialog.getByText('Why Transcript Accuracy Matters for Automation', { exact: true }).waitFor()
+  assert.equal(posting.state.creates.length, 1, 'enhancing never publishes')
+  await dialog.getByText('Context & research · complete').click()
+  await dialog.getByText('Recognition guide', { exact: false }).waitFor()
+  if (process.env.BRIDGECLIP_ENHANCEMENT_SCREENSHOT) await page.screenshot({ path: process.env.BRIDGECLIP_ENHANCEMENT_SCREENSHOT })
+  await dialog.getByRole('button', { name: 'Review later' }).click()
+  await page.getByRole('button', { name: 'Run now' }).click()
+  await page.getByText('Review the next clip’s enhanced metadata draft: apply or discard it before posting.', { exact: true }).first().waitFor()
+  assert.equal(posting.state.creates.length, 1, 'pending draft holds the queue')
+  await page.getByRole('button', { name: 'Review draft' }).click()
+  await page.getByRole('dialog').getByRole('button', { name: 'Apply metadata' }).click()
+  await page.getByText('Why Transcript Accuracy Matters for Automation', { exact: true }).waitFor()
+  const saved = await page.evaluate(() => window.bridgeclip.automations.list())
+  assert.equal(saved[0].content[1].metadataDraft, null)
+  assert.equal(saved[0].content[1].generatedMetadata[0].title, 'Why Transcript Accuracy Matters for Automation')
+  assert.equal(posting.state.creates.length, 1, 'applying copy does not publish immediately')
+  await page.evaluate(async ({ run }) => {
+    const [automation] = await window.bridgeclip.automations.list()
+    await window.bridgeclip.automations.addLibraryClips(automation.id, run, [0, 1])
+  }, { run })
+  await page.reload()
+  await page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: /Automations/ }).click()
+  await page.getByRole('button', { name: 'Enhance by source video' }).click()
+  await page.getByLabel('Original video', { exact: true }).waitFor()
+  assert.match(await page.getByLabel('Original video', { exact: true }).textContent(), /Automation library run · 2 clips/)
+  if (process.env.BRIDGECLIP_BATCH_SCREENSHOT) await page.screenshot({ path: process.env.BRIDGECLIP_BATCH_SCREENSHOT })
+  await page.getByRole('button', { name: 'Enhance 2 clips from this video' }).click()
+  await page.getByText(/2 drafts ready to review/).waitFor()
+  assert.equal(batchWritingCalls, 1, 'one writing request for two clips')
+  assert.equal(researchCalls, 1, 'batch reuses the source research from individual enhancement')
+  assert.equal(posting.state.creates.length, 1, 'batch does not publish')
+  assert.equal(await page.getByRole('button', { name: 'Review draft', exact: true }).count(), 2)
+  // A failed five-clip request must not prevent the later batch from running.
+  await page.evaluate(async ({ run }) => {
+    const [automation] = await window.bridgeclip.automations.list()
+    for (let batch = 0; batch < 3; batch++) await window.bridgeclip.automations.addLibraryClips(automation.id, run, [0, 1])
+  }, { run })
+  failLargeBatches = true
+  await page.reload()
+  await page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: /Automations/ }).click()
+  await page.getByRole('button', { name: 'Enhance by source video' }).click()
+  await page.getByRole('button', { name: 'Enhance 6 clips from this video' }).click()
+  await page.getByText(/1 drafts ready to review · 5 failed · 0 already handled · 0 not attempted/).waitFor()
+  const afterFailure = await page.evaluate(() => window.bridgeclip.automations.list())
+  assert.equal(afterFailure[0].content.filter((item) => item.metadataError).length, 5)
+  assert.equal(afterFailure[0].content.at(-1).metadataDraft.posts.length, 2)
+  assert.equal(posting.state.creates.length, 1)
+  await page.reload()
+  await page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: /Automations/ }).click()
+  await page.getByText(/Metadata enhancement failed:/).first().waitFor()
+
+
 })

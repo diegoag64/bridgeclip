@@ -1,0 +1,1661 @@
+{
+  "version": 1,
+  "source": {
+    "width": 640,
+    "height": 360,
+    "duration_ms": 16000,
+    "preview_status": "available"
+  },
+  "window": {
+    "start_ms": 2000,
+    "duration_ms": 12000,
+    "requested_start_ms": 2300,
+    "requested_end_ms": 13500
+  },
+  "output": {
+    "width": 360,
+    "height": 640,
+    "duration_ms": 10500,
+    "fps": 30.0
+  },
+  "sample_fps": 4.0,
+  "thresholds": {
+    "FACE_SCORE_THRESHOLD": 0.72,
+    "STRONG_FACE_SCORE": 0.9,
+    "COMPETING_FACE_SCORE": 0.85,
+    "SHOT_CUT_THRESHOLD": 0.42,
+    "MIN_SHOT_MS": 1200,
+    "LAYOUT_CHANGE_MS": 500,
+    "LAYOUT_CHANGE_SAMPLES": 3,
+    "MIN_TRACK_PRESENCE": 0.35,
+    "OVERLAY_MAX_FACE_HEIGHT": 0.17,
+    "MIN_FACE_HEIGHT": 0.035
+  },
+  "config": {
+    "style": "auto",
+    "pacing": "tight",
+    "vision_enabled": true,
+    "vision_model": "fixture/model",
+    "detector": "YuNet face_detection_yunet_2023mar",
+    "analysis_width": 640
+  },
+  "analysis_status": "recorded",
+  "samples": [
+    {
+      "t_ms": 0,
+      "faces": [
+        {
+          "box": [
+            0.08,
+            0.78,
+            0.05,
+            0.09
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "screen_cam",
+      "histogram_distance": null
+    },
+    {
+      "t_ms": 250,
+      "faces": [
+        {
+          "box": [
+            0.08,
+            0.78,
+            0.05,
+            0.09
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "screen_cam",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 500,
+      "faces": [
+        {
+          "box": [
+            0.08,
+            0.78,
+            0.05,
+            0.09
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "screen_cam",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 750,
+      "faces": [
+        {
+          "box": [
+            0.08,
+            0.78,
+            0.05,
+            0.09
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "screen_cam",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 1000,
+      "faces": [
+        {
+          "box": [
+            0.08,
+            0.78,
+            0.05,
+            0.09
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "screen_cam",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 1250,
+      "faces": [
+        {
+          "box": [
+            0.08,
+            0.78,
+            0.05,
+            0.09
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "screen_cam",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 1500,
+      "faces": [
+        {
+          "box": [
+            0.08,
+            0.78,
+            0.05,
+            0.09
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "screen_cam",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 1750,
+      "faces": [
+        {
+          "box": [
+            0.08,
+            0.78,
+            0.05,
+            0.09
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "screen_cam",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 2000,
+      "faces": [
+        {
+          "box": [
+            0.08,
+            0.78,
+            0.05,
+            0.09
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "screen_cam",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 2250,
+      "faces": [
+        {
+          "box": [
+            0.08,
+            0.78,
+            0.05,
+            0.09
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "screen_cam",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 2500,
+      "faces": [
+        {
+          "box": [
+            0.08,
+            0.78,
+            0.05,
+            0.09
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "screen_cam",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 2750,
+      "faces": [
+        {
+          "box": [
+            0.08,
+            0.78,
+            0.05,
+            0.09
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "screen_cam",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 3000,
+      "faces": [
+        {
+          "box": [
+            0.08,
+            0.78,
+            0.05,
+            0.09
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "screen_cam",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 3250,
+      "faces": [
+        {
+          "box": [
+            0.08,
+            0.78,
+            0.05,
+            0.09
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "screen_cam",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 3500,
+      "faces": [
+        {
+          "box": [
+            0.08,
+            0.78,
+            0.05,
+            0.09
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "screen_cam",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 3750,
+      "faces": [
+        {
+          "box": [
+            0.08,
+            0.78,
+            0.05,
+            0.09
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "screen_cam",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 4000,
+      "faces": [
+        {
+          "box": [
+            0.43,
+            0.2,
+            0.14,
+            0.3
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "talking_head",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 4250,
+      "faces": [
+        {
+          "box": [
+            0.43,
+            0.2,
+            0.14,
+            0.3
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "talking_head",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 4500,
+      "faces": [
+        {
+          "box": [
+            0.43,
+            0.2,
+            0.14,
+            0.3
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "talking_head",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 4750,
+      "faces": [
+        {
+          "box": [
+            0.43,
+            0.2,
+            0.14,
+            0.3
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "talking_head",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 5000,
+      "faces": [
+        {
+          "box": [
+            0.43,
+            0.2,
+            0.14,
+            0.3
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "talking_head",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 5250,
+      "faces": [
+        {
+          "box": [
+            0.43,
+            0.2,
+            0.14,
+            0.3
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "talking_head",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 5500,
+      "faces": [
+        {
+          "box": [
+            0.43,
+            0.2,
+            0.14,
+            0.3
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "talking_head",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 5750,
+      "faces": [
+        {
+          "box": [
+            0.43,
+            0.2,
+            0.14,
+            0.3
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "talking_head",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 6000,
+      "faces": [
+        {
+          "box": [
+            0.43,
+            0.2,
+            0.14,
+            0.3
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "talking_head",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 6250,
+      "faces": [],
+      "content_box": null,
+      "evidence": "screen",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 6500,
+      "faces": [],
+      "content_box": null,
+      "evidence": "screen",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 6750,
+      "faces": [
+        {
+          "box": [
+            0.43,
+            0.2,
+            0.14,
+            0.3
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "talking_head",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 7000,
+      "faces": [
+        {
+          "box": [
+            0.43,
+            0.2,
+            0.14,
+            0.3
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "talking_head",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 7250,
+      "faces": [
+        {
+          "box": [
+            0.43,
+            0.2,
+            0.14,
+            0.3
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "talking_head",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 7500,
+      "faces": [
+        {
+          "box": [
+            0.43,
+            0.2,
+            0.14,
+            0.3
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "talking_head",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 7750,
+      "faces": [
+        {
+          "box": [
+            0.43,
+            0.2,
+            0.14,
+            0.3
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "talking_head",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 8000,
+      "faces": [
+        {
+          "box": [
+            0.08,
+            0.78,
+            0.05,
+            0.09
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "screen_cam",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 8250,
+      "faces": [
+        {
+          "box": [
+            0.08,
+            0.78,
+            0.05,
+            0.09
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "screen_cam",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 8500,
+      "faces": [
+        {
+          "box": [
+            0.08,
+            0.78,
+            0.05,
+            0.09
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "screen_cam",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 8750,
+      "faces": [
+        {
+          "box": [
+            0.08,
+            0.78,
+            0.05,
+            0.09
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "screen_cam",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 9000,
+      "faces": [
+        {
+          "box": [
+            0.08,
+            0.78,
+            0.05,
+            0.09
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "screen_cam",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 9250,
+      "faces": [
+        {
+          "box": [
+            0.08,
+            0.78,
+            0.05,
+            0.09
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "screen_cam",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 9500,
+      "faces": [
+        {
+          "box": [
+            0.08,
+            0.78,
+            0.05,
+            0.09
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "screen_cam",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 9750,
+      "faces": [
+        {
+          "box": [
+            0.08,
+            0.78,
+            0.05,
+            0.09
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "screen_cam",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 10000,
+      "faces": [
+        {
+          "box": [
+            0.08,
+            0.78,
+            0.05,
+            0.09
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "screen_cam",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 10250,
+      "faces": [
+        {
+          "box": [
+            0.08,
+            0.78,
+            0.05,
+            0.09
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "screen_cam",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 10500,
+      "faces": [
+        {
+          "box": [
+            0.08,
+            0.78,
+            0.05,
+            0.09
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "screen_cam",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 10750,
+      "faces": [
+        {
+          "box": [
+            0.08,
+            0.78,
+            0.05,
+            0.09
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "screen_cam",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 11000,
+      "faces": [
+        {
+          "box": [
+            0.08,
+            0.78,
+            0.05,
+            0.09
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "screen_cam",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 11250,
+      "faces": [
+        {
+          "box": [
+            0.08,
+            0.78,
+            0.05,
+            0.09
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "screen_cam",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 11500,
+      "faces": [
+        {
+          "box": [
+            0.08,
+            0.78,
+            0.05,
+            0.09
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "screen_cam",
+      "histogram_distance": 0.0
+    },
+    {
+      "t_ms": 11750,
+      "faces": [
+        {
+          "box": [
+            0.08,
+            0.78,
+            0.05,
+            0.09
+          ],
+          "score": 0.973
+        }
+      ],
+      "content_box": null,
+      "evidence": "screen_cam",
+      "histogram_distance": 0.0
+    }
+  ],
+  "boundaries": [
+    {
+      "t_ms": 4000,
+      "kind": "layout",
+      "accepted": true,
+      "from_layout": "screen_cam",
+      "to_layout": "talking_head",
+      "hold_ms": 500,
+      "samples": 3
+    },
+    {
+      "t_ms": 8000,
+      "kind": "layout",
+      "accepted": true,
+      "from_layout": "talking_head",
+      "to_layout": "screen_cam",
+      "hold_ms": 500,
+      "samples": 3
+    }
+  ],
+  "decisions": [
+    {
+      "start_ms": 0,
+      "end_ms": 4000,
+      "tracks": [
+        {
+          "id": 0,
+          "selected": false,
+          "samples": [
+            [
+              0,
+              0
+            ],
+            [
+              250,
+              0
+            ],
+            [
+              500,
+              0
+            ],
+            [
+              750,
+              0
+            ],
+            [
+              1000,
+              0
+            ],
+            [
+              1250,
+              0
+            ],
+            [
+              1500,
+              0
+            ],
+            [
+              1750,
+              0
+            ],
+            [
+              2000,
+              0
+            ],
+            [
+              2250,
+              0
+            ],
+            [
+              2500,
+              0
+            ],
+            [
+              2750,
+              0
+            ],
+            [
+              3000,
+              0
+            ],
+            [
+              3250,
+              0
+            ],
+            [
+              3500,
+              0
+            ],
+            [
+              3750,
+              0
+            ]
+          ]
+        }
+      ],
+      "vision": {
+        "status": "success",
+        "t_ms": 2000,
+        "source_ms": 4000,
+        "cache_id": "50ee9a308e3a84f3",
+        "cache_source_ms": 4000,
+        "model": "fixture/model",
+        "cache_hit": false,
+        "validated": {
+          "start_ms": 0,
+          "end_ms": 0,
+          "layout": "screen_cam",
+          "source": "vision",
+          "screen_box": [
+            0.0,
+            0.0,
+            1.0,
+            1.0
+          ],
+          "screen_focus": null,
+          "cam_box": [
+            0.01,
+            0.65,
+            0.25,
+            0.33
+          ],
+          "people": [],
+          "content_box": null,
+          "cam_box_refined": false
+        }
+      },
+      "heuristic": {
+        "start_ms": 0,
+        "end_ms": 4000,
+        "layout": "screen_cam",
+        "source": "heuristic",
+        "screen_box": [
+          0.0,
+          0.0,
+          1.0,
+          1.0
+        ],
+        "screen_focus": null,
+        "cam_box": [
+          0.0,
+          0.6786,
+          0.3214,
+          0.3214
+        ],
+        "people": [],
+        "content_box": null,
+        "cam_box_refined": false
+      }
+    },
+    {
+      "start_ms": 4000,
+      "end_ms": 8000,
+      "tracks": [
+        {
+          "id": 0,
+          "selected": true,
+          "samples": [
+            [
+              4000,
+              0
+            ],
+            [
+              4250,
+              0
+            ],
+            [
+              4500,
+              0
+            ],
+            [
+              4750,
+              0
+            ],
+            [
+              5000,
+              0
+            ],
+            [
+              5250,
+              0
+            ],
+            [
+              5500,
+              0
+            ],
+            [
+              5750,
+              0
+            ],
+            [
+              6000,
+              0
+            ],
+            [
+              6750,
+              0
+            ],
+            [
+              7000,
+              0
+            ],
+            [
+              7250,
+              0
+            ],
+            [
+              7500,
+              0
+            ],
+            [
+              7750,
+              0
+            ]
+          ]
+        }
+      ],
+      "vision": {
+        "status": "success",
+        "t_ms": 6000,
+        "source_ms": 8000,
+        "cache_id": "2f008e391f2f1677",
+        "cache_source_ms": 8000,
+        "model": "fixture/model",
+        "cache_hit": false,
+        "validated": {
+          "start_ms": 0,
+          "end_ms": 0,
+          "layout": "talking_head",
+          "source": "vision",
+          "screen_box": null,
+          "screen_focus": null,
+          "cam_box": null,
+          "people": [
+            [
+              0.43,
+              0.2,
+              0.14,
+              0.3
+            ]
+          ],
+          "content_box": null,
+          "cam_box_refined": false
+        }
+      },
+      "heuristic": {
+        "start_ms": 4000,
+        "end_ms": 8000,
+        "layout": "talking_head",
+        "source": "heuristic",
+        "screen_box": null,
+        "screen_focus": null,
+        "cam_box": null,
+        "people": [
+          [
+            0.43,
+            0.2,
+            0.14,
+            0.3
+          ]
+        ],
+        "content_box": null,
+        "cam_box_refined": false
+      }
+    },
+    {
+      "start_ms": 8000,
+      "end_ms": 12000,
+      "tracks": [
+        {
+          "id": 0,
+          "selected": false,
+          "samples": [
+            [
+              8000,
+              0
+            ],
+            [
+              8250,
+              0
+            ],
+            [
+              8500,
+              0
+            ],
+            [
+              8750,
+              0
+            ],
+            [
+              9000,
+              0
+            ],
+            [
+              9250,
+              0
+            ],
+            [
+              9500,
+              0
+            ],
+            [
+              9750,
+              0
+            ],
+            [
+              10000,
+              0
+            ],
+            [
+              10250,
+              0
+            ],
+            [
+              10500,
+              0
+            ],
+            [
+              10750,
+              0
+            ],
+            [
+              11000,
+              0
+            ],
+            [
+              11250,
+              0
+            ],
+            [
+              11500,
+              0
+            ],
+            [
+              11750,
+              0
+            ]
+          ]
+        }
+      ],
+      "vision": {
+        "status": "success",
+        "t_ms": 10000,
+        "source_ms": 12000,
+        "cache_id": "50ee9a308e3a84f3",
+        "cache_source_ms": 4000,
+        "model": "fixture/model",
+        "cache_hit": true,
+        "validated": {
+          "start_ms": 0,
+          "end_ms": 0,
+          "layout": "screen_cam",
+          "source": "vision",
+          "screen_box": [
+            0.0,
+            0.0,
+            1.0,
+            1.0
+          ],
+          "screen_focus": null,
+          "cam_box": [
+            0.01,
+            0.65,
+            0.25,
+            0.33
+          ],
+          "people": [],
+          "content_box": null,
+          "cam_box_refined": false
+        }
+      },
+      "heuristic": {
+        "start_ms": 8000,
+        "end_ms": 12000,
+        "layout": "screen_cam",
+        "source": "heuristic",
+        "screen_box": [
+          0.0,
+          0.0,
+          1.0,
+          1.0
+        ],
+        "screen_focus": null,
+        "cam_box": [
+          0.0,
+          0.6786,
+          0.3214,
+          0.3214
+        ],
+        "people": [],
+        "content_box": null,
+        "cam_box_refined": false
+      }
+    }
+  ],
+  "attempted_plan": [
+    {
+      "start_ms": 0,
+      "end_ms": 4000,
+      "layout": "screen_cam",
+      "source": "vision",
+      "screen_box": [
+        0.0,
+        0.0,
+        1.0,
+        1.0
+      ],
+      "screen_focus": null,
+      "cam_box": [
+        0.01,
+        0.65,
+        0.25,
+        0.33
+      ],
+      "people": [],
+      "content_box": null,
+      "cam_box_refined": false,
+      "detected_layout": "screen_cam",
+      "cam_face": [
+        0.08,
+        0.78,
+        0.05,
+        0.09
+      ],
+      "focus_path": [],
+      "crop_path": [],
+      "views": [
+        {
+          "source": [
+            190,
+            0,
+            448,
+            360
+          ],
+          "destination": [
+            0,
+            48,
+            360,
+            288
+          ]
+        },
+        {
+          "source": [
+            8,
+            262,
+            118,
+            84
+          ],
+          "destination": [
+            27,
+            403,
+            306,
+            218
+          ]
+        }
+      ]
+    },
+    {
+      "start_ms": 4000,
+      "end_ms": 8000,
+      "layout": "talking_head",
+      "source": "vision",
+      "screen_box": null,
+      "screen_focus": null,
+      "cam_box": null,
+      "people": [
+        [
+          0.43,
+          0.2,
+          0.14,
+          0.3
+        ]
+      ],
+      "content_box": null,
+      "cam_box_refined": false,
+      "detected_layout": "talking_head",
+      "cam_face": null,
+      "focus_path": [
+        [
+          0,
+          0.5,
+          0.35
+        ],
+        [
+          3750,
+          0.5,
+          0.35
+        ]
+      ],
+      "crop_path": [
+        [
+          4000,
+          219.0,
+          0
+        ],
+        [
+          7750,
+          219.0,
+          0
+        ]
+      ],
+      "views": [
+        {
+          "source": [
+            219.0,
+            0,
+            202,
+            360
+          ],
+          "destination": [
+            0,
+            0,
+            360,
+            640
+          ]
+        }
+      ]
+    },
+    {
+      "start_ms": 8000,
+      "end_ms": 12000,
+      "layout": "screen_cam",
+      "source": "vision",
+      "screen_box": [
+        0.0,
+        0.0,
+        1.0,
+        1.0
+      ],
+      "screen_focus": null,
+      "cam_box": [
+        0.01,
+        0.65,
+        0.25,
+        0.33
+      ],
+      "people": [],
+      "content_box": null,
+      "cam_box_refined": false,
+      "detected_layout": "screen_cam",
+      "cam_face": [
+        0.08,
+        0.78,
+        0.05,
+        0.09
+      ],
+      "focus_path": [],
+      "crop_path": [],
+      "views": [
+        {
+          "source": [
+            190,
+            0,
+            448,
+            360
+          ],
+          "destination": [
+            0,
+            48,
+            360,
+            288
+          ]
+        },
+        {
+          "source": [
+            8,
+            262,
+            118,
+            84
+          ],
+          "destination": [
+            27,
+            403,
+            306,
+            218
+          ]
+        }
+      ]
+    }
+  ],
+  "rendered_plan": [
+    {
+      "start_ms": 0,
+      "end_ms": 4000,
+      "layout": "screen_cam",
+      "source": "vision",
+      "screen_box": [
+        0.0,
+        0.0,
+        1.0,
+        1.0
+      ],
+      "screen_focus": null,
+      "cam_box": [
+        0.01,
+        0.65,
+        0.25,
+        0.33
+      ],
+      "people": [],
+      "content_box": null,
+      "cam_box_refined": false,
+      "detected_layout": "screen_cam",
+      "cam_face": [
+        0.08,
+        0.78,
+        0.05,
+        0.09
+      ],
+      "focus_path": [],
+      "crop_path": [],
+      "views": [
+        {
+          "source": [
+            190,
+            0,
+            448,
+            360
+          ],
+          "destination": [
+            0,
+            48,
+            360,
+            288
+          ]
+        },
+        {
+          "source": [
+            8,
+            262,
+            118,
+            84
+          ],
+          "destination": [
+            27,
+            403,
+            306,
+            218
+          ]
+        }
+      ]
+    },
+    {
+      "start_ms": 4000,
+      "end_ms": 8000,
+      "layout": "talking_head",
+      "source": "vision",
+      "screen_box": null,
+      "screen_focus": null,
+      "cam_box": null,
+      "people": [
+        [
+          0.43,
+          0.2,
+          0.14,
+          0.3
+        ]
+      ],
+      "content_box": null,
+      "cam_box_refined": false,
+      "detected_layout": "talking_head",
+      "cam_face": null,
+      "focus_path": [
+        [
+          0,
+          0.5,
+          0.35
+        ],
+        [
+          3750,
+          0.5,
+          0.35
+        ]
+      ],
+      "crop_path": [
+        [
+          4000,
+          219.0,
+          0
+        ],
+        [
+          7750,
+          219.0,
+          0
+        ]
+      ],
+      "views": [
+        {
+          "source": [
+            219.0,
+            0,
+            202,
+            360
+          ],
+          "destination": [
+            0,
+            0,
+            360,
+            640
+          ]
+        }
+      ]
+    },
+    {
+      "start_ms": 8000,
+      "end_ms": 12000,
+      "layout": "screen_cam",
+      "source": "vision",
+      "screen_box": [
+        0.0,
+        0.0,
+        1.0,
+        1.0
+      ],
+      "screen_focus": null,
+      "cam_box": [
+        0.01,
+        0.65,
+        0.25,
+        0.33
+      ],
+      "people": [],
+      "content_box": null,
+      "cam_box_refined": false,
+      "detected_layout": "screen_cam",
+      "cam_face": [
+        0.08,
+        0.78,
+        0.05,
+        0.09
+      ],
+      "focus_path": [],
+      "crop_path": [],
+      "views": [
+        {
+          "source": [
+            190,
+            0,
+            448,
+            360
+          ],
+          "destination": [
+            0,
+            48,
+            360,
+            288
+          ]
+        },
+        {
+          "source": [
+            8,
+            262,
+            118,
+            84
+          ],
+          "destination": [
+            27,
+            403,
+            306,
+            218
+          ]
+        }
+      ]
+    }
+  ],
+  "attempts": [
+    {
+      "fallback": null,
+      "status": "rendered",
+      "failure": null
+    }
+  ],
+  "keeps": [
+    [
+      0,
+      5000
+    ],
+    [
+      6500,
+      12000
+    ]
+  ],
+  "planner_skips": [
+    [
+      5000,
+      6500
+    ]
+  ],
+  "video_pieces": [
+    {
+      "shot": 0,
+      "source_start_ms": 0.0,
+      "source_end_ms": 4000.0,
+      "output_start_ms": 0.0,
+      "output_end_ms": 4000.0
+    },
+    {
+      "shot": 1,
+      "source_start_ms": 4000.0,
+      "source_end_ms": 5000.0,
+      "output_start_ms": 4000.0,
+      "output_end_ms": 5000.0
+    },
+    {
+      "shot": 1,
+      "source_start_ms": 6500.0,
+      "source_end_ms": 8000.0,
+      "output_start_ms": 5000.0,
+      "output_end_ms": 6500.0
+    },
+    {
+      "shot": 2,
+      "source_start_ms": 8000.0,
+      "source_end_ms": 12000.0,
+      "output_start_ms": 6500.0,
+      "output_end_ms": 10500.0
+    }
+  ],
+  "editorial": null,
+  "clip_index": 0
+}

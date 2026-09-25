@@ -11,6 +11,7 @@ export interface ClipJobRequest {
   aspectRatio: string
   layoutStyle: string
   layoutVision: boolean
+  debugCapture?: boolean
   pacing: string
   includeCaptions: boolean
   captionPreset: string

@@ -137,7 +137,7 @@ def test_visual_only_planner_uses_duration_and_rejects_unsupported_clip(monkeypa
 
 
 @pytest.mark.parametrize("no_audio", [False, True])
-def test_visual_fallback_completes_without_captions_and_discloses_status(monkeypatch, tmp_path, no_audio):
+def test_visual_only_candidate_is_omitted_without_verifiable_dialogue(monkeypatch, tmp_path, no_audio):
     monkeypatch.setattr(RenderingService, "_verify_ffmpeg", lambda self: None)
     settings = pipeline_module.get_settings()
     monkeypatch.setattr(settings, "local_mode", True)
@@ -166,11 +166,7 @@ def test_visual_fallback_completes_without_captions_and_discloses_status(monkeyp
         return ClipPlanResponse([ClipPlanSegment(10_000, 30_000, 0.8, summary="Visible action")], total_clips=1)
 
     async def render(request):
-        assert request.include_captions is False
-        assert request.transcript_segments == []
-        with open(request.output_path, "wb") as output:
-            output.write(b"mp4")
-        return RenderResult(request.output_path, 3, 20_000, layout_type="fit")
+        pytest.fail("Unverified visual-only content must never render")
 
     monkeypatch.setattr(pipeline.video_downloader, "download_video", download)
     monkeypatch.setattr(pipeline.transcription_service, "transcribe", transcribe)
@@ -180,10 +176,11 @@ def test_visual_fallback_completes_without_captions_and_discloses_status(monkeyp
     monkeypatch.setattr(pipeline.rendering_service, "render_clip", render)
 
     result = asyncio.run(pipeline.process_video(ClippingJobRequest(video_url="x", job_id="visual-test")))
-    assert result.status == JobStatus.COMPLETED
-    assert result.output.metrics["transcription_status"] == "no_speech"
-    assert result.output.metrics["planning_source"] == "visual"
-    assert result.output.metrics["captions_status"] == "unavailable_without_transcript"
+    assert result.status == JobStatus.FAILED
+    assert 'No clip was forced' in result.error
+    audit = json.loads((tmp_path / "out" / "visual-test" / "edit_audit.json").read_text())
+    assert audit['candidates'][0]['status'] == 'rejected'
+    assert audit['candidates'][0]['report']['coherence']['attempts'][0]['judgment'] is None
     transcript = json.loads((tmp_path / "out" / "visual-test" / "transcript.json").read_text())
     assert transcript["captions_available"] is False
 

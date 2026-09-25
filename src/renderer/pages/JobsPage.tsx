@@ -3,6 +3,7 @@ import { Ban, Clapperboard, Clock3, Eye, FolderOpen, ListVideo, Plus, Receipt, R
 import type { HistoryEntry } from '../../preload/index'
 import { parseJobOutput } from '../../shared/job-output'
 import { MAX_PARALLEL_JOBS } from '../../shared/jobs'
+import { InspectEditsButton } from '../components/EditInspector'
 import { BackLink, ClipList } from '../components/ClipList'
 import { JobFailure, JobProgress, STAGE_LABELS } from '../components/JobProgress'
 import type { Page as AppPage } from '../components/Sidebar'
@@ -142,7 +143,7 @@ export function JobsPage({ onNavigate }: { onNavigate: (page: AppPage) => void }
       return <ClipList output={focused.output} outputDir={focused.outputDir} onNavigate={onNavigate} leading={back} />
     }
     if (focused.status === 'failed') {
-      return <>{errorCallout}<JobFailure job={focused} leading={back} onRetry={() => { void runAgain(focused) }} /></>
+      return <>{errorCallout}<div className="px-6 pt-3"><InspectEditsButton outputDir={focused.outputDir} /></div><JobFailure job={focused} leading={back} onRetry={() => { void runAgain(focused) }} /></>
     }
     return <>{errorCallout}<JobCancelled job={focused} leading={back} onRetry={() => { void runAgain(focused) }} /></>
   }
@@ -400,6 +401,7 @@ function PreviousJobRow({ entry, hasDetails, onOpen, onOpenFolder }: { entry: Hi
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-1">
+        <InspectEditsButton outputDir={entry.outputDir} />
         <Button size="sm" variant="ghost" icon={<FolderOpen className="h-3.5 w-3.5" />} onClick={onOpenFolder}>Folder</Button>
         {entry.status === 'completed' && <Button size="sm" variant="primary" onClick={onOpen}>View clips</Button>}
         {/* Failed and cancelled jobs from this session keep their options, so they can run again. */}

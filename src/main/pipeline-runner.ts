@@ -382,6 +382,7 @@ export function startClipJob(
     duration_ranges: config.durationRanges,
     aspect_ratio: config.aspectRatio,
     layout_style: config.layoutStyle || 'auto',
+    debug_capture: config.debugCapture ?? false,
     layout_vision_enabled: config.clippingMode === 'economy' ? false : config.layoutVision,
     pacing: config.pacing || 'tight',
     include_captions: config.includeCaptions,

@@ -44,7 +44,7 @@ export function parseTimecode(input: string): number | null {
 
 /** URL for a file on disk, served by the main process's local-file:// protocol. */
 export function localFileUrl(filePath: string): string {
-  return `local-file://${encodeURIComponent(filePath)}`
+  return `local-file://media/${encodeURIComponent(filePath)}`
 }
 
 /** Readable message from an IPC rejection (drops Electron's "Error invoking remote method" prefix). */

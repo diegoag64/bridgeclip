@@ -3,7 +3,8 @@ Layout Analyzer - decides how each shot of a clip should be framed for 9:16.
 
 For a clip it:
 1. Decodes low-res frames (ANALYSIS_FPS) with FFmpeg.
-2. Detects faces per frame (OpenCV YuNet) and shot cuts (HSV histogram jumps).
+2. Detects faces per frame (OpenCV YuNet), shot cuts (HSV histogram jumps),
+   and sustained changes between corner webcams and full-screen speakers.
 3. Tracks faces within each shot and classifies the shot's layout:
      talking_head  one on-camera person          -> face-tracked full-frame crop
      two_shot      two people side by side       -> stacked split, one per panel
@@ -22,6 +23,7 @@ heuristic classification is used.
 import asyncio
 import base64
 import json
+import hashlib
 import logging
 import math
 import os
@@ -79,12 +81,19 @@ def analysis_dimensions(width: int, height: int) -> tuple[int, int]:
 
 
 FACE_SCORE_THRESHOLD = 0.72
+STRONG_FACE_SCORE = 0.90
+COMPETING_FACE_SCORE = 0.85
 # Bhattacharyya distance between consecutive HSV histograms that counts as a cut.
 SHOT_CUT_THRESHOLD = 0.42
 MIN_SHOT_MS = 1200
+# Require three consecutive observations before changing layout. Missing faces
+# need a longer hold: looking away must not be mistaken for a scene change.
+LAYOUT_CHANGE_MS = 500
+LAYOUT_CHANGE_SAMPLES = 3
 
 # A face track must be visible in this share of a shot's frames to count.
 MIN_TRACK_PRESENCE = 0.35
+MAX_TRACK_GAP_MS = 1000
 # Faces smaller than this (fraction of frame height) sitting in a corner are
 # treated as a webcam overlay rather than an on-camera person.
 OVERLAY_MAX_FACE_HEIGHT = 0.17
@@ -167,6 +176,8 @@ class FrameInfo:
     t_ms: int
     faces: list[Box]
     hist: Any  # np.ndarray
+    scores: list[float] = field(default_factory=list)
+    content_box: Optional[Box] = None
 
 
 @dataclass
@@ -190,6 +201,10 @@ class ShotLayout:
     screen_focus: Optional[Box] = None
     cam_box: Optional[Box] = None
     cam_face: Optional[Box] = None
+    # A video inset surrounded by padding. Preserve its composition, rather
+    # than following faces inside it or carrying an anchor across the cut.
+    content_box: Optional[Box] = None
+    cam_box_refined: bool = False
 
     def summary(self) -> dict:
         return {
@@ -201,6 +216,8 @@ class ShotLayout:
             "screen_focus": self.screen_focus.to_list() if self.screen_focus else None,
             "cam_box": self.cam_box.to_list() if self.cam_box else None,
             "people": [p.to_list() for p in self.people],
+            "content_box": self.content_box.to_list() if self.content_box else None,
+            "cam_box_refined": self.cam_box_refined,
         }
 
 
@@ -213,6 +230,7 @@ class ClipLayoutPlan:
     # Every analyzed frame's faces as (t_ms in window time, boxes), including
     # frames without any. Captions use them to stay off faces.
     face_samples: list[tuple[int, list[Box]]] = field(default_factory=list)
+    trace: Optional[dict] = None
 
     @property
     def dominant_layout(self) -> str:
@@ -225,12 +243,88 @@ class ClipLayoutPlan:
 
     @property
     def is_letterbox_only(self) -> bool:
-        return all(s.layout == LayoutType.SCREEN for s in self.shots)
+        return all(s.layout == LayoutType.SCREEN and s.content_box is None for s in self.shots)
 
 
 # ------------------------------------------------------------------
 # Pure helpers (unit tested)
 # ------------------------------------------------------------------
+
+
+def framing_faces(frame: FrameInfo) -> list[Box]:
+    """Weak competing detections must not displace a confident real face.
+
+    Keep the original observations in diagnostics. Unknown scores (older
+    records / fixtures) retain the existing behavior.
+    """
+    reliable = any(score >= STRONG_FACE_SCORE for score in frame.scores)
+    return [box for i, box in enumerate(frame.faces)
+            if not reliable or i >= len(frame.scores) or frame.scores[i] >= COMPETING_FACE_SCORE]
+
+
+def detect_content_box(image) -> Optional[Box]:
+    """Conservative rectangular inset detection, including textured padding.
+
+    Require matching, mostly uniform side margins and sustained straight
+    content edges. A wall behind a person alone is not a rectangular inset.
+    Work only on the already-decoded analysis image; no extra provider call.
+    """
+    h, w = image.shape[:2]
+    if w < 80 or h < 60:
+        return None
+    small = cv2.GaussianBlur(image, (5, 5), 0).astype(np.float32)
+    margin = max(2, round(w * .06))
+    sides = np.concatenate((small[:, :margin].reshape(-1, 3), small[:, -margin:].reshape(-1, 3)))
+    background = np.median(sides, axis=0)
+    if np.quantile(np.max(np.abs(sides - background), axis=1), .9) > 16:
+        return None
+    mask = np.max(np.abs(small - background), axis=2) > 25
+    columns = np.flatnonzero(mask.mean(axis=0) > .45)
+    if not len(columns):
+        return None
+    left, right = int(columns[0]), int(columns[-1]) + 1
+    if left < w * .08 or right > w * .92 or not .18 <= (right - left) / w <= .84:
+        return None
+    rows = np.flatnonzero(mask[:, left:right].mean(axis=1) > .55)
+    if not len(rows):
+        return None
+    top, bottom = int(rows[0]), int(rows[-1]) + 1
+    if bottom - top < .5 * h:
+        return None
+    # Exclude shadows and rounded corners when assessing the vertical edges.
+    middle = mask[top + int((bottom - top) * .08):bottom - int((bottom - top) * .08)]
+    first = middle.argmax(axis=1)
+    last = w - 1 - middle[:, ::-1].argmax(axis=1)
+    straight = (np.abs(first - left) <= w * .015) & (np.abs(last + 1 - right) <= w * .015)
+    if straight.mean() < .8 or mask[top:bottom, left:right].mean() < .7:
+        return None
+    return Box(left / w, top / h, (right - left) / w, (bottom - top) / h)
+
+
+def same_content(a: Optional[Box], b: Optional[Box]) -> bool:
+    if a is None or b is None:
+        return a is b
+    return max(abs(x - y) for x, y in zip(a.to_list(), b.to_list())) < .035
+
+
+def content_boundaries(frames: list[FrameInfo]) -> list[int]:
+    """Confirm an inset entering, leaving or moving over three observations."""
+    if not frames:
+        return []
+    current = frames[0].content_box
+    pending: list[FrameInfo] = []
+    cuts = []
+    for frame in frames[1:]:
+        if same_content(frame.content_box, current):
+            pending = []
+            continue
+        if pending and not same_content(frame.content_box, pending[0].content_box):
+            pending = []
+        pending.append(frame)
+        if len(pending) >= LAYOUT_CHANGE_SAMPLES and frame.t_ms - pending[0].t_ms >= LAYOUT_CHANGE_MS:
+            cuts.append(pending[0].t_ms)
+            current, pending = frame.content_box, []
+    return cuts
 
 
 def segment_shots(frames: list[FrameInfo], duration_ms: int) -> list[tuple[int, int]]:
@@ -256,26 +350,46 @@ def segment_shots(frames: list[FrameInfo], duration_ms: int) -> list[tuple[int, 
 
 
 def track_faces(frames: list[FrameInfo]) -> list[FaceTrack]:
-    """Greedy nearest-center association of face boxes across frames."""
+    """Associate nearby faces, retaining an unambiguous subject through jumps.
+
+    A sole visible face can move farther than the normal association radius
+    between samples. Keep that track while its size/layout remain compatible;
+    never use this shortcut after a multi-person frame or a long dropout.
+    """
     tracks: list[FaceTrack] = []
+    sole_track: Optional[int] = None
     for frame in frames:
+        faces = framing_faces(frame)
         used: set[int] = set()
-        for face in sorted(frame.faces, key=lambda b: -b.area):
+        for face in sorted(faces, key=lambda b: -b.area):
             best, best_dist = None, 0.12
-            for i, track in enumerate(tracks):
-                if i in used:
-                    continue
-                last = track.samples[-1][1]
-                dist = ((last.cx - face.cx) ** 2 + (last.cy - face.cy) ** 2) ** 0.5
-                size_ratio = face.h / max(last.h, 1e-6)
-                if dist < best_dist and 0.5 < size_ratio < 2.0:
-                    best, best_dist = i, dist
+            if len(faces) == 1 and sole_track is not None:
+                last_t, last = tracks[sole_track].samples[-1]
+                # A zoom cut can exceed the usual 2x size gate. Webcam moves
+                # still need separate tracks for overlay-region classification.
+                if (frame.t_ms - last_t <= MAX_TRACK_GAP_MS
+                        and 0.25 < face.h / max(last.h, 1e-6) < 4.0
+                        and not is_corner_overlay(face) and not is_corner_overlay(last)):
+                    best = sole_track
+            if best is None:
+                for i, track in enumerate(tracks):
+                    if i in used or frame.t_ms - track.samples[-1][0] > MAX_TRACK_GAP_MS:
+                        continue
+                    last = track.samples[-1][1]
+                    dist = ((last.cx - face.cx) ** 2 + (last.cy - face.cy) ** 2) ** 0.5
+                    size_ratio = face.h / max(last.h, 1e-6)
+                    if dist < best_dist and 0.5 < size_ratio < 2.0:
+                        best, best_dist = i, dist
             if best is None:
                 tracks.append(FaceTrack(samples=[(frame.t_ms, face)]))
                 used.add(len(tracks) - 1)
             else:
                 tracks[best].samples.append((frame.t_ms, face))
                 used.add(best)
+        if len(faces) == 1:
+            sole_track = next(iter(used))
+        elif faces:
+            sole_track = None
     return tracks
 
 
@@ -284,6 +398,96 @@ def is_corner_overlay(face: Box) -> bool:
     if face.h > OVERLAY_MAX_FACE_HEIGHT:
         return False
     return (face.cx < 0.3 or face.cx > 0.7) and (face.cy < 0.4 or face.cy > 0.6)
+
+
+def frame_layout_evidence(frame: FrameInfo) -> Optional[str]:
+    """Conservative temporal evidence, not a replacement for shot classification.
+
+    A visible corner webcam wins over faces inside a game or shared screen.
+    Small central faces and groups are ambiguous. A large central face with no
+    corner webcam is positive evidence of a speaker, unlike a detector dropout.
+    """
+    faces = [f for f in framing_faces(frame) if f.h >= MIN_FACE_HEIGHT]
+    if not faces:
+        return LayoutType.SCREEN
+    if any(is_corner_overlay(f) for f in faces):
+        return LayoutType.SCREEN_CAM
+    if len(faces) == 1:
+        face = faces[0]
+        in_corner = (face.cx < 0.3 or face.cx > 0.7) and (face.cy < 0.4 or face.cy > 0.6)
+        if face.h > OVERLAY_MAX_FACE_HEIGHT * 1.3 and not in_corner:
+            return LayoutType.TALKING_HEAD
+    return None
+
+
+def split_layout_segments(
+    frames: list[FrameInfo], start_ms: int, end_ms: int,
+    boundaries: Optional[list[dict]] = None,
+) -> list[tuple[int, int]]:
+    """Refine a color-based shot using sustained face-layout evidence.
+
+    Backdate a confirmed transition to its first observation. Ambiguous frames
+    and brief dropouts do not change the established layout; persistent missing
+    faces get their own segment so vision can distinguish a hidden face from a
+    removed webcam. Unlike histogram blips, confirmed layout changes are not
+    absorbed by the 1.2-second shot-merging rule.
+    """
+    cuts = [start_ms]
+    current: Optional[str] = None
+    pending: Optional[str] = None
+    pending_start = start_ms
+    count = 0
+    for frame in frames:
+        evidence = frame_layout_evidence(frame)
+        if evidence is None or evidence == current:
+            pending, count = None, 0
+            continue
+        if evidence != pending:
+            pending, pending_start, count = evidence, frame.t_ms, 0
+        count += 1
+        hold_ms = MIN_SHOT_MS if evidence == LayoutType.SCREEN else LAYOUT_CHANGE_MS
+        if count >= LAYOUT_CHANGE_SAMPLES and frame.t_ms - pending_start >= hold_ms:
+            if current is not None and pending_start > cuts[-1]:
+                cuts.append(pending_start)
+                if boundaries is not None:
+                    boundaries.append({"t_ms": pending_start, "kind": "layout", "accepted": True,
+                                       "from_layout": current, "to_layout": evidence,
+                                       "hold_ms": frame.t_ms - pending_start, "samples": count})
+            current, pending, count = evidence, None, 0
+    return list(zip(cuts, cuts[1:] + [end_ms]))
+
+
+def segment_content_box(frames: list[FrameInfo]) -> Optional[Box]:
+    """Stable median geometry, tolerating isolated misses and outliers."""
+    content = [f.content_box for f in frames if f.content_box is not None]
+    if len(content) >= max(LAYOUT_CHANGE_SAMPLES, len(frames) * .6):
+        box = Box(*(median(getattr(b, axis) for b in content) for axis in ('x', 'y', 'w', 'h')))
+        if sum(same_content(box, b) for b in content) >= .8 * len(content):
+            return box.clamp()
+    return None
+
+
+def heuristic_layout(
+    frames: list[FrameInfo], start_ms: int, end_ms: int, src_w: int, src_h: int,
+    diagnostic: Optional[dict] = None,
+) -> ShotLayout:
+    """Classify and track only the faces belonging to this layout segment."""
+    content = segment_content_box(frames)
+    if content is not None:
+        return ShotLayout(start_ms, end_ms, LayoutType.SCREEN, content_box=content)
+    tracks = track_faces(frames)
+    shot, main_track = classify_shot(tracks, len(frames), src_w, src_h)
+    if diagnostic is not None:
+        lookup = {(f.t_ms, id(box)): i for f in frames for i, box in enumerate(f.faces)}
+        diagnostic["tracks"] = [{"id": i, "selected": track is main_track,
+                                 "samples": [[t, lookup[(t, id(box))]] for t, box in track.samples]}
+                                for i, track in enumerate(tracks)]
+    shot.start_ms, shot.end_ms = start_ms, end_ms
+    if main_track is not None:
+        samples = [(t - start_ms, box) for t, box in main_track.samples]
+        crop_w_frac = min(1.0, (src_h * 9 / 16) / src_w)
+        shot.focus_path = smooth_focus_path(samples, end_ms - start_ms, crop_w_frac)
+    return shot
 
 
 def estimate_cam_box(face: Box, src_w: int, src_h: int) -> Box:
@@ -306,6 +510,63 @@ def estimate_cam_box(face: Box, src_w: int, src_h: int) -> Box:
     left, top = max(box.x, x0), max(box.y, y0)
     right, bottom = min(box.x + box.w, x1), min(box.y + box.h, y1)
     return Box(left, top, right - left, bottom - top)
+
+
+def refine_cam_box(image, cam: Box, face: Optional[Box] = None) -> Optional[Box]:
+    """Snap approximate webcam bounds to nearby, continuous image edges.
+
+    Require two independently supported edges. Strong texture everywhere is
+    not a boundary; the edge must stand out from neighboring lines. Leave
+    uncertain geometry alone and never snap through the detected face.
+    """
+    h, w = image.shape[:2]
+    pixels = cv2.GaussianBlur(image, (3, 3), 0).astype(np.float32)
+    box = cam.clamp()
+    edges = [box.x * w, box.y * h, (box.x + box.w) * w, (box.y + box.h) * h]
+    found = 0
+    for side, value in enumerate(edges.copy()):
+        vertical = side in (0, 2)
+        length = w if vertical else h
+        span = box.w * w if vertical else box.h * h
+        # Image borders already bound the camera; they are not independent
+        # visual evidence of an overlay.
+        if value <= 1 or value >= length - 1:
+            continue
+        radius = max(4, round(min(length * .035, span * .15)))
+        lo, hi = (edges[1], edges[3]) if vertical else (edges[0], edges[2])
+        inset = (hi - lo) * .12
+        a, b = int(lo + inset), int(hi - inset)
+        if b - a < 12:
+            continue
+        scores = []
+        for pos in range(max(2, round(value) - radius), min(length - 2, round(value) + radius) + 1):
+            if vertical:
+                delta = np.max(np.abs(pixels[a:b, pos-2:pos].mean(axis=1) - pixels[a:b, pos:pos+2].mean(axis=1)), axis=1)
+            else:
+                delta = np.max(np.abs(pixels[pos-2:pos, a:b].mean(axis=0) - pixels[pos:pos+2, a:b].mean(axis=0)), axis=1)
+            strength = float(np.median(delta))
+            support = float((delta > 18).mean())
+            scores.append((pos, strength, support))
+        if not scores:
+            continue
+        baseline = median(score for _, score, _ in scores)
+        candidates = [(pos, score * support - abs(pos - value)) for pos, score, support in scores
+                      if support >= .65 and score >= max(24, baseline * 1.8 + 8)]
+        if not candidates:
+            continue
+        pos = max(candidates, key=lambda item: item[1])[0]
+        # One analysis pixel inside the edge removes compression/border bleed.
+        edges[side] = pos + 1 if side < 2 else pos - 1
+        found += 1
+    left, top, right, bottom = edges
+    if found < 2 or right - left < 8 or bottom - top < 8:
+        return None
+    refined = Box(left / w, top / h, (right - left) / w, (bottom - top) / h).clamp()
+    if not .65 <= refined.area / max(box.area, 1e-6) <= 1.4:
+        return None
+    if face and not (refined.contains(face.x, face.y) and refined.contains(face.x + face.w, face.y + face.h)):
+        return None
+    return refined
 
 
 def transfer_cam_box(ref_cam: Box, ref_face: Box, face: Box) -> Box:
@@ -356,7 +617,7 @@ def split_overlay_segments(
     anchor = seed
     for frame in frames:
         candidates = [
-            f for f in frame.faces
+            f for f in framing_faces(frame)
             if MIN_FACE_HEIGHT <= f.h
             and (f.h <= max_face_h or (region is not None and region.contains(f.cx, f.cy) and f.h <= region.h))
         ]
@@ -452,6 +713,67 @@ def screen_box_excluding_cam(cam: Box) -> Box:
     return Box(0.0, 0.0, 1.0, 1.0)
 
 
+def expanded_webcam_intervals(
+    frames: list[FrameInfo], cam: Box, end_ms: int,
+) -> list[tuple[int, int]]:
+    """Find sustained presenter punch-ins relative to an observed compact webcam.
+
+    A keyed presenter can grow without changing the background histogram, and
+    remain on the right/left of the screen. Neither a central-face requirement
+    nor searching only inside the old camera box can recognize that edit.
+    Require a stable, sole face inside the known camera before using relative
+    size/position evidence. This also works when vision sampled the punch-in:
+    the compact reference can occur earlier or later in the shot.
+    """
+    runs: list[list[tuple[int, Box]]] = []
+    run: list[tuple[int, Box]] = []
+    for frame in frames:
+        faces = framing_faces(frame)
+        face = faces[0] if len(faces) == 1 else None
+        compact = (face is not None and MIN_FACE_HEIGHT <= face.h <= .25
+                   and cam.contains(face.cx, face.cy)
+                   and (face.cx < .3 or face.cx > .7)
+                   and (face.cy < .4 or face.cy > .6))
+        if not compact or (run and _overlay_moved(face, run[0][1])):
+            if len(run) >= LAYOUT_CHANGE_SAMPLES and run[-1][0] - run[0][0] >= LAYOUT_CHANGE_MS:
+                runs.append(run)
+            run = []
+        if compact:
+            run.append((frame.t_ms, face))
+    if len(run) >= LAYOUT_CHANGE_SAMPLES and run[-1][0] - run[0][0] >= LAYOUT_CHANGE_MS:
+        runs.append(run)
+    if not runs:
+        return []
+    reference = max(runs, key=len)
+    anchor = Box(*(median(getattr(f, axis) for _, f in reference) for axis in ('x', 'y', 'w', 'h')))
+
+    intervals = []
+    expanded = False
+    pending_start, count, start = 0, 0, 0
+    for frame in frames:
+        faces = framing_faces(frame)
+        face = faces[0] if len(faces) == 1 else None
+        evidence = (face is not None and face.h >= max(.26, anchor.h * 1.45)
+                    and face.w >= anchor.w * 1.3
+                    and (abs(face.cx - anchor.cx) > .6 * anchor.w
+                         or abs(face.cy - anchor.cy) > .6 * anchor.h))
+        if evidence == expanded:
+            count = 0
+            continue
+        if count == 0:
+            pending_start = frame.t_ms
+        count += 1
+        if count >= LAYOUT_CHANGE_SAMPLES and frame.t_ms - pending_start >= LAYOUT_CHANGE_MS:
+            if evidence:
+                start = pending_start
+            else:
+                intervals.append((start, pending_start))
+            expanded, count = evidence, 0
+    if expanded:
+        intervals.append((start, end_ms))
+    return intervals
+
+
 def classify_shot(
     tracks: list[FaceTrack], shot_frames: int, src_w: int, src_h: int,
 ) -> tuple[ShotLayout, Optional[FaceTrack]]:
@@ -543,30 +865,35 @@ def smooth_focus_path(
         cam_y += (y - cam_y) * 0.2
         path.append((t, cam_x, cam_y))
 
-    # Keep only keyframes where the camera actually moves.
-    keyframes = [path[0]]
-    for i in range(1, len(path) - 1):
-        prev, cur, nxt = path[i - 1], path[i], path[i + 1]
-        moving_before = abs(cur[1] - prev[1]) > 1e-4
-        moving_after = abs(nxt[1] - cur[1]) > 1e-4
-        if moving_before != moving_after:
-            keyframes.append(cur)
-    if len(path) > 1:
-        keyframes.append(path[-1])
-
-    # Bound expression size for FFmpeg: sample evenly, always keep the last.
-    if len(keyframes) > MAX_PATH_KEYFRAMES:
-        step = -(-len(keyframes) // MAX_PATH_KEYFRAMES)
-        thinned = keyframes[::step]
-        if thinned[-1] != keyframes[-1]:
-            thinned.append(keyframes[-1])
-        keyframes = thinned
-    return keyframes
+    # Preserve the shape in BOTH axes. Keeping only moving/still transitions
+    # erased reversals and vertical motion, sometimes leaving a static crop.
+    # Insert the point with the largest interpolation error until the path is
+    # accurate to 0.2% of the source or reaches FFmpeg's expression budget.
+    keep = sorted({0, len(path) - 1})
+    while len(keep) < MAX_PATH_KEYFRAMES:
+        worst_error, worst_index = 0.002, None
+        for a, b in zip(keep, keep[1:]):
+            t0, x0, y0 = path[a]
+            t1, x1, y1 = path[b]
+            for i in range(a + 1, b):
+                t, x, y = path[i]
+                fraction = (t - t0) / (t1 - t0)
+                error = max(abs(x - (x0 + (x1 - x0) * fraction)),
+                            abs(y - (y0 + (y1 - y0) * fraction)))
+                if error > worst_error:
+                    worst_error, worst_index = error, i
+        if worst_index is None:
+            break
+        keep.append(worst_index)
+        keep.sort()
+    return [path[i] for i in keep]
 
 
 def apply_style(shot: ShotLayout, style: str, src_w: int, src_h: int) -> ShotLayout:
     """Adjust a detected layout to the user's chosen framing style."""
     shot.detected_layout = shot.detected_layout or shot.layout
+    if shot.content_box is not None:
+        return shot
     if style == LayoutStyle.FIT:
         shot.layout = LayoutType.SCREEN
         shot.source = "style"
@@ -625,7 +952,7 @@ Classify the frame's layout:
 Return boxes as [ymin, xmin, ymax, xmax] integers from 0 to 1000 relative to the full frame:
 - cam_box: the ENTIRE webcam overlay rectangle (its visible border/edges, including background around the person), not just the face. [] if there is no webcam overlay.
 - screen_box: the region holding the screen/app content, excluding black bars and the webcam overlay if it sits outside the screen. [] if there is no screen content.
-- screen_focus: inside screen_box, the area a viewer should see when the screen is cropped for a phone: the active editor/document pane, chat window, chart, or game view. Leave out sidebars, toolbars and empty space. [] if the whole screen matters equally.
+- screen_focus: inside screen_box, the COMPLETE meaningful content block the viewer needs: an entire paragraph/code example, chart including axes and labels, document pane, chat exchange, or game view. Include the start and end of text lines and necessary headings. Never select just a word, glyph, cursor or unlabeled value. Leave out unrelated toolbars and empty space. This region will be fitted intact into the phone panel, not cropped to fill it. [] if the whole screen matters equally or the relevant block is uncertain.
 - people: one head-and-shoulders box per on-camera person, left to right. Exclude people inside the webcam overlay and people shown inside screen content.
 
 Detected faces (normalized x, y, w, h, may be incomplete): {faces}"""
@@ -709,7 +1036,7 @@ class LayoutAnalyzer:
         self._local = threading.local()
         self._http_client: Optional[httpx.AsyncClient] = None
         # Reuse vision answers across clips of the same video: (hist, face signature, result)
-        self._vision_cache: list[tuple[Any, tuple, dict]] = []
+        self._vision_cache: list[tuple[Any, tuple, dict, dict]] = []
 
     @property
     def available(self) -> bool:
@@ -730,6 +1057,7 @@ class LayoutAnalyzer:
         src_h: int,
         style: str = LayoutStyle.AUTO,
         vision: bool = True,
+        capture: bool = False,
     ) -> Optional[ClipLayoutPlan]:
         """Plan the framing for the render window [start_ms, start_ms + duration_ms).
 
@@ -753,26 +1081,73 @@ class LayoutAnalyzer:
             logger.warning("Layout analysis decoded no frames; using letterbox")
             return None
 
-        crop_w_frac = min(1.0, (src_h * 9 / 16) / src_w)
         shots: list[ShotLayout] = []
         vision_cost = 0.0
+        trace = {"samples": [], "boundaries": [], "decisions": []} if capture else None
+        color_segments = segment_shots(frames, duration_ms)
+        inset_cuts = content_boundaries(frames)
+        # Padding boundaries carry geometric evidence even when the color-cut
+        # debouncer swallowed a short shot. Prefer their observed timestamps
+        # to nearby histogram midpoints to avoid tiny duplicate segments.
+        cuts = {0, duration_ms, *inset_cuts}
+        cuts.update(a for a, _ in color_segments[1:] if all(abs(a - t) > 250 for t in inset_cuts))
+        cuts = sorted(cuts)
+        color_segments = list(zip(cuts, cuts[1:]))
+        if trace is not None:
+            accepted_cuts = {a for a, _ in color_segments[1:]}
+            for i, frame in enumerate(frames):
+                distance = float(cv2.compareHist(frames[i - 1].hist, frame.hist, cv2.HISTCMP_BHATTACHARYYA)) if i else None
+                trace["samples"].append({"t_ms": frame.t_ms,
+                    "faces": [{"box": box.to_list(), "score": frame.scores[j] if j < len(frame.scores) else None}
+                              for j, box in enumerate(frame.faces)],
+                    "content_box": frame.content_box.to_list() if frame.content_box else None,
+                    "evidence": frame_layout_evidence(frame), "histogram_distance": distance})
+                if distance is not None and distance > SHOT_CUT_THRESHOLD:
+                    t = (frames[i - 1].t_ms + frame.t_ms) // 2
+                    trace["boundaries"].append({"t_ms": t, "kind": "scene", "accepted": t in accepted_cuts,
+                                                "distance": distance})
+            trace["boundaries"].extend({"t_ms": t, "kind": "content", "accepted": True} for t in inset_cuts)
 
-        for shot_start, shot_end in segment_shots(frames, duration_ms):
+        segments = []
+        for start, end in color_segments:
+            local_frames = [f for f in frames if start <= f.t_ms < end]
+            # Faces coming and going inside a stable inset do not change the
+            # composition of that inset.
+            inset = segment_content_box(local_frames)
+            segments.extend([(start, end)] if inset else split_layout_segments(
+                local_frames, start, end, trace["boundaries"] if trace is not None else None))
+
+        for shot_start, shot_end in segments:
             shot_frames = [f for f in frames if shot_start <= f.t_ms < shot_end]
-            tracks = track_faces(shot_frames)
-            shot, main_track = classify_shot(tracks, len(shot_frames), src_w, src_h)
+            decision = {"start_ms": shot_start, "end_ms": shot_end, "tracks": [],
+                        "vision": {"status": "disabled" if not vision or not self._vision_enabled() else "unavailable"}} if capture else None
+            shot = heuristic_layout(shot_frames, shot_start, shot_end, src_w, src_h, decision)
+            if decision is not None:
+                decision["heuristic"] = shot.summary()
+            reference_ms = (shot_start + shot_end) // 2
 
-            if main_track is not None:
-                rel = [(t - shot_start, b) for t, b in main_track.samples]
-                shot.focus_path = smooth_focus_path(rel, shot_end - shot_start, crop_w_frac)
-
-            if vision and self._vision_enabled():
-                keyframe = self._pick_keyframe(keyframes, (shot_start + shot_end) // 2)
+            if shot.content_box is not None and decision is not None:
+                decision["vision"] = {"status": "content_region"}
+            if vision and self._vision_enabled() and shot.content_box is None:
+                keyframe = self._pick_keyframe(keyframes, reference_ms, shot_start, shot_end)
+                if decision is not None:
+                    decision["vision"] = {"status": "no_image"}
                 if keyframe is not None:
-                    result, cost = await self._vision_classify(keyframe, shot_frames, shot)
+                    reference_ms, image = keyframe
+                    # Face hints and the cache signature must describe the
+                    # image being sent, not faces pooled from other moments.
+                    reference_frame = min(shot_frames, key=lambda f: abs(f.t_ms - reference_ms))
+                    if decision is not None:
+                        decision["vision"] = {"status": "failed", "t_ms": reference_ms,
+                                              "source_ms": start_ms + reference_ms}
+                        result, cost = await self._vision_classify(image, [reference_frame], shot, decision["vision"])
+                    else:
+                        result, cost = await self._vision_classify(image, [reference_frame], shot)
                     vision_cost += cost
                     if result:
                         refined = merge_vision_result(shot, result, src_w, src_h)
+                        if decision is not None:
+                            decision["vision"]["validated"] = refined.summary()
                         if refined.layout == LayoutType.TALKING_HEAD and not refined.focus_path:
                             focus = refined.people[0] if refined.people else None
                             refined.focus_path = [(0, focus.cx, focus.cy)] if focus else [(0, 0.5, 0.5)]
@@ -780,15 +1155,23 @@ class LayoutAnalyzer:
 
             shot.start_ms, shot.end_ms = shot_start, shot_end
             if shot.layout == LayoutType.SCREEN_CAM:
-                sub_shots = self._follow_webcam(shot, shot_frames, src_w, src_h)
+                sub_shots = self._follow_webcam(shot, shot_frames, src_w, src_h, reference_ms)
+                self._refine_webcam_regions(sub_shots, keyframes, shot.cam_box)
             else:
                 sub_shots = [shot]
             shots.extend(apply_style(sub, style, src_w, src_h) for sub in sub_shots)
+            if trace is not None:
+                for before, after in zip(sub_shots, sub_shots[1:]):
+                    if before.layout != after.layout:
+                        trace["boundaries"].append({"t_ms": after.start_ms, "kind": "layout", "accepted": True,
+                                                   "from_layout": before.layout, "to_layout": after.layout})
+                trace["decisions"].append(decision)
 
         shots = self._merge_adjacent(shots)
         plan = ClipLayoutPlan(
             shots=shots, source_width=src_w, source_height=src_h, vision_cost_usd=vision_cost,
             face_samples=[(f.t_ms, f.faces) for f in frames],
+            trace=trace,
         )
         logger.info(
             "Layout plan: " + ", ".join(
@@ -798,8 +1181,36 @@ class LayoutAnalyzer:
         return plan
 
     @staticmethod
+    def _refine_webcam_regions(shots: list[ShotLayout], keyframes: list[tuple[int, bytes]], reference: Box):
+        """Confirm camera edges locally; face motion alone cannot move them."""
+        for shot in shots:
+            if shot.layout != LayoutType.SCREEN_CAM or shot.cam_box is None:
+                continue
+            mid = (shot.start_ms + shot.end_ms) // 2
+            images = sorted((k for k in keyframes if shot.start_ms <= k[0] < shot.end_ms),
+                            key=lambda k: abs(k[0] - mid))[:3]
+            decoded = [cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR) for _, data in images]
+            decoded = [image for image in decoded if image is not None]
+            if not decoded:
+                continue
+            # Try the original camera region first. Leaning or turning one's
+            # head can otherwise scale/translate a stationary overlay.
+            for guess in [reference, shot.cam_box]:
+                matches = [box for image in decoded
+                           if (box := refine_cam_box(image, guess, shot.cam_face)) is not None]
+                if len(matches) < min(2, len(decoded)):
+                    continue
+                box = Box(*(median(getattr(b, axis) for b in matches) for axis in ('x', 'y', 'w', 'h')))
+                if any(max(abs(a - b) for a, b in zip(box.to_list(), candidate.to_list())) > .015
+                       for candidate in matches):
+                    continue
+                shot.cam_box, shot.cam_box_refined = box, True
+                break
+
+    @staticmethod
     def _follow_webcam(
         shot: ShotLayout, frames: list[FrameInfo], src_w: int, src_h: int,
+        reference_ms: Optional[int] = None,
     ) -> list[ShotLayout]:
         """Split a screen+webcam shot where the overlay moves, resizes or disappears."""
         cam = shot.cam_box
@@ -809,13 +1220,45 @@ class LayoutAnalyzer:
             frames, shot.start_ms, shot.end_ms, seed, region=cam if vision else None,
         )
 
-        # The vision model saw the frame at the shot's midpoint; that segment's
-        # face anchors its webcam box for the others.
-        mid = (shot.start_ms + shot.end_ms) // 2
+        # Anchor the webcam box to the segment the vision model actually saw.
+        mid = reference_ms if reference_ms is not None else (shot.start_ms + shot.end_ms) // 2
         ref_face = next((f for a, b, f in segments if a <= mid < b and f), None) or shot.cam_face
+
+        # Keep these confirmed edits separate from overlay/dropout smoothing:
+        # that code deliberately absorbs short segments and preserves a vision
+        # camera during missed detections, which otherwise hides punch-ins.
+        expanded = expanded_webcam_intervals(frames, cam, shot.end_ms)
+        for start, end, face in segments:
+            local_frames = [f for f in frames if start <= f.t_ms < end]
+            # Preserve the existing central-speaker evidence over its full
+            # interval; a noisy scale threshold must not fragment a known
+            # talking-head shot or restore the stale camera at its edges.
+            speaker_frames = [f for f in local_frames if frame_layout_evidence(f) == LayoutType.TALKING_HEAD]
+            if (face is None and (not vision or not start <= mid < end)
+                    and len(speaker_frames) >= LAYOUT_CHANGE_SAMPLES
+                    and len(speaker_frames) >= 0.7 * len(local_frames)
+                    and speaker_frames[-1].t_ms - speaker_frames[0].t_ms >= LAYOUT_CHANGE_MS):
+                expanded.append((start, end))
+        merged = []
+        for start, end in sorted(expanded):
+            if merged and start <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+            else:
+                merged.append((start, end))
+        expanded = merged
+        cuts = sorted({shot.start_ms, shot.end_ms,
+                       *(t for a, b, _ in segments for t in (a, b)
+                         if not any(start < t < end for start, end in expanded)),
+                       *(t for a, b in expanded for t in (a, b))})
+        segments = [(a, b, next(face for start, end, face in segments if start <= a < end))
+                    for a, b in zip(cuts, cuts[1:])]
 
         result = []
         for start, end, face in segments:
+            local_frames = [f for f in frames if start <= f.t_ms < end]
+            if any(a <= start < b for a, b in expanded):
+                result.append(heuristic_layout(local_frames, start, end, src_w, src_h))
+                continue
             if face is None and vision:
                 # The vision model saw the webcam; YuNet missing its face
                 # (profile, lighting, a big close-up) doesn't remove it.
@@ -884,17 +1327,20 @@ class LayoutAnalyzer:
 
                 _, faces = detector.detect(image)
                 boxes = []
+                scores = []
                 candidates = sorted(faces, key=lambda row: float(row[14]), reverse=True)[:MAX_FACES_PER_FRAME] if faces is not None else []
                 for row in candidates:
                     if float(row[14]) < FACE_SCORE_THRESHOLD:
                         continue
                     x, y, w, h = (float(v) for v in row[:4])
                     boxes.append(Box(x / width, y / height, w / width, h / height).clamp())
+                    scores.append(float(row[14]))
 
                 hsv = cv2.cvtColor(cv2.resize(image, (160, 90)), cv2.COLOR_BGR2HSV)
                 hist = cv2.calcHist([hsv], [0, 1], None, [24, 16], [0, 180, 0, 256])
                 cv2.normalize(hist, hist)
-                frames.append(FrameInfo(t_ms=t_ms, faces=boxes, hist=hist))
+                frames.append(FrameInfo(t_ms=t_ms, faces=boxes, hist=hist, scores=scores,
+                                        content_box=detect_content_box(image)))
 
                 if index % keyframe_every == 0:
                     ok, jpg = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 80])
@@ -920,10 +1366,14 @@ class LayoutAnalyzer:
         return detector
 
     @staticmethod
-    def _pick_keyframe(keyframes: list[tuple[int, bytes]], t_ms: int) -> Optional[bytes]:
-        if not keyframes:
+    def _pick_keyframe(
+        keyframes: list[tuple[int, bytes]], t_ms: int, start_ms: int, end_ms: int,
+    ) -> Optional[tuple[int, bytes]]:
+        # Never borrow an image from the other side of a layout transition.
+        candidates = [k for k in keyframes if start_ms <= k[0] < end_ms]
+        if not candidates:
             return None
-        return min(keyframes, key=lambda k: abs(k[0] - t_ms))[1]
+        return min(candidates, key=lambda k: abs(k[0] - t_ms))
 
     @staticmethod
     def _merge_adjacent(shots: list[ShotLayout]) -> list[ShotLayout]:
@@ -934,6 +1384,9 @@ class LayoutAnalyzer:
             same_static = (
                 prev is not None
                 and prev.layout == shot.layout
+                and prev.content_box == shot.content_box
+                and prev.cam_box_refined == shot.cam_box_refined
+                and (not shot.cam_box_refined or prev.cam_box == shot.cam_box)
                 and shot.layout in (LayoutType.SCREEN, LayoutType.SCREEN_CAM)
                 and (shot.layout == LayoutType.SCREEN or (
                     prev.cam_box and shot.cam_box
@@ -955,19 +1408,25 @@ class LayoutAnalyzer:
 
     async def _vision_classify(
         self, keyframe: bytes, shot_frames: list[FrameInfo], heuristic: ShotLayout,
+        diagnostic: Optional[dict] = None,
     ) -> tuple[Optional[dict], float]:
         """Ask the vision model about one keyframe; cached per visual setup."""
-        signature = (heuristic.layout, len(heuristic.people))
+        signature = (heuristic.layout, tuple(sorted(
+            (round(b.cx, 1), round(b.cy, 1), round(b.w, 1), round(b.h, 1))
+            for f in shot_frames for b in framing_faces(f)
+        )))
         image = cv2.imdecode(np.frombuffer(keyframe, np.uint8), cv2.IMREAD_COLOR)
         hsv = cv2.cvtColor(cv2.resize(image, (160, 90)), cv2.COLOR_BGR2HSV)
         hist = cv2.calcHist([hsv], [0, 1], None, [24, 16], [0, 180, 0, 256])
         cv2.normalize(hist, hist)
-        for cached_hist, cached_sig, cached in self._vision_cache:
+        for cached_hist, cached_sig, cached, provenance in self._vision_cache:
             if cached_sig == signature and cv2.compareHist(hist, cached_hist, cv2.HISTCMP_BHATTACHARYYA) < 0.2:
+                if diagnostic is not None:
+                    diagnostic.update({**provenance, "status": "success", "cache_hit": True})
                 return cached, 0.0
 
         faces = sorted(
-            {tuple(round(v, 3) for v in b.to_list()) for f in shot_frames[:: max(1, len(shot_frames) // 4)] for b in f.faces}
+            {tuple(round(v, 3) for v in b.to_list()) for f in shot_frames[:: max(1, len(shot_frames) // 4)] for b in framing_faces(f)}
         )[:6]
         payload: dict[str, Any] = {
             "model": self.settings.layout_vision_model,
@@ -995,7 +1454,12 @@ class LayoutAnalyzer:
                 body, usage = await chat_completion(client, payload)
                 content, _ = message_text(body)
                 result = json.loads(content or "")
-                self._vision_cache.append((hist, signature, result))
+                provenance = {"cache_id": hashlib.sha256(keyframe).hexdigest()[:16],
+                              "cache_source_ms": diagnostic.get("source_ms") if diagnostic else None,
+                              "model": str(body.get("model") or self.settings.layout_vision_model)[:120]}
+                self._vision_cache.append((hist, signature, result, provenance))
+                if diagnostic is not None:
+                    diagnostic.update({**provenance, "status": "success", "cache_hit": False})
                 return result, usage.get("cost") or 0.0
             except OpenRouterError as e:
                 if not e.retryable or attempt == 1:
