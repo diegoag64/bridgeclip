@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
-import { ArrowLeft, Check, ChevronDown, Clapperboard, Download, FolderOpen, ListPlus, Plus, Send } from 'lucide-react'
+import { ArrowLeft, Check, ChevronDown, Clapperboard, Download, FolderOpen, ListPlus, Plus, Send, Youtube } from 'lucide-react'
 import { basename, cn, errorMessage } from '../lib/utils'
 import { getApi } from '../lib/ipc'
 import { clipFilePath } from '../lib/thumbnails'
@@ -9,6 +9,7 @@ import { EditInspector } from './EditInspector'
 import { FramingInspector } from './FramingInspector'
 import { EditorialWeights } from './EditorialReview'
 import { defaultWeights, editorialScore } from '../../shared/editorial'
+import { youtubeSourceUrl } from '../../shared/video-source'
 import { RunStats } from './RunStats'
 import { AddToAutomationDialog } from './AddToAutomationDialog'
 import { PostDialog, type PostableClip } from './PostDialog'
@@ -46,6 +47,7 @@ function toPostable(clip: ClipArtifact): PostableClip {
 }
 
 export function ClipList({ output, outputDir: runDirectory, leading, onNewClip, onNavigate }: ClipListProps): React.JSX.Element {
+  const sourceUrl = youtubeSourceUrl(output.source_video_url)
   const postRecords = usePostsStore((state) => state.posts)
   const refreshError = usePostsStore((state) => state.error)
   const configured = useSettingsStore((state) => state.zernioConfigured)
@@ -218,6 +220,8 @@ export function ClipList({ output, outputDir: runDirectory, leading, onNewClip, 
         actions={
           <>
             {outputDir && <Button onClick={() => setInspectEdits(true)}>Inspect transcript & edits</Button>}
+            {sourceUrl && <Button iconOnly icon={<Youtube className="h-4 w-4" />} aria-label="Open original video on YouTube" title="Open original video on YouTube"
+              onClick={() => { setExportError(null); void getApi().shell.openPath(sourceUrl).catch(() => setExportError('Could not open the original video in your browser.')) }} />}
             {outputDir && (
               <Button icon={<FolderOpen className="h-3.5 w-3.5" />} onClick={() => getApi().shell.openPath(outputDir)}>
                 Open folder

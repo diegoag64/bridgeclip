@@ -21,7 +21,7 @@ export function isWebUrl(value: unknown): value is string {
 
 const externalLinks = new Set([BRIDGEMIND_URL, DISCORD_URL, ISSUES_URL, REPO_URL, ...Object.values(PROVIDER_LINKS), ...Object.values(ZERNIO_LINKS)])
 export function isTrustedExternalUrl(value: unknown): value is string {
-  return isWebUrl(value) && externalLinks.has(value)
+  return isWebUrl(value) && (externalLinks.has(value) || /^https:\/\/www\.youtube\.com\/watch\?v=[\w-]{11}$/.test(value))
 }
 
 export function isWithinDirectory(path: string, directory: string): boolean {

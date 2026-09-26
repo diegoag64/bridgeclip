@@ -171,10 +171,11 @@ test('the native picker authorizes media and shell opening rejects aliased appli
     const frame = {}
     const contents = { mainFrame: frame }
     const window = { webContents: contents, isDestroyed: () => false }
+    const openedLinks = []
     const ipc = loadSource('ipc-handlers.ts', {
       electron: {
         app: { isPackaged: false },
-        shell: { openPath: async () => { throw new Error('Unexpected shell launch') } },
+        shell: { openPath: async () => { throw new Error('Unexpected shell launch') }, openExternal: async (url) => openedLinks.push(url) },
         ipcMain: { handle: (channel, listener) => handlers.set(channel, listener) },
         dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [video] }) }
       },
@@ -198,6 +199,10 @@ test('the native picker authorizes media and shell opening rejects aliased appli
       './library-management': {}
     })
     ipc.registerIpcHandlers(() => window)
+    const sourceUrl = 'https://www.youtube.com/watch?v=hqP9fivmBqI'
+    assert.equal(await handlers.get('shell:openPath')({ sender: contents, senderFrame: frame }, sourceUrl), true)
+    assert.deepEqual(openedLinks, [sourceUrl])
+    await assert.rejects(handlers.get('shell:openPath')({ sender: contents, senderFrame: frame }, 'https://www.youtube.com/redirect?q=https://example.com'), /not supported/)
     assert.equal(handlers.has('files:registerMedia'), false)
     assert.throws(() => security.assertMediaPath(video, library))
     const picker = handlers.get('dialog:selectVideo')
@@ -219,6 +224,19 @@ test('external URLs reject executable schemes and embedded credentials', () => {
   assert.equal(security.isWebUrl('https://example.com/video'), true)
   assert.equal(security.isTrustedExternalUrl('https://example.com/video'), false)
   assert.equal(security.isTrustedExternalUrl('https://github.com/bridge-mind/bridgeclip'), true)
+})
+
+test('source video links normalize supported YouTube forms and allow only canonical browser URLs', () => {
+  const canonical = 'https://www.youtube.com/watch?v=hqP9fivmBqI'
+  for (const url of [canonical, 'https://youtu.be/hqP9fivmBqI?si=tracking', 'https://m.youtube.com/watch?v=hqP9fivmBqI&t=20', 'https://www.youtube.com/shorts/hqP9fivmBqI', 'https://www.youtube.com/live/hqP9fivmBqI']) {
+    assert.equal(videoSource.youtubeSourceUrl(url), canonical)
+    assert.equal(security.isTrustedExternalUrl(videoSource.youtubeSourceUrl(url)), true)
+  }
+  for (const url of ['', '/tmp/video.mp4', 'https://www.twitch.tv/videos/123', 'https://youtube.com.evil.test/watch?v=hqP9fivmBqI', 'javascript:alert(1)', 'https://user:pass@www.youtube.com/watch?v=hqP9fivmBqI', 'https://www.youtube.com/redirect?q=https://example.com', 'https://www.youtube.com/watch?v=invalid']) {
+    assert.equal(videoSource.youtubeSourceUrl(url), null)
+    assert.equal(security.isTrustedExternalUrl(url), false)
+  }
+  assert.equal(security.isTrustedExternalUrl(canonical + '&redirect=https://example.com'), false)
 })
 
 test('job validation rejects malformed options and invalid trim intervals', () => {

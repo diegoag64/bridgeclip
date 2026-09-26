@@ -2,11 +2,14 @@ import { execFile } from 'child_process'
 import { createHash } from 'crypto'
 import { realpathSync } from 'fs'
 import { promisify } from 'util'
+import { youtubeSourceUrl } from '../shared/video-source'
 import type { AutomationSourceContext } from '../shared/automations'
 import type { JobOutput } from '../shared/job-output'
 import { getJobHistory, getJobOutput } from './file-manager'
 import { isWithinDirectory, openAuthorizedMedia } from './security'
 import { resolveBinary } from './tools'
+
+export { youtubeSourceUrl } from '../shared/video-source'
 
 const execFileAsync = promisify(execFile)
 
@@ -50,21 +53,6 @@ export async function findLibraryRunForClip(bankFile: string | null, library: st
     }
     return null
   } finally { await bank.handle.close() }
-}
-
-/** Only pass an extracted video ID to the metadata tool, never an arbitrary URL. */
-export function youtubeSourceUrl(value: unknown): string | null {
-  if (typeof value !== 'string' || value.length > 8192) return null
-  try {
-    const url = new URL(value)
-    if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.port) return null
-    let id: string | null = null
-    if (url.hostname === 'youtu.be') id = url.pathname.slice(1)
-    if (['youtube.com', 'www.youtube.com', 'm.youtube.com'].includes(url.hostname)) {
-      id = url.pathname === '/watch' ? url.searchParams.get('v') : /^\/(?:shorts|embed)\/([^/]+)$/.exec(url.pathname)?.[1] ?? null
-    }
-    return id && /^[\w-]{11}$/.test(id) ? `https://www.youtube.com/watch?v=${id}` : null
-  } catch { return null }
 }
 
 export function parseSourceContext(value: unknown): AutomationSourceContext | null {
