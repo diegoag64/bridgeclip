@@ -31,6 +31,7 @@ export interface ClipSettings {
 export type { ClipJobRequest, JobSnapshot } from '../shared/jobs'
 
 export interface HistoryEntry {
+  favorite?: boolean
   jobId: string
   date: string
   videoTitle: string
@@ -139,6 +140,8 @@ export interface BridgeClipAPI {
     onUpdate: (callback: (job: JobSnapshot) => void) => () => void
   }
   history: {
+    setFavorite: (outputDir: string, favorite: boolean) => Promise<boolean>
+    delete: (outputDir: string) => Promise<void>
     postingStatus: (outputDir: string) => Promise<LibraryClipPostingStatus[]>
     metadataSource: (outputDir: string, clipIndex: number) => Promise<AutomationSourceContext | null>
     enhanceMetadata: (outputDir: string, clipIndex: number, options: LibraryEnhancementOptions) => Promise<MetadataEnhancement>
@@ -254,6 +257,8 @@ const api: BridgeClipAPI = {
     onUpdate: (callback) => subscribe('jobs:update', callback)
   },
   history: {
+    setFavorite: (outputDir, favorite) => ipcRenderer.invoke('history:setFavorite', outputDir, favorite),
+    delete: (outputDir) => ipcRenderer.invoke('history:delete', outputDir),
     postingStatus: (outputDir) => ipcRenderer.invoke('history:postingStatus', outputDir),
     metadataSource: (outputDir, clipIndex) => ipcRenderer.invoke('history:metadataSource', outputDir, clipIndex),
     enhanceMetadata: (outputDir, clipIndex, options) => ipcRenderer.invoke('history:enhanceMetadata', outputDir, clipIndex, options),

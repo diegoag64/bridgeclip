@@ -11,6 +11,7 @@ import { parseJobOutput, type JobOutput } from '../shared/job-output'
 import { readRunRecord } from './run-history'
 
 export interface JobHistoryEntry {
+  favorite?: boolean
   jobId: string
   date: string
   videoTitle: string
@@ -21,6 +22,14 @@ export interface JobHistoryEntry {
   finishedAt: string | null
   durationMs: number | null
   errorMessage: string | null
+}
+
+export const LIBRARY_FAVORITE_FILE = '.bridgeclip-favorite'
+export function isRunFavorite(outputDir: string): boolean {
+  try {
+    const marker = lstatSync(join(outputDir, LIBRARY_FAVORITE_FILE))
+    return marker.isFile() && !marker.isSymbolicLink() && marker.size === 0
+  } catch { return false }
 }
 
 const MAX_JOB_OUTPUT_BYTES = 20 * 1024 * 1024
@@ -76,6 +85,7 @@ export async function getJobHistory(baseDir: string, activeJobIds: ReadonlySet<s
         const costs = data.metrics?.api_costs
         const costVal = costs && typeof costs === 'object' ? (costs as Record<string, unknown>).total_estimated_cost_usd : null
         entries.push({
+          favorite: isRunFavorite(join(baseDir, dir.name)),
           jobId: dir.name,
           date: record?.startedAt ?? result.modified.toISOString(),
           videoTitle: data.source_video_title,
@@ -192,7 +202,7 @@ export async function generateThumbnail(videoPath: string, seekSeconds?: number)
       seekTo > 0 ? ['-n', '-ss', seekTo.toFixed(2), ...frameArgs] : ['-n', ...frameArgs],
       { timeout: 15000 }
     )
-    if (existsSync(tempPath)) {
+    if (existsSync(tempPath) && sameSource()) {
       renameSync(tempPath, thumbPath)
       return thumbPath
     }
@@ -201,7 +211,7 @@ export async function generateThumbnail(videoPath: string, seekSeconds?: number)
     try { unlinkSync(tempPath) } catch { /* The first attempt may not have written a frame. */ }
     try {
       await execFileAsync(ffmpeg, ['-n', ...frameArgs], { timeout: 15000 })
-      if (existsSync(tempPath)) {
+      if (existsSync(tempPath) && sameSource()) {
         renameSync(tempPath, thumbPath)
         return thumbPath
       }
@@ -212,4 +222,37 @@ export async function generateThumbnail(videoPath: string, seekSeconds?: number)
     try { unlinkSync(tempPath) } catch { /* No partial thumbnail remains. */ }
   }
   return null
+
+  function sameSource(): boolean {
+    if (!sourceStat) return false
+    try {
+      const current = statSync(source)
+      return current.dev === sourceStat.dev && current.ino === sourceStat.ino && current.size === sourceStat.size && current.mtimeMs === sourceStat.mtimeMs
+    } catch { return false }
+  }
+}
+
+/** Remove the preview variants used by Library cards and the Posts page. */
+export function removeRunThumbnails(outputDir: string, output: JobOutput): void {
+  const thumbnailDir = join(app.getPath('userData'), 'thumbnails')
+  if (!existsSync(thumbnailDir)) return
+  const cache = lstatSync(thumbnailDir)
+  if (!cache.isDirectory() || cache.isSymbolicLink()) return
+  const run = realpathSync(outputDir)
+  for (const clip of output.clips) {
+    let source: string
+    let file: ReturnType<typeof statSync>
+    try {
+      source = realpathSync(clip.s3_url.replace(/^file:\/\//, ''))
+      const rel = relative(run, source)
+      if (!rel || isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`)) continue
+      file = statSync(source)
+      if (!file.isFile()) continue
+    } catch { continue }
+    for (const seek of ['middle', clip.duration_ms > 0 ? clip.duration_ms / 2000 : 'middle']) {
+      const identity = `${source}:${file.dev}:${file.ino}:${file.size}:${file.mtimeMs}:${seek}`
+      const thumbnail = join(thumbnailDir, `${createHash('sha256').update(identity).digest('hex')}.jpg`)
+      try { unlinkSync(thumbnail) } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+    }
+  }
 }

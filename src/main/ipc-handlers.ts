@@ -24,6 +24,7 @@ import { resolveBinary, supportsCaptionFilter } from './tools'
 import { automationEnhancementGroups, enhanceAutomationBatch, automationContentSource, enhanceAutomationContent, resolveAutomationMetadataDraft, addAutomationContent, addLibraryClipsToAutomation, createAutomation, deleteAutomation, isAutomationMedia, listAutomations, removeAutomationContent, runAutomation, updateAutomation, updateAutomationContent, approveAutomationTikTokReview, prepareAutomationTikTokReview } from './automations'
 import { reorderAutomationContent } from './automations'
 import { libraryPostingStatus, libraryMetadataSource, enhanceLibraryMetadata } from './library-posting'
+import { deleteLibraryRun, setLibraryFavorite } from './library-management'
 import {
   cancelZernioConnect,
   connectZernioAccount,
@@ -249,6 +250,8 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
   })
 
   handle('history:postingStatus', (_event, outputDir: unknown) => libraryPostingStatus(outputDir))
+  handle('history:setFavorite', (_event, outputDir: unknown, favorite: unknown) => setLibraryFavorite(outputDir, favorite))
+  handle('history:delete', (_event, outputDir: unknown) => deleteLibraryRun(outputDir))
   handle('history:metadataSource', (_event, outputDir: unknown, clipIndex: unknown) => libraryMetadataSource(outputDir, clipIndex))
   handle('history:enhanceMetadata', (_event, outputDir: unknown, clipIndex: unknown, options: unknown) => enhanceLibraryMetadata(outputDir, clipIndex, options))
   handle('history:getJob', (_event, outputDir: string) => {
