@@ -193,7 +193,8 @@ test('the native picker authorizes media and shell opening rejects aliased appli
       './tools': {},
       './zernio/service': {},
       './zernio/posts': {},
-      './automations': {}
+      './automations': {},
+      './library-posting': {}
     })
     ipc.registerIpcHandlers(() => window)
     assert.equal(handlers.has('files:registerMedia'), false)

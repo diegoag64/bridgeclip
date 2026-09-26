@@ -8,6 +8,9 @@ import { Checkbox } from './ui/Checkbox'
 import { Button } from './ui/Button'
 import { Badge } from './ui/Badge'
 import { Skeleton } from './ui/Skeleton'
+import { HoverCard } from './ui/HoverCard'
+import { LIBRARY_POSTING_LABELS, type LibraryClipPostingStatus } from '../../shared/library-posting'
+import { platformName } from './PlatformIcon'
 
 // How the engine framed a vertical clip (its dominant layout).
 const LAYOUT_LABELS: Record<string, string> = {
@@ -20,6 +23,7 @@ const LAYOUT_LABELS: Record<string, string> = {
 }
 
 interface ClipCardProps {
+  postingStatus?: LibraryClipPostingStatus
   clip: ClipArtifact
   vertical: boolean
   topPick?: boolean
@@ -36,6 +40,7 @@ interface ClipCardProps {
 
 export function ClipCard({
   clip,
+  postingStatus,
   vertical,
   topPick,
   selected,
@@ -185,16 +190,19 @@ export function ClipCard({
         <span className="glass-chip pointer-events-none absolute bottom-2 left-2 z-10 rounded-full px-1.5 py-px font-mono text-2xs tabular text-white/95">
           {formatTimecode(clip.duration_ms)}
         </span>
-        {!selecting && (
-          <div className="absolute bottom-2 right-2 z-10 flex items-center gap-1 opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover:opacity-100">
-            {onPost && <MediaAction label={`Post “${title}”`} title="Post to social accounts" icon={<Send />} onClick={onPost} />}
-            {onAddToAutomation && <MediaAction label={`Add “${title}” to automation`} title="Add to automation" icon={<ListPlus />} onClick={onAddToAutomation} />}
-            <MediaAction label={isMac ? 'Show in Finder' : 'Show in folder'} icon={<FolderOpen />} onClick={() => { void showInFolder() }} />
-          </div>
-        )}
       </div>
 
-      <div className="px-1.5 pb-1 pt-2">
+      <div className="px-2 pb-2 pt-3">
+        <div className="mb-3 flex min-h-8 flex-wrap items-center justify-between gap-2">
+          {postingStatus && <HoverCard content={<span>{LIBRARY_POSTING_LABELS[postingStatus.state]}{postingStatus.platforms.length ? ` on ${postingStatus.platforms.map(platformName).join(', ')}` : ''}</span>}>
+            <Badge tone={postingStatus.state === 'posted' ? 'success' : postingStatus.state === 'partial' || postingStatus.state === 'failed' ? 'warning' : 'neutral'}>{LIBRARY_POSTING_LABELS[postingStatus.state]}</Badge>
+          </HoverCard>}
+          {!selecting && <div className="ml-auto flex items-center gap-1.5">
+            {onPost && <MediaAction label={`Post “${title}”`} title="Post or schedule to social accounts" icon={<Send />} onClick={onPost} />}
+            {onAddToAutomation && <MediaAction label={`Add “${title}” to automation`} title="Add to an automation queue" icon={<ListPlus />} onClick={onAddToAutomation} />}
+            <MediaAction label={isMac ? 'Show in Finder' : 'Show in folder'} title="Open the folder containing this clip" icon={<FolderOpen />} onClick={() => { void showInFolder() }} />
+          </div>}
+        </div>
         <h3 className="line-clamp-2 text-sm font-medium leading-[18px] text-ink" title={title}>
           {title}
         </h3>
@@ -225,17 +233,18 @@ export function ClipCard({
   )
 }
 
-/** Small frosted button over the clip's media; shown on hover or focus. */
+/** Dedicated action row keeps controls clear of duration and media labels. */
 function MediaAction({ label, title, icon, onClick }: { label: string; title?: string; icon: React.ReactNode; onClick: () => void }): React.JSX.Element {
   return (
+    <HoverCard cardClassName="px-3 py-2 text-xs" content={<span>{title ?? label}</span>}>
     <button
       type="button"
       aria-label={label}
-      title={title ?? label}
       onClick={onClick}
       className="glass-chip flex h-7 w-7 items-center justify-center rounded-full text-white/90 transition-colors duration-150 hover:bg-white/25 hover:text-white [&_svg]:h-3.5 [&_svg]:w-3.5"
     >
       {icon}
     </button>
+    </HoverCard>
   )
 }

@@ -19,6 +19,9 @@ import { Checkbox } from './ui/Checkbox'
 import { EmptyState } from './ui/EmptyState'
 import { Callout } from './ui/Callout'
 import { Segmented } from './ui/Segmented'
+import { usePostsStore } from '../store/use-posts-store'
+import { useSettingsStore } from '../store/use-settings-store'
+import type { LibraryClipPostingStatus } from '../../shared/library-posting'
 import type { Page as AppPage } from './Sidebar'
 
 type Sort = 'score' | 'timeline' | 'editorial'
@@ -43,6 +46,13 @@ function toPostable(clip: ClipArtifact): PostableClip {
 }
 
 export function ClipList({ output, outputDir: runDirectory, leading, onNewClip, onNavigate }: ClipListProps): React.JSX.Element {
+  const postRecords = usePostsStore((state) => state.posts)
+  const refreshError = usePostsStore((state) => state.error)
+  const configured = useSettingsStore((state) => state.zernioConfigured)
+  const [postingStatus, setPostingStatus] = useState<LibraryClipPostingStatus[] | null>(null)
+  const [postingError, setPostingError] = useState<string | null>(null)
+  const [postedExpanded, setPostedExpanded] = useState(false)
+  const [statusRetry, setStatusRetry] = useState(0)
   const [sort, setSort] = useState<Sort>('score')
   const [weights, setWeights] = useState({ ...defaultWeights })
   const hasEditorial = output.clips.some((c) => c.editorial?.status === 'success')
@@ -86,6 +96,26 @@ export function ClipList({ output, outputDir: runDirectory, leading, onNewClip, 
   const firstClip = output.clips[0]
   const outputDir = runDirectory ?? (firstClip ? clipFilePath(firstClip.s3_url).replace(/[\\/][^\\/]+$/, '') : '')
 
+  const asPostable = (clip: ClipArtifact): PostableClip => ({ ...toPostable(clip), library: { outputDir, clipIndex: clip.clip_index } })
+
+  useEffect(() => {
+    if (!configured) return
+    void usePostsStore.getState().refresh()
+    const timer = window.setInterval(() => { void usePostsStore.getState().refresh() }, 30000)
+    return () => window.clearInterval(timer)
+  }, [configured])
+
+  useEffect(() => {
+    let active = true
+    setPostingError(null)
+    if (!outputDir) { setPostingStatus(null); return }
+    void getApi().history.postingStatus(outputDir).then((statuses) => { if (active) setPostingStatus(statuses) })
+      .catch((cause) => { if (active) { setPostingStatus(null); setPostingError(errorMessage(cause, 'Could not read posting history.')) } })
+    return () => { active = false }
+  }, [outputDir, postRecords, statusRetry])
+
+  useEffect(() => { setPostingStatus(null); setPostedExpanded(false) }, [outputDir])
+
   const topIndex = useMemo(() => {
     let best: ClipArtifact | null = null
     for (const clip of output.clips) if (!best || clip.virality_score > best.virality_score) best = clip
@@ -100,7 +130,16 @@ export function ClipList({ output, outputDir: runDirectory, leading, onNewClip, 
       : list.sort((a, b) => a.start_time_ms - b.start_time_ms)
   }, [output.clips, sort, weights])
 
-  const allSelected = selected.size > 0 && selected.size === clips.length
+  const statusByClip = new Map(postingStatus?.map((status) => [status.clipIndex, status]))
+  const unposted = clips.filter((clip) => statusByClip.get(clip.clip_index)?.state !== 'posted')
+  const posted = clips.filter((clip) => statusByClip.get(clip.clip_index)?.state === 'posted')
+  const visibleClips = postedExpanded ? clips : unposted
+  const visibleIds = visibleClips.map((clip) => clip.clip_index).join(',')
+  useEffect(() => {
+    const visible = new Set(visibleIds.split(',').filter(Boolean).map(Number))
+    setSelected((previous) => new Set([...previous].filter((index) => visible.has(index))))
+  }, [visibleIds])
+  const allSelected = visibleClips.length > 0 && visibleClips.every((clip) => selected.has(clip.clip_index))
 
   const toggle = (index: number): void => {
     setSelected((prev) => {
@@ -140,6 +179,34 @@ export function ClipList({ output, outputDir: runDirectory, leading, onNewClip, 
   const costs = readCosts(output.metrics?.api_costs)
   const framingNotice = framingProblem(output, vertical)
   const analysisNotice = sourceAnalysisNotice(output)
+
+  const renderGrid = (items: ClipArtifact[]): React.JSX.Element => (
+        <div
+          className={cn(
+            'mt-4 grid gap-5',
+            vertical
+              ? 'grid-cols-[repeat(auto-fill,minmax(200px,1fr))]'
+              : 'grid-cols-[repeat(auto-fill,minmax(280px,1fr))]'
+          )}
+        >
+          {items.map((clip) => (
+            <ClipCard
+              key={clip.clip_index}
+              clip={clip}
+              postingStatus={statusByClip.get(clip.clip_index)}
+              vertical={vertical}
+              topPick={clip.clip_index === topIndex && clips.length > 1}
+              selected={selected.has(clip.clip_index)}
+              selecting={selected.size > 0}
+              onToggleSelect={() => toggle(clip.clip_index)}
+              onAspect={aspect == null ? setAspect : undefined}
+              onPost={() => setPosting([asPostable(clip)])}
+              onInspectFraming={() => setInspecting(clip)}
+              onAddToAutomation={outputDir ? () => setBankClips([clip.clip_index]) : undefined}
+            />
+          ))}
+        </div>
+  )
 
   return (
     <Page width="wide">
@@ -196,7 +263,7 @@ export function ClipList({ output, outputDir: runDirectory, leading, onNewClip, 
           <Checkbox
             checked={allSelected}
             indeterminate={selected.size > 0 && !allSelected}
-            onChange={() => setSelected(allSelected ? new Set() : new Set(clips.map((c) => c.clip_index)))}
+            onChange={() => setSelected(allSelected ? new Set() : new Set(visibleClips.map((c) => c.clip_index)))}
             label="Select all clips"
           />
           <span className="whitespace-nowrap text-sm text-ink-muted">
@@ -227,7 +294,7 @@ export function ClipList({ output, outputDir: runDirectory, leading, onNewClip, 
                 icon={<Send className="h-3.5 w-3.5" />}
                 disabled={selected.size > MAX_POST_BATCH}
                 title={selected.size > MAX_POST_BATCH ? `Post up to ${MAX_POST_BATCH} clips at a time` : undefined}
-                onClick={() => setPosting(clips.filter((c) => selected.has(c.clip_index)).map(toPostable))}
+                onClick={() => setPosting(clips.filter((c) => selected.has(c.clip_index)).map(asPostable))}
               >
                 Post {selected.size}
               </Button>
@@ -275,30 +342,20 @@ export function ClipList({ output, outputDir: runDirectory, leading, onNewClip, 
           description="The run completed without saved clips. Check the run log for details."
         />
       ) : (
-        <div
-          className={cn(
-            'mt-3 grid gap-3',
-            vertical
-              ? 'grid-cols-[repeat(auto-fill,minmax(140px,1fr))]'
-              : 'grid-cols-[repeat(auto-fill,minmax(220px,1fr))]'
-          )}
-        >
-          {clips.map((clip) => (
-            <ClipCard
-              key={clip.clip_index}
-              clip={clip}
-              vertical={vertical}
-              topPick={clip.clip_index === topIndex && clips.length > 1}
-              selected={selected.has(clip.clip_index)}
-              selecting={selected.size > 0}
-              onToggleSelect={() => toggle(clip.clip_index)}
-              onAspect={aspect == null ? setAspect : undefined}
-              onPost={() => setPosting([toPostable(clip)])}
-              onInspectFraming={() => setInspecting(clip)}
-              onAddToAutomation={outputDir ? () => setBankClips([clip.clip_index]) : undefined}
-            />
-          ))}
-        </div>
+        <>
+          <div className="mt-5 flex items-center justify-between gap-3">
+            <h2 className="text-base font-semibold text-ink">{postingStatus ? `Not posted · ${unposted.length}` : 'Clips'}</h2>
+            <Button size="sm" variant="ghost" onClick={() => { void usePostsStore.getState().refresh(true); setStatusRetry((value) => value + 1) }}>Refresh post status</Button>
+          </div>
+          {postingError && <Callout tone="warning" className="mt-3">{postingError} All clips remain visible.</Callout>}
+          {configured && refreshError && !postingError && <Callout tone="warning" className="mt-3">{refreshError} Showing saved posting status.</Callout>}
+          {!postingStatus && !postingError && <p role="status" className="mt-2 text-xs text-ink-muted">Checking posting history…</p>}
+          {unposted.length ? renderGrid(unposted) : <p className="mt-3 text-sm text-ink-muted">All clips in this run have been posted.</p>}
+          {posted.length > 0 && <section className="mt-6 border-t border-white/[0.08] pt-4">
+            <Button variant="ghost" aria-expanded={postedExpanded} onClick={() => setPostedExpanded((value) => !value)}>{postedExpanded ? 'Hide' : 'Show'} posted · {posted.length}</Button>
+            {postedExpanded && renderGrid(posted)}
+          </section>}
+        </>
       )}
 
       {posting && <PostDialog clips={posting} onClose={() => setPosting(null)} onNavigate={onNavigate} />}

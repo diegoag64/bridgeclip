@@ -15,6 +15,6 @@ Follow the [development instructions](README.md#develop). Install the in-repo en
 
 Run `npm run typecheck`, `npm run lint`, `npm test`, and `npm run build` when working on a local fork. For engine changes, install `pytest` in `engine/.venv` and run `engine/.venv/bin/python -m pytest -q engine/tests`; the runtime lockfile does not include test tools. Describe behavior, tests, and any user-visible screenshots or sample outputs in the PR.
 
-Use an imperative, scoped commit message such as `fix(clips): validate saved run output`. By contributing, you agree to follow the [code of conduct](CODE_OF_CONDUCT.md).
+Use imperative, scoped commit messages and pull request titles, such as `fix(clips): validate saved run output`. By contributing, you agree to follow the [code of conduct](CODE_OF_CONDUCT.md).
 
 Official CI logs and signing workflows are private. Build helpers, dependency pins, and release verification instructions remain available in this repository.

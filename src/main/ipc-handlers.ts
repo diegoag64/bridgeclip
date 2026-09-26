@@ -22,6 +22,8 @@ import { getModelCatalog, resolveAdvancedModels } from './openrouter-models'
 import { randomUUID } from 'crypto'
 import { resolveBinary, supportsCaptionFilter } from './tools'
 import { automationEnhancementGroups, enhanceAutomationBatch, automationContentSource, enhanceAutomationContent, resolveAutomationMetadataDraft, addAutomationContent, addLibraryClipsToAutomation, createAutomation, deleteAutomation, isAutomationMedia, listAutomations, removeAutomationContent, runAutomation, updateAutomation, updateAutomationContent, approveAutomationTikTokReview, prepareAutomationTikTokReview } from './automations'
+import { reorderAutomationContent } from './automations'
+import { libraryPostingStatus, libraryMetadataSource, enhanceLibraryMetadata } from './library-posting'
 import {
   cancelZernioConnect,
   connectZernioAccount,
@@ -113,6 +115,7 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
   handle('automations:enhance', (_event, id: unknown, contentId: unknown, options: unknown) => enhanceAutomationContent(id, contentId, options))
   handle('automations:resolveDraft', (_event, id: unknown, contentId: unknown, draftId: unknown, apply: unknown) => resolveAutomationMetadataDraft(id, contentId, draftId, apply))
   handle('automations:list', () => listAutomations())
+  handle('automations:reorder', (_event, id: unknown, contentId: unknown, beforeId: unknown) => reorderAutomationContent(id, contentId, beforeId))
   handle('automations:create', (_event, name: unknown) => createAutomation(name))
   handle('automations:update', (_event, id: unknown, update: unknown) => updateAutomation(id, update))
   handle('automations:delete', (_event, id: unknown) => deleteAutomation(id))
@@ -245,6 +248,9 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
     return getJobHistory(settings.outputDirectory, liveJobIds())
   })
 
+  handle('history:postingStatus', (_event, outputDir: unknown) => libraryPostingStatus(outputDir))
+  handle('history:metadataSource', (_event, outputDir: unknown, clipIndex: unknown) => libraryMetadataSource(outputDir, clipIndex))
+  handle('history:enhanceMetadata', (_event, outputDir: unknown, clipIndex: unknown, options: unknown) => enhanceLibraryMetadata(outputDir, clipIndex, options))
   handle('history:getJob', (_event, outputDir: string) => {
     assertAbsolutePath(outputDir)
     if (!isWithinDirectory(outputDir, loadSettings().outputDirectory)) throw new Error('Job is outside the library')

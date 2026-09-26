@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
-import { AlertTriangle, ArrowUpRight, CalendarClock, Check, Inbox, Loader2, Play, Search, Send, Share2, X } from 'lucide-react'
+import { AlertTriangle, ArrowUpRight, CalendarClock, Check, Inbox, Loader2, Play, Search, Send, Share2, Sparkles, X } from 'lucide-react'
+import type { MetadataEnhancement } from '../../shared/automations'
+import { LibraryMetadataEditor } from './LibraryMetadataEditor'
 import { getApi } from '../lib/ipc'
 import { cn, errorMessage, localFileUrl } from '../lib/utils'
 import { loadThumbnail } from '../lib/thumbnails'
@@ -39,7 +41,7 @@ import { PlatformIcon, platformName } from './PlatformIcon'
 import { Button } from './ui/Button'
 import { Checkbox } from './ui/Checkbox'
 import { Switch } from './ui/Switch'
-import { TextArea, TextInput, WELL } from './ui/Field'
+import { Field, TextArea, TextInput, WELL } from './ui/Field'
 import { Select } from './ui/Select'
 import { ProgressBar } from './ui/ProgressBar'
 import { Badge } from './ui/Badge'
@@ -50,6 +52,7 @@ import { Segmented } from './ui/Segmented'
 import type { Page } from './Sidebar'
 
 export interface PostableClip {
+  library?: { outputDir: string; clipIndex: number }
   path: string
   title: string
   tags: string[]
@@ -131,6 +134,15 @@ function isCreatorInfo(value: CreatorInfoState | undefined): value is TikTokCrea
 
 export function PostDialog({ clips, onClose, onNavigate }: PostDialogProps): React.JSX.Element {
   const zernioConfigured = useSettingsStore((s) => s.zernioConfigured)
+  const writingConfigured = useSettingsStore((s) => s.openrouterConfigured)
+  const [enhancementOpen, setEnhancementOpen] = useState(false)
+  const [metadataBusy, setMetadataBusy] = useState(false)
+  const metadataBusyRef = useRef(metadataBusy)
+  metadataBusyRef.current = metadataBusy
+  const [enhanced, setEnhanced] = useState(false)
+  const [platformCaptions, setPlatformCaptions] = useState<Partial<Record<ZernioPlatform, string>>>({})
+  const [facebookTitle, setFacebookTitle] = useState('')
+  const [threadsTopicTag, setThreadsTopicTag] = useState('')
   const { accounts, profiles, loaded: accountsLoaded, loading: accountsLoading, error: accountsError, load: loadAccounts } = useAccountsStore()
 
   const [index, setIndex] = useState(0)
@@ -285,12 +297,17 @@ export function PostDialog({ clips, onClose, onNavigate }: PostDialogProps): Rea
   const scheduleProblem = mode === 'schedule' ? scheduleError(scheduledAt, now) : null
   const bounds = scheduleWindow(now)
 
-  const captionProblems = platforms.map((p) => ({ platform: p, ...checkCaption(p, caption) }))
+  const captionProblems = platforms.map((p) => ({ platform: p, ...checkCaption(p, platformCaptions[p] ?? caption) }))
   const youtubeProblem = has('youtube')
     ? !youtube.title.trim() ? 'Add a YouTube title.' : [...youtube.title.trim()].length > YOUTUBE_TITLE_MAX ? `YouTube titles can be at most ${YOUTUBE_TITLE_MAX} characters.` : /[<>]/.test(youtube.title) ? 'YouTube titles can’t contain < or >.' : null
     : null
 
   const issues: string[] = []
+  if (has('facebook') && fbFormat === 'reel' && /[<>\r\n]/.test(facebookTitle)) issues.push('Facebook Reel titles cannot contain <, >, or line breaks.')
+  if (has('youtube') && youtube.categoryId && !/^\d{1,3}$/.test(youtube.categoryId)) issues.push('YouTube category ID must contain 1–3 digits.')
+  if (has('youtube') && youtube.tags && (youtube.tags.length > 20 || youtube.tags.join(',').length > 500 || youtube.tags.some((tag) => tag.length > 100 || /[<>]/.test(tag)))) issues.push('Use up to 20 YouTube tags, 100 characters each and 500 characters total, without < or >.')
+  if (has('threads') && /[.#&\r\n]/.test(threadsTopicTag)) issues.push('Threads topic tags cannot contain periods, #, &, or line breaks.')
+  if (enhancementOpen) issues.push('Apply or discard the metadata draft before posting.')
   if (unavailableSelected.length > 0) issues.push('A selected account is no longer available. Remove it or reconnect it on the Accounts page.')
   if (selectedAccounts.length === 0) issues.push('Choose at least one account.')
   if (!media) issues.push('Checking the clip…')
@@ -324,6 +341,17 @@ export function PostDialog({ clips, onClose, onNavigate }: PostDialogProps): Rea
   if (scheduleProblem) issues.push(scheduleProblem)
   const ready = issues.length === 0 && phase === 'editing'
 
+  const applyMetadata = (draft: MetadataEnhancement): void => {
+    setPlatformCaptions(Object.fromEntries(draft.posts.map((post) => [post.platform, post.caption])))
+    const yt = draft.posts.find((post) => post.platform === 'youtube')
+    if (yt) setYoutube((current) => ({ ...current, title: yt.title || current.title, tags: yt.tags, categoryId: yt.categoryId ?? undefined }))
+    setFacebookTitle(draft.posts.find((post) => post.platform === 'facebook')?.title ?? '')
+    setThreadsTopicTag(draft.posts.find((post) => post.platform === 'threads')?.topicTag ?? '')
+    setTiktok((current) => ({ ...current, consent: false }))
+    setEnhanced(true)
+    setEnhancementOpen(false)
+  }
+
   const submit = async (): Promise<void> => {
     if (!ready) return
     setPhase('sending')
@@ -336,13 +364,15 @@ export function PostDialog({ clips, onClose, onNavigate }: PostDialogProps): Rea
         clipTitle: clip.title,
         durationMs: clip.durationMs,
         caption,
-        targets: selectedAccounts.map((a) => ({ platform: a.platform as ZernioPlatform, accountId: a.id })),
+        targets: selectedAccounts.map((a) => ({ platform: a.platform as ZernioPlatform, accountId: a.id,
+          ...(platformCaptions[a.platform as ZernioPlatform] !== undefined ? { customContent: platformCaptions[a.platform as ZernioPlatform] } : {}) })),
         timing: mode === 'now' ? { mode: 'now' } : { mode: 'schedule', scheduledFor: new Date(scheduledAt).toISOString(), timezone: localTimeZone() },
         options: {
           ...(has('tiktok') ? { tiktok } : {}),
           ...(has('youtube') ? { youtube: { ...youtube, title: youtube.title.trim() } } : {}),
           ...(has('instagram') ? { instagram: { shareToFeed } } : {}),
-          ...(has('facebook') ? { facebook: { format: fbFormat } } : {})
+          ...(has('facebook') ? { facebook: { format: fbFormat, ...(fbFormat === 'reel' && facebookTitle.trim() ? { title: facebookTitle.trim() } : {}) } } : {}),
+          ...(has('threads') && threadsTopicTag.trim() ? { threads: { topicTag: threadsTopicTag.trim() } } : {})
         }
       })
       if (outcome.post) usePostsStore.getState().upsert(outcome.post)
@@ -366,7 +396,8 @@ export function PostDialog({ clips, onClose, onNavigate }: PostDialogProps): Rea
     setIndex(index + 1)
     setAttemptId(newAttemptId())
     setCaption(defaultCaption(next.title, next.tags))
-    setYoutube((y) => ({ ...y, title: youtubeTitleFor(next.title) || 'Untitled clip' }))
+    setYoutube((y) => ({ ...y, title: youtubeTitleFor(next.title) || 'Untitled clip', tags: undefined, categoryId: undefined }))
+    setPlatformCaptions({}); setFacebookTitle(''); setThreadsTopicTag(''); setEnhanced(false); setEnhancementOpen(false)
     // TikTok's consent covers one piece of content.
     setTiktok((t) => ({ ...t, consent: false }))
     setFacebookFormat(null)
@@ -377,7 +408,7 @@ export function PostDialog({ clips, onClose, onNavigate }: PostDialogProps): Rea
   }
 
   const close = useCallback((): void => {
-    if (phaseRef.current !== 'sending') onClose()
+    if (phaseRef.current !== 'sending' && !metadataBusyRef.current) onClose()
   }, [onClose])
 
   const goToAccounts = (): void => {
@@ -462,6 +493,15 @@ export function PostDialog({ clips, onClose, onNavigate }: PostDialogProps): Rea
   } else {
     body = (
       <div className={cn('space-y-5 px-4 py-4 transition-opacity duration-200', sending && 'pointer-events-none opacity-60')} aria-busy={sending}>
+        {clip.library && (enhancementOpen ? <LibraryMetadataEditor
+          library={clip.library} options={{ platforms, notes: caption, facebookFormat: fbFormat }}
+          onApply={applyMetadata} onClose={() => setEnhancementOpen(false)} onBusy={setMetadataBusy}
+        /> : <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="text-xs text-ink-muted">{enhanced ? 'Enhanced metadata applied. Review and edit below.' : 'Write platform-specific titles, captions and tags.'}</span>
+          <Button size="sm" icon={<Sparkles className="h-3.5 w-3.5" />} disabled={!writingConfigured || !platforms.length || sending} onClick={() => setEnhancementOpen(true)}>Enhance metadata</Button>
+          {!writingConfigured && <p className="w-full text-xs text-ink-subtle">Add an OpenRouter key in Settings to enhance metadata.</p>}
+        </div>)}
+        <fieldset disabled={metadataBusy || sending} className="space-y-5">
         <Section
           title="Post to"
           aside={selectedAccounts.length > 0 && <span className="rounded-full bg-accent/[0.14] px-2 py-0.5 text-2xs font-medium text-accent-hover">{selectedAccounts.length} selected</span>}
@@ -484,7 +524,10 @@ export function PostDialog({ clips, onClose, onNavigate }: PostDialogProps): Rea
           />
         </Section>
 
-        <CaptionField caption={caption} onChange={setCaption} problems={captionProblems} />
+        {(!platforms.length || platforms.some((platform) => platformCaptions[platform] === undefined)) && <CaptionField caption={caption} onChange={(value) => { setCaption(value); setTiktok((current) => ({ ...current, consent: false })) }} problems={captionProblems.filter((problem) => platformCaptions[problem.platform] === undefined)} />}
+        {platforms.filter((platform) => platformCaptions[platform] !== undefined).map((platform) => <PlatformSection key={platform} platform={platform} subtitle="Enhanced caption">
+          <CaptionField caption={platformCaptions[platform]!} onChange={(value) => { setPlatformCaptions((current) => ({ ...current, [platform]: value })); if (platform === 'tiktok') setTiktok((current) => ({ ...current, consent: false })) }} problems={captionProblems.filter((problem) => problem.platform === platform)} />
+        </PlatformSection>)}
 
         {has('youtube') && (
           <PlatformSection platform="youtube" notes={clipCheck('youtube')?.notes}>
@@ -531,9 +574,11 @@ export function PostDialog({ clips, onClose, onNavigate }: PostDialogProps): Rea
         {has('facebook') && media && (
           <PlatformSection platform="facebook" notes={clipCheck('facebook')?.blocking ? [] : clipCheck('facebook')?.notes}>
             <FacebookFields media={media} value={fbFormat} onChange={setFacebookFormat} />
+            {fbFormat === 'reel' && <Field label="Facebook Reel title"><TextInput aria-label="Facebook Reel title" value={facebookTitle} maxLength={80} onChange={(event) => setFacebookTitle(event.target.value)} /></Field>}
           </PlatformSection>
         )}
 
+        {has('threads') && <Field label="Threads topic tag"><TextInput aria-label="Threads topic tag" value={threadsTopicTag} maxLength={50} onChange={(event) => setThreadsTopicTag(event.target.value)} /></Field>}
         <WhenField
           mode={mode}
           onModeChange={setMode}
@@ -543,6 +588,7 @@ export function PostDialog({ clips, onClose, onNavigate }: PostDialogProps): Rea
           max={toLocalInput(bounds.max)}
           problem={scheduleProblem}
         />
+        </fieldset>
       </div>
     )
   }
@@ -565,7 +611,7 @@ export function PostDialog({ clips, onClose, onNavigate }: PostDialogProps): Rea
             {media && media.sizeBytes > 0 ? <span className="rounded-full bg-white/[0.06] px-2 py-0.5">{formatBytes(media.sizeBytes)}</span> : null}
           </p>
         </div>
-        <Button variant="ghost" size="sm" iconOnly aria-label="Close" onClick={close} disabled={sending} className="relative" icon={<X className="h-4 w-4" />} />
+        <Button variant="ghost" size="sm" iconOnly aria-label="Close" onClick={close} disabled={sending || metadataBusy} className="relative" icon={<X className="h-4 w-4" />} />
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">{body}</div>
@@ -606,7 +652,7 @@ export function PostDialog({ clips, onClose, onNavigate }: PostDialogProps): Rea
               <p className={cn('min-w-0 flex-1 truncate text-xs', issues[0] ? 'text-ink-muted' : 'text-ink-subtle')} title={issues[0]}>
                 {issues[0] ?? (mode === 'now' ? 'Publishes right away.' : `Publishes ${formatScheduled(new Date(scheduledAt).toISOString())}.`)}
               </p>
-              <Button variant="ghost" onClick={close}>Cancel</Button>
+              <Button variant="ghost" disabled={metadataBusy} onClick={close}>Cancel</Button>
               <Button
                 variant="primary"
                 disabled={!ready}
@@ -792,6 +838,11 @@ function SwitchRow({ checked, onChange, label, description, disabled }: { checke
 
 function YouTubeFields({ value, onChange, problem }: { value: YouTubePostOptions; onChange: (value: YouTubePostOptions) => void; problem: string | null }): React.JSX.Element {
   const id = useId()
+  const [tagsText, setTagsText] = useState(() => value.tags?.join(', ') ?? '')
+  const serializedTags = JSON.stringify(value.tags ?? [])
+  useEffect(() => {
+    setTagsText((current) => JSON.stringify(current.split(',').map((tag) => tag.trim()).filter(Boolean)) === serializedTags ? current : (JSON.parse(serializedTags) as string[]).join(', '))
+  }, [serializedTags])
   const length = [...value.title.trim()].length
   return (
     <>
@@ -804,6 +855,8 @@ function YouTubeFields({ value, onChange, problem }: { value: YouTubePostOptions
         {problem && <p role="alert" className="mt-2 text-xs text-danger">{problem}</p>}
         <p className="mt-2 text-xs text-ink-subtle">The caption becomes the video description.</p>
       </div>
+      <Field label="YouTube tags (comma separated)" htmlFor={`${id}-tags`}><TextInput id={`${id}-tags`} value={tagsText} onChange={(event) => { setTagsText(event.target.value); onChange({ ...value, tags: event.target.value.split(',').map((tag) => tag.trim()).filter(Boolean) }) }} /></Field>
+      <Field label="YouTube category ID" htmlFor={`${id}-category`}><TextInput id={`${id}-category`} value={value.categoryId ?? ''} placeholder="Optional" maxLength={3} onChange={(event) => onChange({ ...value, categoryId: event.target.value || undefined })} /></Field>
       <div className="flex items-center justify-between gap-3">
         <span className="text-sm font-medium text-ink">Visibility</span>
         <Segmented<YouTubeVisibility>

@@ -13,7 +13,8 @@ import type {
 } from '../shared/zernio'
 import type { ClipMediaInfo, PostClipRequest, PostClipResult, PostProgress, PostRecord, PostsRefreshResult, TikTokCreatorInfo, TikTokLegalLink } from '../shared/zernio-posts'
 import type { ClipJobRequest, JobSnapshot } from '../shared/jobs'
-import type { AutomationSourceGroup, AutomationBatchResult, AutomationSourceContext, Automation, AutomationUpdate, AutomationTikTokReview, AutomationTikTokReviewUpdate } from '../shared/automations'
+import type { MetadataEnhancement, AutomationSourceGroup, AutomationBatchResult, AutomationSourceContext, Automation, AutomationUpdate, AutomationTikTokReview, AutomationTikTokReviewUpdate } from '../shared/automations'
+import type { LibraryClipPostingStatus, LibraryEnhancementOptions } from '../shared/library-posting'
 import type { OpenRouterCatalog } from '../shared/openrouter-models'
 import type { UpdateState } from '../shared/updates'
 
@@ -64,6 +65,7 @@ export interface BridgeClipAPI {
   framing: { inspect: (outputDir: string, clipIndex: number) => Promise<FramingInspection> }
   models: { list: (refresh?: boolean) => Promise<OpenRouterCatalog> }
   automations: {
+    reorder: (id: string, contentId: string, beforeId: string | null) => Promise<Automation[]>
     enhancementGroups: (id: string) => Promise<AutomationSourceGroup[]>
     enhanceBatch: (id: string, contentIds: string[], key: string) => Promise<AutomationBatchResult>
     source: (id: string, contentId: string) => Promise<AutomationSourceContext | null>
@@ -137,6 +139,9 @@ export interface BridgeClipAPI {
     onUpdate: (callback: (job: JobSnapshot) => void) => () => void
   }
   history: {
+    postingStatus: (outputDir: string) => Promise<LibraryClipPostingStatus[]>
+    metadataSource: (outputDir: string, clipIndex: number) => Promise<AutomationSourceContext | null>
+    enhanceMetadata: (outputDir: string, clipIndex: number, options: LibraryEnhancementOptions) => Promise<MetadataEnhancement>
     list: () => Promise<HistoryEntry[]>
     getJob: (outputDir: string) => Promise<Record<string, unknown> | null>
   }
@@ -190,6 +195,7 @@ const api: BridgeClipAPI = {
   framing: { inspect: (outputDir, clipIndex) => ipcRenderer.invoke('framing:inspect', outputDir, clipIndex) },
   models: { list: (refresh = false) => ipcRenderer.invoke('models:list', refresh) },
   automations: {
+    reorder: (id, contentId, beforeId) => ipcRenderer.invoke('automations:reorder', id, contentId, beforeId),
     enhancementGroups: (id) => ipcRenderer.invoke('automations:enhancementGroups', id),
     enhanceBatch: (id, contentIds, key) => ipcRenderer.invoke('automations:enhanceBatch', id, contentIds, key),
     source: (id, contentId) => ipcRenderer.invoke('automations:source', id, contentId),
@@ -248,6 +254,9 @@ const api: BridgeClipAPI = {
     onUpdate: (callback) => subscribe('jobs:update', callback)
   },
   history: {
+    postingStatus: (outputDir) => ipcRenderer.invoke('history:postingStatus', outputDir),
+    metadataSource: (outputDir, clipIndex) => ipcRenderer.invoke('history:metadataSource', outputDir, clipIndex),
+    enhanceMetadata: (outputDir, clipIndex, options) => ipcRenderer.invoke('history:enhanceMetadata', outputDir, clipIndex, options),
     list: () => ipcRenderer.invoke('history:list'),
     getJob: (outputDir) => ipcRenderer.invoke('history:getJob', outputDir)
   },
