@@ -21,6 +21,7 @@ export default function App(): React.JSX.Element {
   const [retry, setRetry] = useState(0)
   const [page, setPage] = useState<Page>('clip')
   const [pageVisit, setPageVisit] = useState(0)
+  const [libraryRun, setLibraryRun] = useState<string | null>(null)
   /** Set when Help → Check for Updates… asks for Settings → About. */
   const [showUpdates, setShowUpdates] = useState(0)
 
@@ -34,9 +35,17 @@ export default function App(): React.JSX.Element {
     // Keep a modal's progress and cancel controls mounted during an upload.
     if (document.querySelector('[role="dialog"][aria-modal="true"]')) return
     if (destination === 'jobs') useJobStore.getState().focusJob(null)
+    setLibraryRun(null)
     setPage(destination)
     setPageVisit((visit) => visit + 1)
   }, [])
+
+  useEffect(() => { if (page !== 'library') setLibraryRun(null) }, [page])
+  const viewLibraryRun = (outputDir: string): void => {
+    setLibraryRun(outputDir)
+    setPage('library')
+    setPageVisit((visit) => visit + 1)
+  }
 
   useEffect(() => {
     setLoadError(false)
@@ -97,11 +106,11 @@ export default function App(): React.JSX.Element {
         <Layout currentPage={page} onNavigate={navigateRoot}>
           <Fragment key={pageVisit}>
             {page === 'clip' && <ClipPage onNavigate={setPage} />}
-            {page === 'library' && <LibraryPage onNavigate={setPage} />}
+            {page === 'library' && <LibraryPage onNavigate={setPage} initialRun={libraryRun} />}
             {page === 'jobs' && <JobsPage onNavigate={setPage} />}
             {page === 'accounts' && <AccountsPage onNavigate={setPage} />}
             {page === 'posts' && <PostsPage onNavigate={setPage} />}
-            {page === 'automations' && <AutomationsPage onNavigate={setPage} />}
+            {page === 'automations' && <AutomationsPage onNavigate={setPage} onViewLibrary={viewLibraryRun} />}
             {page === 'settings' && <SettingsPage showUpdates={showUpdates} />}
           </Fragment>
         </Layout>

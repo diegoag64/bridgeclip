@@ -20,7 +20,8 @@ import { ConfirmDialog, type ConfirmRequest } from '../components/ui/ConfirmDial
 import { HoverCard } from '../components/ui/HoverCard'
 import type { Page as AppPage } from '../components/Sidebar'
 
-export function LibraryPage({ onNavigate }: { onNavigate: (page: AppPage) => void }): React.JSX.Element {
+export function LibraryPage({ onNavigate, initialRun }: { onNavigate: (page: AppPage) => void; initialRun?: string | null }): React.JSX.Element {
+  const initialRunOpened = useRef(false)
   const outputDirectory = useSettingsStore((s) => s.outputDirectory)
   const [entries, setEntries] = useState<HistoryEntry[] | null>(null)
   const [query, setQuery] = useState('')
@@ -104,7 +105,7 @@ export function LibraryPage({ onNavigate }: { onNavigate: (page: AppPage) => voi
 
   const totalClips = entries?.reduce((sum, e) => sum + e.clipCount, 0) ?? 0
 
-  const openRun = async (entry: HistoryEntry): Promise<void> => {
+  const openRun = useCallback(async (entry: HistoryEntry): Promise<void> => {
     if (busyRef.current.has(entry.outputDir)) return
     const request = ++openRequestId.current
     setError(null)
@@ -125,7 +126,15 @@ export function LibraryPage({ onNavigate }: { onNavigate: (page: AppPage) => voi
     } catch (err) {
       if (request === openRequestId.current) setError(errorMessage(err, 'Could not open this run.'))
     }
-  }
+  }, [])
+
+  useEffect(() => {
+    if (!initialRun || !entries || initialRunOpened.current) return
+    initialRunOpened.current = true
+    const entry = entries.find((item) => item.outputDir === initialRun)
+    if (entry) void openRun(entry)
+    else setError('The source run is no longer in this Library. It may have been moved or deleted.')
+  }, [initialRun, entries, openRun])
 
   const changeRun = async (entry: HistoryEntry, action: 'favorite' | 'delete'): Promise<void> => {
     if (busyRef.current.has(entry.outputDir)) return

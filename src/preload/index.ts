@@ -66,6 +66,7 @@ export interface BridgeClipAPI {
   framing: { inspect: (outputDir: string, clipIndex: number) => Promise<FramingInspection> }
   models: { list: (refresh?: boolean) => Promise<OpenRouterCatalog> }
   automations: {
+    libraryRun: (id: string, contentId: string) => Promise<string | null>
     reorder: (id: string, contentId: string, beforeId: string | null) => Promise<Automation[]>
     enhancementGroups: (id: string) => Promise<AutomationSourceGroup[]>
     enhanceBatch: (id: string, contentIds: string[], key: string) => Promise<AutomationBatchResult>
@@ -198,6 +199,7 @@ const api: BridgeClipAPI = {
   framing: { inspect: (outputDir, clipIndex) => ipcRenderer.invoke('framing:inspect', outputDir, clipIndex) },
   models: { list: (refresh = false) => ipcRenderer.invoke('models:list', refresh) },
   automations: {
+    libraryRun: (id, contentId) => ipcRenderer.invoke('automations:libraryRun', id, contentId),
     reorder: (id, contentId, beforeId) => ipcRenderer.invoke('automations:reorder', id, contentId, beforeId),
     enhancementGroups: (id) => ipcRenderer.invoke('automations:enhancementGroups', id),
     enhanceBatch: (id, contentIds, key) => ipcRenderer.invoke('automations:enhanceBatch', id, contentIds, key),

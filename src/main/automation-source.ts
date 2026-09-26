@@ -1,5 +1,6 @@
 import { execFile } from 'child_process'
 import { createHash } from 'crypto'
+import { realpathSync } from 'fs'
 import { promisify } from 'util'
 import type { AutomationSourceContext } from '../shared/automations'
 import type { JobOutput } from '../shared/job-output'
@@ -8,6 +9,48 @@ import { isWithinDirectory, openAuthorizedMedia } from './security'
 import { resolveBinary } from './tools'
 
 const execFileAsync = promisify(execFile)
+
+/** Resolve actual clip provenance; enhanced titles are not stable identifiers. */
+export async function findLibraryRunForClip(bankFile: string | null, library: string, sourceClipPath?: string): Promise<string | null> {
+  const runs = (await getJobHistory(library)).filter((run) => run.status === 'completed')
+  if (sourceClipPath && isWithinDirectory(sourceClipPath, library)) {
+    for (const run of runs) {
+      if (!isWithinDirectory(sourceClipPath, run.outputDir)) continue
+      const output = await getJobOutput(run.outputDir, library)
+      if (output?.clips.some((clip) => {
+        try { return realpathSync(clip.s3_url.replace(/^file:\/\//, '')) === realpathSync(sourceClipPath) } catch { return false }
+      })) return run.outputDir
+    }
+  }
+  if (!bankFile) return null
+  let bank: Awaited<ReturnType<typeof openAuthorizedMedia>>
+  try { bank = await openAuthorizedMedia(bankFile, library) } catch { return null }
+  try {
+    let bankHash: string | null = null
+    for (const run of runs) {
+      const output = await getJobOutput(run.outputDir, library)
+      for (const clip of output?.clips ?? []) {
+        const path = clip.s3_url.replace(/^file:\/\//, '')
+        if (!isWithinDirectory(path, run.outputDir)) continue
+        try {
+          const candidate = await openAuthorizedMedia(path, library)
+          try {
+            if (candidate.size !== bank.size) continue
+            if (!bankHash) {
+              const hash = createHash('sha256')
+              for await (const chunk of bank.handle.createReadStream({ autoClose: false })) hash.update(chunk)
+              bankHash = hash.digest('hex')
+            }
+            const hash = createHash('sha256')
+            for await (const chunk of candidate.handle.createReadStream({ autoClose: false })) hash.update(chunk)
+            if (hash.digest('hex') === bankHash) return run.outputDir
+          } finally { await candidate.handle.close() }
+        } catch { /* Deleted or unreadable clips are not a match. */ }
+      }
+    }
+    return null
+  } finally { await bank.handle.close() }
+}
 
 /** Only pass an extracted video ID to the metadata tool, never an arbitrary URL. */
 export function youtubeSourceUrl(value: unknown): string | null {
