@@ -9,7 +9,8 @@ export const DURATION_OPTIONS = [
 ] as const
 
 /** Increment when the desktop bridge and bundled BridgeClip engine job contract change. */
-export const BRIDGE_CONTRACT_VERSION = 2
+/** Version 3 adds review projects that must never auto-render. */
+export const BRIDGE_CONTRACT_VERSION = 3
 
 export const VIDEO_SPEED_OPTIONS = [1, 1.1, 1.25, 1.5, 1.75, 2] as const
 

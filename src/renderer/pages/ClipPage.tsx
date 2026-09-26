@@ -31,14 +31,17 @@ export function ClipPage({ onNavigate }: { onNavigate: (page: PageId) => void })
     try {
       const result = await getApi().job.start(config)
       if (result.error) setStartError(result.error)
-      else if (result.jobId) useDraftStore.getState().markStarted({ jobId: result.jobId, source: config.videoUrl, queued: Boolean(result.queued) })
+      else if (result.jobId) {
+        useDraftStore.getState().markStarted({ jobId: result.jobId, source: config.videoUrl, queued: Boolean(result.queued) })
+        if (config.workflow === 'review') { useJobStore.getState().focusJob(result.jobId); onNavigate('jobs') }
+      }
     } catch (err) {
       setStartError(errorMessage(err, 'Could not start the job. Please try again.'))
     } finally {
       startingRef.current = false
       setStarting(false)
     }
-  }, [])
+  }, [onNavigate])
 
   const viewJob = useCallback((jobId: string) => {
     useJobStore.getState().focusJob(jobId)

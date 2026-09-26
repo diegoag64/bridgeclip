@@ -325,9 +325,36 @@ def foreground_geometry(shot: ShotLayout, src_w: int, src_h: int, out_w: int, ou
 
 def shot_chain(
     i: int, shot: ShotLayout, src_w: int, src_h: int, out_w: int, out_h: int, landscape: bool = False,
+    fps: str = '30', start_frame: int = 0,
 ) -> str:
     """Filters from [t{i}] (a trimmed piece) to [v{i}] (framed, out_w x out_h)."""
     scale = "flags=lanczos"
+    if shot.manual_crops:
+        views = manual_views(shot, src_w, src_h, out_w, out_h)
+        n = len(views)
+        parts = [f"[t{i}]split={n}" + ''.join(f"[mc{i}_{j}]" for j in range(n))] if n > 1 else []
+        for j, ((x, y, w, h), (_, _, pw, ph)) in enumerate(views):
+            source = f"mc{i}_{j}" if n > 1 else f"t{i}"
+            target = f"mp{i}_{j}" if n > 1 else f"v{i}"
+            if shot.manual_transition_ms:
+                # Perspective maps a moving source rectangle to a fixed frame.
+                # Unlike changing crop dimensions, it preserves a fixed output
+                # size and supports simultaneous pan/zoom without huge buffers.
+                p = f"clip(((in+{start_frame})*1000/({fps})-({shot.manual_transition_start_ms}))/{shot.manual_transition_ms},0,1)"
+                ease = f"({p}*{p}*(3-2*{p}))"
+                origin, dest = shot.manual_from_crops[j], shot.manual_crops[j]
+                def coord(k, size):
+                    return f"{size}*({origin[k]:.10f}+({dest[k] - origin[k]:.10f})*{ease})"
+                left, top, width, height = (coord(k, size) for k, size in enumerate(('W', 'H', 'W', 'H')))
+                corners = [left, top, f"{left}+{width}", top, left, f"{top}+{height}", f"{left}+{width}", f"{top}+{height}"]
+                transform = 'perspective=' + ':'.join(f"{key}='{value}'" for key, value in zip(('x0', 'y0', 'x1', 'y1', 'x2', 'y2', 'x3', 'y3'), corners))
+                transform += ':sense=source:eval=frame:interpolation=cubic'
+            else:
+                transform = f"crop={w}:{h}:{x}:{y}"
+            parts.append(f"[{source}]{transform},scale={pw}:{ph}:{scale},setsar=1[{target}]")
+        if n > 1:
+            parts.append(''.join(f"[mp{i}_{j}]" for j in range(n)) + f"vstack=inputs={n}[v{i}]")
+        return ';'.join(parts)
     if landscape:
         # Within 1% of 16:9 (e.g. 1920x1088 encodes) a direct scale is invisible.
         if abs(src_w / src_h - out_w / out_h) < 0.01 * out_w / out_h:
@@ -546,7 +573,7 @@ def build_layout_graph(
         parts.append(f"[clocked]split={n}" + "".join(f"[s{k}]" for k in range(n)))
     for k, (i, start_frame, count) in enumerate(video_pieces):
         parts.append(f"[s{k}]trim=start_frame={start_frame}:end_frame={start_frame + count}[t{k}]")
-        chain = shot_chain(k, plan.shots[i], src_w, src_h, out_w, out_h, landscape)
+        chain = shot_chain(k, plan.shots[i], src_w, src_h, out_w, out_h, landscape, fps, start_frame)
         parts.append(chain[: chain.rindex(f"[v{k}]")] + f"[c{k}]")
         parts.append(f"[c{k}]setpts=PTS-STARTPTS[v{k}]")
 
@@ -662,6 +689,22 @@ class FaceZone:
     rects: tuple[Rect, ...]
 
 
+def manual_views(shot, src_w, src_h, out_w, out_h, t_ms=None):
+    """Exact normalized crops shared with the editor. Round inward for yuv420p."""
+    result = []
+    panel_h = even(out_h / len(shot.manual_crops))
+    crops = shot.manual_crops
+    if shot.manual_transition_ms and t_ms is not None:
+        p = max(0, min(1, (t_ms - shot.manual_transition_start_ms) / shot.manual_transition_ms))
+        ease = p * p * (3 - 2 * p)
+        crops = [[a + (b - a) * ease for a, b in zip(start, end)] for start, end in zip(shot.manual_from_crops, crops)]
+    for i, (x, y, w, h) in enumerate(crops):
+        px, py = max(0, int(x * src_w) // 2 * 2), max(0, int(y * src_h) // 2 * 2)
+        pw, ph = min(even(w * src_w), src_w - px), min(even(h * src_h), src_h - py)
+        result.append(((px, py, pw, ph), (0, i * panel_h, out_w, out_h - panel_h if i == 1 else panel_h)))
+    return result
+
+
 def shot_views(
     shot: ShotLayout, t_ms: int, src_w: int, src_h: int, out_w: int, out_h: int,
 ) -> list[tuple[tuple[float, float, float, float], tuple[int, int, int, int]]]:
@@ -670,6 +713,8 @@ def shot_views(
     One (source crop, output rect) pair per panel, both as (x, y, w, h). Mirrors
     the 9:16 branches of shot_chain.
     """
+    if shot.manual_crops:
+        return manual_views(shot, src_w, src_h, out_w, out_h, t_ms)
     if shot.content_box is not None:
         return [content_view(shot, src_w, src_h, out_w, out_h)]
     if shot.layout == LayoutType.TALKING_HEAD:

@@ -205,6 +205,10 @@ class ShotLayout:
     # than following faces inside it or carrying an anchor across the cut.
     content_box: Optional[Box] = None
     cam_box_refined: bool = False
+    manual_crops: list[tuple[float, float, float, float]] = field(default_factory=list)
+    manual_from_crops: list[tuple[float, float, float, float]] = field(default_factory=list)
+    manual_transition_start_ms: int = 0
+    manual_transition_ms: int = 0
 
     def summary(self) -> dict:
         return {

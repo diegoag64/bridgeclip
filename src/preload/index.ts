@@ -1,3 +1,4 @@
+import type { CandidateEdit, EditorSession } from '../shared/clip-editor'
 import type { EditAudit } from '../shared/editorial'
 import { contextBridge, ipcRenderer } from 'electron'
 import type { FramingInspection } from '../shared/framing-trace'
@@ -32,6 +33,8 @@ export interface ClipSettings {
 export type { ClipJobRequest, JobSnapshot } from '../shared/jobs'
 
 export interface HistoryEntry {
+  editorProject?: boolean
+  candidateCount?: number
   favorite?: boolean
   jobId: string
   date: string
@@ -63,6 +66,12 @@ export interface ToolStatus {
 }
 
 export interface BridgeClipAPI {
+  editor: {
+    open: (path: string) => Promise<EditorSession>
+    save: (path: string, revision: number, edits: CandidateEdit[]) => Promise<EditorSession>
+    run: (path: string, revision: number, id: string, action: 'review' | 'export') => Promise<EditorSession>
+    cancel: (path: string) => Promise<void>
+  }
   edits: { inspect: (outputDir: string) => Promise<EditAudit> }
   framing: { inspect: (outputDir: string, clipIndex: number) => Promise<FramingInspection> }
   models: { list: (refresh?: boolean) => Promise<OpenRouterCatalog> }
@@ -196,6 +205,12 @@ function subscribe<T>(channel: string, callback: (data: T) => void): () => void 
 }
 
 const api: BridgeClipAPI = {
+  editor: {
+    open: (path) => ipcRenderer.invoke('editor:open', path),
+    save: (path, revision, edits) => ipcRenderer.invoke('editor:save', path, revision, edits),
+    run: (path, revision, id, action) => ipcRenderer.invoke('editor:run', path, revision, id, action),
+    cancel: (path) => ipcRenderer.invoke('editor:cancel', path)
+  },
   edits: { inspect: (outputDir) => ipcRenderer.invoke('edits:inspect', outputDir) },
   framing: { inspect: (outputDir, clipIndex) => ipcRenderer.invoke('framing:inspect', outputDir, clipIndex) },
   models: { list: (refresh = false) => ipcRenderer.invoke('models:list', refresh) },

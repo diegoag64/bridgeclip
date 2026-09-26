@@ -60,6 +60,7 @@ export function parseTrimRange(enabled: boolean, startText: string, endText: str
 export function buildJobRequest(draft: ClipDraft, trim: { start: number | null; end: number | null }): ClipJobRequest {
   return {
     videoUrl: normalizeVideoSource(draft.source),
+    workflow: draft.workflow,
     clippingMode: draft.clippingMode,
     ...(draft.clippingMode === 'advanced' ? { plannerModel: draft.plannerModel, transcriptionModel: draft.transcriptionModel } : {}),
     maxClips: draft.autoClipCount ? null : draft.maxClips,
@@ -147,8 +148,8 @@ export function JobForm({ onSubmit, onViewJob, blockedReason, submitting, classN
 
       <Panel className="p-4 xl:p-5">
         <div className="mb-3">
-          <h2 className="text-sm font-semibold text-ink">{meta.title}</h2>
-          <p className="mt-0.5 text-xs text-ink-muted">{meta.description}</p>
+          <h2 className="text-sm font-semibold text-ink">{step === 'review' && draft.workflow === 'review' ? 'Ready to find candidates' : meta.title}</h2>
+          <p className="mt-0.5 text-xs text-ink-muted">{step === 'review' && draft.workflow === 'review' ? 'Jev will review each candidate, then the editor opens for your final cut.' : meta.description}</p>
         </div>
         {sourceError && <p role="alert" className="text-sm text-danger">{sourceError}</p>}
         {step === 'video' && <VideoStep draft={draft} update={update} trimError={trim.error} disabled={submitting} />}
@@ -172,7 +173,7 @@ export function JobForm({ onSubmit, onViewJob, blockedReason, submitting, classN
           <div className="flex items-center gap-2">
             {step !== 'video' && (
               <Button variant="ghost" onClick={submit} disabled={!canSubmit} loading={submitting} className="max-sm:hidden">
-                Generate now
+                {draft.workflow === 'review' ? 'Find candidates' : 'Generate now'}
               </Button>
             )}
             <Button variant="primary" trailingIcon={<ArrowRight className="h-3.5 w-3.5" />} onClick={() => goTo(next.id)} disabled={!stepValid}>
@@ -181,7 +182,7 @@ export function JobForm({ onSubmit, onViewJob, blockedReason, submitting, classN
           </div>
         ) : (
           <Button variant="primary" size="lg" icon={<Sparkles className="h-4 w-4" />} onClick={submit} disabled={!canSubmit} loading={submitting}>
-            Generate clips
+            {draft.workflow === 'review' ? 'Find candidates' : 'Generate clips'}
           </Button>
         )}
       </div>
@@ -234,6 +235,9 @@ function Stepper({ current, reachable, onSelect }: { current: WizardStep; reacha
 function VideoStep({ draft, update, trimError, disabled }: { draft: ClipDraft; update: Update; trimError: string | null; disabled?: boolean }): React.JSX.Element {
   return (
     <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Workflow">
+        {([{ id: 'automatic', title: 'Automatic', hint: 'Find, check and render clips.' }, { id: 'review', title: 'Review & edit', hint: 'Find candidates. You make the final cut.' }] as const).map((option) => <button key={option.id} type="button" role="radio" aria-checked={draft.workflow === option.id} tabIndex={draft.workflow === option.id ? 0 : -1} onKeyDown={onRadioKeyDown} disabled={disabled} onClick={() => update({ workflow: option.id })} className={cn('glass-tile glass-tile-hover rounded-xl px-3 py-3 text-left', draft.workflow === option.id && 'glass-selected')}><span className="block text-sm font-medium">{option.title}</span><span className="block mt-1 text-2xs text-ink-subtle">{option.hint}</span></button>)}
+      </div>
       <SourcePicker value={draft.source} onChange={(source) => update({ source })} disabled={disabled} />
       <SettingRow
         title="Preferred part of the video"
@@ -519,9 +523,10 @@ function ReviewStep({ draft, trim, onEdit }: {
     : ''
 
   const rows: { step: WizardStep; label: string; value: string }[] = [
+    { step: 'video', label: 'Workflow', value: draft.workflow === 'review' ? 'Review & edit · export when ready' : 'Automatic' },
     { step: 'video', label: 'Video', value: `${sourceLabel(draft.source)}${trimLabel}` },
     { step: 'format', label: 'Format', value: `${FORMATS.find((f) => f.id === draft.aspectRatio)?.label ?? draft.aspectRatio} ${draft.aspectRatio} · ${framing}` },
-    { step: 'format', label: 'Pacing', value: draft.pacing === 'tight' ? 'Cut dead air' : 'Keep pauses' },
+    { step: 'format', label: 'Pacing', value: draft.workflow === 'review' ? 'Manual · choose your own cuts in the editor' : draft.pacing === 'tight' ? 'Cut dead air' : 'Keep pauses' },
     { step: 'format', label: 'Speed', value: `${draft.videoSpeed ?? 1}×${(draft.videoSpeed ?? 1) === 1 ? ' · Normal' : ' · All exported clips'}` },
     { step: 'clips', label: 'Mode', value: draft.clippingMode === 'advanced' ? 'Advanced · custom models' : draft.clippingMode === 'economy' ? 'Economy · lower cost' : 'Quality · higher accuracy' },
     { step: 'clips', label: 'Clips', value: `${lengths}${(draft.videoSpeed ?? 1) > 1 && draft.durations.length > 0 ? ' of source footage' : ''} · ${draft.autoClipCount ? 'AI decides how many' : `Up to ${draft.maxClips}`}` },

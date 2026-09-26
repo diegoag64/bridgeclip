@@ -1,5 +1,8 @@
+import { parseJobOutput } from '../../shared/job-output'
+import { editorProgress } from '../../shared/clip-editor'
+import { ClipEditor } from './ClipEditor'
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
-import { ArrowLeft, Check, ChevronDown, Clapperboard, Download, FolderOpen, ListPlus, Plus, Send, Youtube } from 'lucide-react'
+import { ArrowLeft, Check, ChevronDown, Clapperboard, Download, FolderOpen, ListPlus, Plus, Scissors, Send, Youtube } from 'lucide-react'
 import { basename, cn, errorMessage } from '../lib/utils'
 import { getApi } from '../lib/ipc'
 import { clipFilePath } from '../lib/thumbnails'
@@ -46,7 +49,45 @@ function toPostable(clip: ClipArtifact): PostableClip {
   return { path: clipFilePath(clip.s3_url), title: clip.summary || `Clip ${clip.clip_index + 1}`, tags: clip.tags, durationMs: clip.duration_ms }
 }
 
-export function ClipList({ output, outputDir: runDirectory, leading, onNewClip, onNavigate }: ClipListProps): React.JSX.Element {
+export function ClipList(props: ClipListProps): React.JSX.Element {
+  return <ClipRun key={`${props.outputDir ?? ''}:${props.output.job_id}`} {...props} />
+}
+
+function ClipRun(props: ClipListProps): React.JSX.Element {
+  const hasEditor = props.output.editor_project === true && !!props.outputDir
+  const [editing, setEditing] = useState(false)
+  const [opening, setOpening] = useState(hasEditor)
+  const [remaining, setRemaining] = useState<number | null>(null)
+  const [editorError, setEditorError] = useState<string | null>(null)
+  const [output, setOutput] = useState(props.output)
+  useEffect(() => {
+    if (!hasEditor) return
+    let active = true
+    void getApi().editor.open(props.outputDir!).then((session) => {
+      if (!active) return
+      const { remaining } = editorProgress(session.project.candidates)
+      setRemaining(remaining)
+      setEditing(props.output.clips.length === 0 && remaining > 0)
+    }).catch((cause) => {
+      if (active) setEditorError(errorMessage(cause, 'Could not read editor progress. Open the editor to retry.'))
+    }).finally(() => { if (active) setOpening(false) })
+    return () => { active = false }
+  // Choose the landing view once per run, without interrupting active edits.
+  }, [hasEditor, props.outputDir])
+  if (opening) return <Page width="wide">{props.leading}<p className="mt-4 text-sm text-ink-muted" role="status">Opening clips…</p></Page>
+  if (editing && props.outputDir) return <ClipEditor outputDir={props.outputDir} leading={props.leading} onExports={async () => {
+    const [raw, session] = await Promise.all([getApi().history.getJob(props.outputDir!), getApi().editor.open(props.outputDir!)])
+    const fresh = parseJobOutput(raw)
+    if (!fresh) throw new Error('Could not load the exported clips. Reopen this Library item to retry.')
+    setOutput(fresh); setRemaining(editorProgress(session.project.candidates).remaining)
+    setEditorError(null); setEditing(false)
+  }} />
+  return <GeneratedClipList {...props} output={output} editor={hasEditor ? { remaining, error: editorError, onOpen: () => setEditing(true) } : undefined} />
+}
+
+function GeneratedClipList({ output, outputDir: runDirectory, leading, onNewClip, onNavigate, editor }: ClipListProps & {
+  editor?: { remaining: number | null; error: string | null; onOpen: () => void }
+}): React.JSX.Element {
   const sourceUrl = youtubeSourceUrl(output.source_video_url)
   const postRecords = usePostsStore((state) => state.posts)
   const refreshError = usePostsStore((state) => state.error)
@@ -217,8 +258,12 @@ export function ClipList({ output, outputDir: runDirectory, leading, onNewClip, 
         leading={leading}
         eyebrow={leading ? undefined : 'Your clips'}
         title={output.source_video_title || 'Untitled video'}
+        description={editor?.remaining ? `${editor.remaining} clip${editor.remaining === 1 ? '' : 's'} left to finish` : undefined}
         actions={
           <>
+            {editor && <Button variant={editor.remaining ? 'primary' : 'ghost'} icon={<Scissors className="h-4 w-4" />} onClick={editor.onOpen}>
+              {editor.remaining ? 'Continue editing' : 'Open editor'}
+            </Button>}
             {outputDir && <Button onClick={() => setInspectEdits(true)}>Inspect transcript & edits</Button>}
             {sourceUrl && <Button iconOnly icon={<Youtube className="h-4 w-4" />} aria-label="Open original video on YouTube" title="Open original video on YouTube"
               onClick={() => { setExportError(null); void getApi().shell.openPath(sourceUrl).catch(() => setExportError('Could not open the original video in your browser.')) }} />}
@@ -235,6 +280,8 @@ export function ClipList({ output, outputDir: runDirectory, leading, onNewClip, 
           </>
         }
       />
+
+      {editor?.error && <Callout tone="warning" className="mt-3">{editor.error}</Callout>}
 
       {typeof videoSpeed === 'number' && videoSpeed > 1 && (
         <p className="mt-3 text-xs text-ink-muted">All clips exported at {videoSpeed}× speed · Original voice pitch</p>

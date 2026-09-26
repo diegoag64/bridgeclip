@@ -117,6 +117,7 @@ class RenderRequest:
     skip_ranges_ms: list[tuple[int, int]] = field(default_factory=list)
     chapters: list[tuple[int, str]] = field(default_factory=list)
     debug_capture: bool = False
+    manual_plan: Optional[ClipLayoutPlan] = None
     editorial_context: Optional[dict] = None
     editorial_service: Optional[JevService] = field(default=None, repr=False)
     coherence_reviewer: Optional[CoherenceReviewer] = field(default=None, repr=False)
@@ -293,7 +294,9 @@ class RenderingService:
             window_start_ms, window_ms = request.start_time_ms, duration_ms
 
         plan: Optional[ClipLayoutPlan] = None
-        if not is_landscape:
+        if request.manual_plan is not None:
+            plan = request.manual_plan
+        elif not is_landscape:
             plan = await self._plan_layout(request, source_w, source_h, window_start_ms, window_ms)
         analyzed = plan is not None
         # Pacing needs to know what's on screen even when the framing doesn't
@@ -316,7 +319,8 @@ class RenderingService:
         keeps = self._keep_intervals(request, pacing_plan, window_start_ms, window_ms)
         protected = window_protection(request.editorial_context or {}, window_start_ms, window_ms)
         # Existing audio-event protection must survive explicit skips too.
-        protected += reaction_intervals(request.transcript_segments or [], window_start_ms, window_ms)
+        if request.manual_plan is None:
+            protected += reaction_intervals(request.transcript_segments or [], window_start_ms, window_ms)
         if request.editorial_context is not None:
             baseline = self._keep_intervals(replace(request, editorial_context=None), pacing_plan, window_start_ms, window_ms)
             record_prevented_cuts(request.editorial_context, baseline, skips, protected, window_start_ms, window_ms, pacing_plan)
@@ -344,9 +348,9 @@ class RenderingService:
             source_width=source_w, source_height=source_h, face_samples=face_samples,
         )
         ladder: list[tuple[ClipLayoutPlan, TimeMap, Optional[str]]] = [(plan, time_map, None)]
-        if smart:
+        if smart and request.manual_plan is None:
             ladder.append((letterbox, time_map, "letterbox"))
-        if time_map.keeps != natural_map.keeps:
+        if time_map.keeps != natural_map.keeps and request.manual_plan is None:
             ladder.append((letterbox, natural_map, "letterbox_natural"))
 
         render_fallback: Optional[str] = None

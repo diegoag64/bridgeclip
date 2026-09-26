@@ -239,6 +239,8 @@ async def run(config: dict) -> bool:
 
     request = ClippingJobRequest(
         video_url=video_source,
+        workflow=config.get('workflow', 'automatic'),
+        caption_preset=preset_name,
         job_id=config.get("job_id"),
         max_clips=config.get("max_clips"),
         auto_clip_count=config.get("auto_clip_count", True),
@@ -300,7 +302,7 @@ def validate_config(config: object) -> dict:
     """Reject malformed bridge requests before loading the engine or writing files."""
     if not isinstance(config, dict):
         raise ValueError("Config must be a JSON object")
-    if type(config.get("contract_version")) is not int or config["contract_version"] != 2:
+    if type(config.get("contract_version")) is not int or config["contract_version"] != 3:
         raise ValueError("Unsupported clipping engine contract version")
     if type(config.get("layout_vision_enabled")) is not bool:
         raise ValueError("layout_vision_enabled must be a boolean")
@@ -323,6 +325,8 @@ def validate_config(config: object) -> dict:
     for field in ("include_captions", "auto_clip_count", "layout_vision_enabled", "debug_capture"):
         if field in config and not isinstance(config[field], bool):
             raise ValueError(f"{field} must be a boolean")
+    if config.get('workflow', 'automatic') not in ('automatic', 'review'):
+        raise ValueError('Invalid workflow')
     count = config.get("max_clips")
     if count is not None and (type(count) is not int or not 1 <= count <= 100):
         raise ValueError("max_clips must be between 1 and 100")

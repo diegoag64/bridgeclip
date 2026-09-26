@@ -330,7 +330,7 @@ function RunCard({ entry, counts, busy, onFavorite, onDelete, onOpen, onOpenFold
         {!failed && (
           <span className="glass-chip absolute left-2 top-2 inline-flex h-7 items-center gap-1 rounded-full px-2.5 text-2xs font-medium text-white">
             <Clapperboard className="h-3 w-3" />
-            {entry.clipCount} clip{entry.clipCount === 1 ? '' : 's'}
+            {entry.editorProject && entry.clipCount === 0 ? `${entry.candidateCount ?? ''} candidates · Edit` : `${entry.clipCount} clip${entry.clipCount === 1 ? '' : 's'}`}
           </span>
         )}
       </div>
@@ -348,7 +348,7 @@ function RunCard({ entry, counts, busy, onFavorite, onDelete, onOpen, onOpenFold
           )}
         </p>
         <p className="mt-2 text-xs text-ink-muted" title="Only fully published clips count as posted. Scheduled, partial and inbox deliveries remain Not Posted.">
-          {counts ? <><span className="text-success">{counts.posted} Posted</span><span className="mx-2 text-ink-faint">·</span><span>{counts.notPosted} Not Posted</span></>
+          {entry.editorProject && entry.clipCount === 0 ? 'Ready to review & edit' : counts ? <><span className="text-success">{counts.posted} Posted</span><span className="mx-2 text-ink-faint">·</span><span>{counts.notPosted} Not Posted</span></>
             : counts === null ? 'Posting status unavailable' : 'Checking posting status…'}
         </p>
       </div>
@@ -380,7 +380,9 @@ function useRunThumbnail(outputDir: string | null): string | null {
           (top, c) => (!top || c.virality_score > top.virality_score ? c : top),
           null
         )
-        if (!best || cancelled) return null
+        if (cancelled) return null
+        if (!best && output?.editor_project) return getApi().editor.open(outputDir).then((session) => loadThumbnail(session.previewPath, session.project.candidates[0].ranges[0][0] / 1000))
+        if (!best) return null
         return loadThumbnail(clipFilePath(best.s3_url), best.duration_ms > 0 ? best.duration_ms / 2000 : undefined)
       })
       .then((path) => {
