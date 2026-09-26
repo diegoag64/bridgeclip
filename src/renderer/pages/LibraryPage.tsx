@@ -336,7 +336,7 @@ function RunCard({ entry, counts, busy, onFavorite, onDelete, onOpen, onOpenFold
             {entry.editorProject && entry.clipCount === 0 ? entry.candidateCount == null ? 'Clip candidates' : `${entry.candidateCount} candidates` : `${entry.clipCount} clip${entry.clipCount === 1 ? '' : 's'}`}
           </span>
         )}
-        {editing && <span className="absolute bottom-2 left-2 inline-flex items-center gap-1.5 rounded-full bg-accent px-2.5 py-1 text-2xs font-medium text-white shadow-lg"
+        {editing && <span className="absolute bottom-2 left-2 inline-flex items-center gap-1.5 rounded-full bg-accent px-2.5 py-1 text-2xs font-medium text-accent-ink shadow-lg"
           aria-label={`Editing: ${remaining} clip${remaining === 1 ? '' : 's'} left to finish`} title={`${remaining} clip${remaining === 1 ? '' : 's'} left to finish`}>
           <Pencil className="h-3 w-3" aria-hidden="true" />Editing<span className="opacity-80">· {remaining} left</span>
         </span>}
