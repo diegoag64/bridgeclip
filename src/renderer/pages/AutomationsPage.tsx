@@ -302,11 +302,12 @@ export function AutomationsPage({ onNavigate, onViewLibrary }: { onNavigate: (pa
   })
 
   const removeContent = (item: AutomationContent): void => {
-    if (!selected) return
+    if (!selected || item.status === 'posted' || item.postId) return
     setConfirm({
-      title: 'Delete this clip from the bank?',
-      body: <>“{item.title}” and its bank copy will be deleted. The Library original and submitted posts will remain.</>,
-      confirmLabel: 'Delete clip',
+      title: 'Remove this clip from the queue?',
+      body: <>“{item.title}” and its queue copy will be removed from this content bank. The original file will remain available.</>,
+      confirmLabel: 'Remove from queue',
+      tone: 'primary',
       onConfirm: () => void mutate('remove', () => getApi().automations.removeContent(selected.id, item.id))
     })
   }
@@ -848,7 +849,7 @@ function ContentRow({ item, nextUp, tiktokReviewNeeded, tiktokSelected, onReview
           <ActionMenu label={`Actions for ${item.title}`} disabled={busy || item.status === 'posting'} actions={[
             { label: editing ? 'Close editor' : 'Edit', icon: <Pencil className="h-3.5 w-3.5" />, disabled: Boolean(item.metadataDraft), onSelect: onEdit },
             ...(item.status === 'queued' && tiktokSelected && !tiktokReviewNeeded ? [{ label: 'Edit TikTok', disabled: reviewDisabled || Boolean(item.metadataDraft), onSelect: onReviewTikTok }] : []),
-            { label: 'Delete', icon: <Trash2 className="h-3.5 w-3.5" />, danger: true, onSelect: onRemove }
+            ...(item.status !== 'posted' && !item.postId ? [{ label: 'Remove from queue', icon: <X className="h-3.5 w-3.5" />, onSelect: onRemove }] : [])
           ]} />
         </div>
       </div>
