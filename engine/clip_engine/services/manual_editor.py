@@ -312,8 +312,7 @@ async def run_editor(config):
                 start_time_ms=a, end_time_ms=b, source_width=project['width'], source_height=project['height'],
                 transcript_segments=render_transcript, include_captions=c['captions'], caption_style=get_caption_preset(c['caption_preset']),
                 apply_padding=False, aspect_ratio=project['aspect_ratio'], pacing='natural', video_speed=c['video_speed'],
-                skip_ranges_ms=[(x[1], y[0]) for x, y in zip(c['ranges'], c['ranges'][1:]) if y[0] > x[1]],
-                manual_plan=manual_plan(project, c)))
+                manual_ranges_ms=[tuple(interval) for interval in c['ranges']], manual_plan=manual_plan(project, c)))
             os.replace(result.output_path, path)
         output['clips'].append({'clip_index': index, 's3_url': str(path), 'duration_ms': result.duration_ms,
             'start_time_ms': a, 'end_time_ms': b, 'virality_score': c['score'], 'layout_type': result.layout_type,

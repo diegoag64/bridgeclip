@@ -207,24 +207,34 @@ def test_caption_word_insertions_deletions_and_hidden_lines_use_original_spoken_
     assert len(source) == 2 and source[0].text == 'Original.'
 
 
-def test_manual_render_never_replans_or_restores_user_cuts(monkeypatch, tmp_path):
+@pytest.mark.parametrize('ranges,speed', [
+    ([[1000, 5000], [7000, 10000]], 1.25),
+    ([[1000, 1200], [5000, 5200]], 1),  # Two short keeps must not restore the 3.8s gap.
+    ([[1000, 1100], [2000, 5000], [6000, 6100]], 1),
+    ([[1000, 2000], [3000, 3100], [5000, 6000]], 2),
+    ([[1000, 1100]], 1),
+])
+def test_manual_render_never_replans_or_restores_user_cuts(monkeypatch, tmp_path, ranges, speed):
     monkeypatch.setattr(RenderingService, '_verify_ffmpeg', lambda _: None)
     renderer = RenderingService()
     renderer._get_video_dimensions = AsyncMock(return_value=(1920, 1080))
     renderer._plan_layout = AsyncMock(side_effect=AssertionError('No automatic layout'))
+    renderer._keep_intervals = lambda *args: pytest.fail('No automatic pacing for manual exports')
     renderer._write_subtitles = AsyncMock(return_value=None)
-    c = candidate(); plan = manual_plan({'width': 1920, 'height': 1080}, c)
+    c = {**candidate(), 'ranges': ranges, 'video_speed': speed}
+    validate_candidate(c, 12000)
+    plan = manual_plan({'width': 1920, 'height': 1080}, c)
     calls = []
     async def render(request, plan, time_map, *args):
         calls.append(time_map.keeps)
         Path(request.output_path).write_bytes(b'fixture')
     renderer._render_edit = render
-    request = RenderRequest(video_path='source.mp4', output_path=str(tmp_path / 'clip.mp4'), start_time_ms=1000,
-        end_time_ms=10000, source_width=1920, source_height=1080, apply_padding=False, pacing='natural',
-        transcript_segments=transcript(), manual_plan=plan, skip_ranges_ms=[(5000, 7000)], video_speed=1.25)
+    request = RenderRequest(video_path='source.mp4', output_path=str(tmp_path / 'clip.mp4'), start_time_ms=ranges[0][0],
+        end_time_ms=ranges[-1][1], source_width=1920, source_height=1080, apply_padding=False, pacing='natural',
+        transcript_segments=transcript(), manual_plan=plan, manual_ranges_ms=ranges, video_speed=speed)
     result = asyncio.run(renderer.render_clip(request))
-    assert calls == [[(0, 4000), (6000, 9000)]]
-    assert result.duration_ms == 5600
+    assert calls == [[(a - ranges[0][0], b - ranges[0][0]) for a, b in ranges]]
+    assert result.duration_ms == round(sum(b - a for a, b in ranges) / speed)
     renderer._render_edit = AsyncMock(side_effect=RenderingError('fixture failure'))
     with pytest.raises(RenderingError): asyncio.run(renderer.render_clip(request))
     assert renderer._render_edit.await_count == 1
@@ -243,7 +253,7 @@ def test_export_appends_library_clip_and_preserves_source_and_previous_exports(m
     monkeypatch.setattr(RenderingService, '_verify_ffmpeg', lambda _: None)
     async def render(self, request):
         assert request.apply_padding is False and request.pacing == 'natural'
-        assert request.skip_ranges_ms == [(5000, 7000)] and request.include_captions
+        assert request.manual_ranges_ms == [(1000, 5000), (7000, 10000)] and request.include_captions
         assert request.transcript_segments[1].text == 'The corrected event happened.'
         assert [w.word for w in request.transcript_segments[1].words] == ['The', 'corrected', 'event', 'happened.']
         Path(request.output_path).write_bytes(b'final clip')
@@ -265,6 +275,46 @@ def test_export_appends_library_clip_and_preserves_source_and_previous_exports(m
     (tmp_path / 'editor-project.json').write_text(json.dumps(saved))
     asyncio.run(run_editor(config))
     assert (tmp_path / 'clip_01.mp4').exists() and (tmp_path / 'editor-source.mp4').read_bytes() == b'original'
+
+
+def test_short_manual_export_contains_only_the_selected_frames(monkeypatch, tmp_path):
+    """Exercise the full export path: six red frames, six blue, no deleted green gap."""
+    import shutil
+    import subprocess
+    from dataclasses import asdict
+    import numpy as np
+    from clip_engine.services import rendering_service
+
+    if not shutil.which('ffmpeg') or not shutil.which('ffprobe'):
+        pytest.skip('FFmpeg and FFprobe are needed for the actual export check')
+    renderer = RenderingService()
+    monkeypatch.setattr(renderer.settings, 'local_mode', True)
+    renderer._verify_ffmpeg()
+    monkeypatch.setattr(rendering_service, 'get_output_dimensions', lambda _: (80, 120))
+    frames = np.zeros((180, 90, 160, 3), dtype=np.uint8)
+    frames[:36, :, :, 0] = 255
+    frames[36:150, :, :, 1] = 255
+    frames[150:, :, :, 2] = 255
+    source = tmp_path / 'editor-source.mp4'
+    subprocess.run(['ffmpeg', '-v', 'error', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', '160x90', '-r', '30',
+        '-i', 'pipe:0', *renderer._video_codec_args(160, 90), '-pix_fmt', 'yuv420p', str(source)],
+        input=frames.tobytes(), capture_output=True, check=True, timeout=30)
+    c = {**candidate(), 'ranges': [[1000, 1200], [5000, 5200]], 'status': 'ready', 'captions': False, 'video_speed': 1}
+    project = {'version': 1, 'revision': 0, 'width': 160, 'height': 90, 'duration_ms': 12000, 'aspect_ratio': '9:16',
+        'candidates': [c], 'transcript': [asdict(s) for s in transcript()]}
+    (tmp_path / 'editor-project.json').write_text(json.dumps(project))
+    (tmp_path / 'transcript.json').write_text(json.dumps({'segments': [asdict(s) for s in transcript()]}))
+    (tmp_path / 'job_output.json').write_text(json.dumps({'clips': [], 'total_clips': 0, 'editor_project': True}))
+    asyncio.run(run_editor({'run': str(tmp_path), 'revision': 0, 'candidate_id': c['id'], 'action': 'export'}))
+    output = json.loads((tmp_path / 'job_output.json').read_text())['clips'][0]
+    assert output['duration_ms'] == 400
+    decoded = subprocess.run(['ffmpeg', '-v', 'error', '-i', output['s3_url'], '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'],
+        capture_output=True, check=True, timeout=30)
+    pictures = np.frombuffer(decoded.stdout, dtype=np.uint8).reshape(-1, 120, 80, 3)
+    assert len(pictures) == 12
+    assert np.all(pictures[:6, 60, 40, 0] > 220)
+    assert np.all(pictures[6:, 60, 40, 2] > 220)
+    assert np.all(pictures[:, 60, 40, 1] < 30)
 
 
 @pytest.mark.parametrize('status', ['refining', 'discarded', 'ready'])
