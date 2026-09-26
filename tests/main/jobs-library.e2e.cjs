@@ -4,6 +4,7 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const { buildApp, launchApp } = require('../zernio/support/electron-app.cjs')
+const editorFixture = require('../fixtures/editor/project.json')
 
 test('Jobs actions inspect runs and open completed jobs in the shared Library view', { timeout: 90000 }, async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bridgeclip-jobs-library-'))
@@ -122,5 +123,66 @@ test('Jobs actions inspect runs and open completed jobs in the shared Library vi
   await page.getByRole('button', { name: 'Actions for Watched test run', exact: true }).waitFor()
   await page.getByTitle('Open in Library', { exact: true }).filter({ hasText: 'Watched test run' }).click()
   await expectLibrary('Watched test run')
+  assert.deepEqual(errors, [])
+})
+
+test('Jobs marks review runs as Editing until every candidate is baked or discarded', { timeout: 90000 }, async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bridgeclip-jobs-editing-'))
+  const userDataDir = path.join(root, 'user-data'), library = path.join(userDataDir, 'BridgeClip')
+  const runs = [
+    { title: 'Unbaked review', statuses: ['refining', 'ready'], clips: 0, review: true },
+    { title: 'Earlier exports with new edits', statuses: ['refining', 'baked'], clips: 1, review: true },
+    { title: 'Finished review', statuses: ['baked', 'discarded'], clips: 1, review: true },
+    { title: 'Automatic run', statuses: ['refining', 'ready'], clips: 1, review: false }
+  ]
+  for (const [i, run] of runs.entries()) {
+    run.dir = path.join(library, `review-${i}`)
+    fs.mkdirSync(run.dir, { recursive: true })
+    run.project = structuredClone(editorFixture)
+    run.project.candidates.forEach((candidate, index) => {
+      candidate.status = run.statuses[index]
+      // An exported candidate can require editing/baking again.
+      candidate.exports = run.clips > 0 ? [0] : []
+    })
+    fs.writeFileSync(path.join(run.dir, 'editor-project.json'), JSON.stringify(run.project))
+    // Jobs only reads project state; it must not try to decode the source video.
+    for (const file of ['editor-source.mp4', 'editor-preview.mp4']) fs.writeFileSync(path.join(run.dir, file), '')
+    fs.writeFileSync(path.join(run.dir, 'job_output.json'), JSON.stringify({ job_id: `review-${i}`,
+      source_video_url: 'source.mp4', source_video_title: run.title, editor_project: run.review,
+      source_video_duration_seconds: 12, total_clips: run.clips,
+      clips: run.clips ? [{ clip_index: 0, s3_url: path.join(run.dir, 'clip_00.mp4'), duration_ms: 5000, start_time_ms: 0, end_time_ms: 5000, virality_score: .8 }] : [] }))
+  }
+  const session = await launchApp({ appDir: buildApp(path.join(root, 'app')), userDataDir })
+  t.after(async () => { await session.close(); fs.rmSync(root, { recursive: true, force: true }) })
+  const { page, app } = session
+  page.setDefaultTimeout(10000)
+  const errors = []; page.on('pageerror', e => errors.push(e.message))
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1300, 900))
+  await page.getByRole('button', { name: 'Jobs', exact: true }).click()
+  const row = title => page.getByTitle('Open in Library', { exact: true }).filter({ hasText: title })
+  await row(runs[0].title).getByLabel('Editing: 2 clips left to finish', { exact: true }).waitFor()
+  await row(runs[1].title).getByLabel('Editing: 1 clip left to finish', { exact: true }).waitFor()
+  for (const run of runs.slice(2)) {
+    await row(run.title).waitFor()
+    assert.equal(await row(run.title).locator('[aria-label^="Editing:"]').count(), 0)
+  }
+  if (process.env.BRIDGECLIP_E2E_SHOTS) {
+    fs.mkdirSync(process.env.BRIDGECLIP_E2E_SHOTS, { recursive: true })
+    await page.screenshot({ path: path.join(process.env.BRIDGECLIP_E2E_SHOTS, 'jobs-editing.png') })
+  }
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(740, 600))
+  assert.equal(await row(runs[0].title).getByLabel('Editing: 2 clips left to finish', { exact: true }).isVisible(), true)
+  assert.equal(await row(runs[0].title).evaluate(el => el.scrollWidth > el.clientWidth), false)
+  const save = async statuses => {
+    runs[0].project.candidates.forEach((candidate, index) => { candidate.status = statuses[index] })
+    fs.writeFileSync(path.join(runs[0].dir, 'editor-project.json'), JSON.stringify(runs[0].project))
+    await page.getByRole('button', { name: 'Refresh jobs', exact: true }).click()
+  }
+  await save(['discarded', 'discarded'])
+  await row(runs[0].title).locator('[aria-label^="Editing:"]').waitFor({ state: 'detached' })
+  await save(['discarded', 'ready'])
+  await row(runs[0].title).getByLabel('Editing: 1 clip left to finish', { exact: true }).waitFor()
+  await save(['discarded', 'baked'])
+  await row(runs[0].title).locator('[aria-label^="Editing:"]').waitFor({ state: 'detached' })
   assert.deepEqual(errors, [])
 })

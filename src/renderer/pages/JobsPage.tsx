@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Ban, FileText, FolderOpen, ListVideo, Plus, RefreshCw, RotateCcw, Search, X } from 'lucide-react'
+import { Ban, FileText, FolderOpen, ListVideo, Pencil, Plus, RefreshCw, RotateCcw, Search, X } from 'lucide-react'
 import type { HistoryEntry } from '../../preload/index'
 import { MAX_PARALLEL_JOBS } from '../../shared/jobs'
+import { editorProgress } from '../../shared/clip-editor'
 import { EditInspector, InspectEditsButton } from '../components/EditInspector'
 import { BackLink } from '../components/ClipList'
 import { JobFailure, JobProgress, STAGE_LABELS } from '../components/JobProgress'
@@ -413,21 +414,38 @@ const STATUS_TEXT: Record<HistoryEntry['status'], string> = {
 /** One line per run: status, title, then clips, run time, cost and date in aligned columns. */
 function PreviousJobRow({ entry, hasDetails, onOpen, onOpenFolder }: { entry: HistoryEntry; hasDetails: boolean; onOpen: () => void; onOpenFolder: () => void }): React.JSX.Element {
   const [inspecting, setInspecting] = useState(false)
+  const [progress, setProgress] = useState<{ outputDir: string; remaining: number } | null>(null)
   const closeInspector = useCallback(() => setInspecting(false), [])
   const status = STATUS[entry.status]
   const completed = entry.status === 'completed'
+  useEffect(() => {
+    if (!completed || !entry.editorProject) { setProgress(null); return }
+    let active = true
+    // Read saved candidate states, as Library does. Export counts cannot tell
+    // whether an earlier export has since been edited or marked ready again.
+    getApi().editor.open(entry.outputDir).then(({ project }) => {
+      if (active) setProgress({ outputDir: entry.outputDir, remaining: editorProgress(project.candidates).remaining })
+    }).catch(() => { if (active) setProgress(null) })
+    return () => { active = false }
+  }, [entry, completed])
+  const remaining = completed && entry.editorProject && progress?.outputDir === entry.outputDir ? progress.remaining : 0
+  const editing = remaining > 0
   // Failed and cancelled jobs from this session keep their options, so they can run again.
   const openable = completed || hasDetails
   const dated = !entry.date.startsWith('1970-')
   const cells = (
     <>
-      <StatusDot tone={STATUS_DOT[entry.status]} />
+      <StatusDot tone={editing ? 'accent' : STATUS_DOT[entry.status]} />
       <span className="min-w-0 flex-1 truncate text-xs" title={entry.errorMessage ?? entry.videoTitle}>
-        <span className="sr-only">{status.label}: </span>
+        {!editing && <span className="sr-only">{status.label}: </span>}
         <span className="text-sm text-ink">{entry.videoTitle}</span>
         {!completed && <span className={cn('ml-2 font-medium', STATUS_TEXT[entry.status])} aria-hidden>{status.label}</span>}
         {entry.errorMessage && <span className="text-ink-subtle" data-selectable> · {entry.errorMessage}</span>}
       </span>
+      {editing && <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-accent px-2 py-0.5 text-2xs font-medium text-accent-ink"
+        aria-label={`Editing: ${remaining} clip${remaining === 1 ? '' : 's'} left to finish`} title={`${remaining} clip${remaining === 1 ? '' : 's'} left to finish`}>
+        <Pencil className="h-3 w-3" aria-hidden="true" />Editing<span className="hidden opacity-80 sm:inline">· {remaining} left</span>
+      </span>}
       <span className="hidden w-16 shrink-0 text-right text-xs text-ink-muted sm:block">
         {completed ? `${entry.clipCount} clip${entry.clipCount === 1 ? '' : 's'}` : ''}
       </span>
