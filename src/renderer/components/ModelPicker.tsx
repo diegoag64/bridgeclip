@@ -69,7 +69,7 @@ export function ModelPicker({ task, models, value, onChange, loading }: {
               onMouseDown={(event) => event.preventDefault()} onClick={() => choose(model)}
               onMouseMove={() => { if (!model.unavailableReason) setActive(index) }}
               className={cn(menuOptionClass(active === index, Boolean(model.unavailableReason)), 'block py-2')}>
-              <div className="flex items-center gap-2 text-xs text-ink"><span className="min-w-0 flex-1 truncate">{model.name}</span>{model.id === value && <Check className="h-3.5 w-3.5 shrink-0 text-accent-hover" strokeWidth={2.5} />}</div>
+              <div className="flex items-center gap-2 text-xs text-ink"><span className="min-w-0 flex-1 truncate">{model.name}</span>{model.id === value && <Check className="h-3.5 w-3.5 shrink-0 text-accent" strokeWidth={2.5} />}</div>
               <p className="break-all font-mono text-2xs text-ink-subtle">{model.id}</p>
               {model.unavailableReason && <p className="mt-1 text-2xs text-ink-muted">{model.unavailableReason}</p>}
             </li>)}

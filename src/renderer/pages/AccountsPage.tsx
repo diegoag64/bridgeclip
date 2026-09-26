@@ -685,11 +685,11 @@ function AccountTile({
       )}
     >
       <PlatformLens platform={platform} status={connecting ? 'connecting' : attention ? 'warning' : 'ok'} />
-      <TileText name={name} detail={connecting ? <span className="text-accent-hover">{detail}</span> : detail} title={title} />
+      <TileText name={name} detail={connecting ? <span className="text-accent">{detail}</span> : detail} title={title} />
       <div className="flex shrink-0 items-center gap-0.5">
         {connecting ? (
           <>
-            <Loader2 className="mx-1 h-3.5 w-3.5 animate-spin text-accent-hover" aria-label="Waiting for your browser" />
+            <Loader2 className="mx-1 h-3.5 w-3.5 animate-spin text-accent" aria-label="Waiting for your browser" />
             <Button variant="ghost" size="sm" iconOnly title="Cancel" aria-label={`Cancel connecting ${name}`} onClick={onCancel} icon={<X className="h-3.5 w-3.5" />} />
           </>
         ) : (

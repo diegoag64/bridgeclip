@@ -530,7 +530,7 @@ export function AutomationsPage({ onNavigate, onViewLibrary }: { onNavigate: (pa
                                 className={cn('h-[22px] w-[22px] rounded-full transition-[filter,opacity] duration-150 [&_svg]:h-3 [&_svg]:w-3', !checked && 'opacity-70 grayscale group-hover/chip:opacity-100 group-hover/chip:grayscale-0')}
                               />
                               <span className="truncate">{handle}</span>
-                              {checked && <Check aria-hidden className="-mr-0.5 h-3 w-3 shrink-0 text-accent-hover" strokeWidth={3} />}
+                              {checked && <Check aria-hidden className="-mr-0.5 h-3 w-3 shrink-0 text-accent" strokeWidth={3} />}
                             </button>
                           )
                         })}

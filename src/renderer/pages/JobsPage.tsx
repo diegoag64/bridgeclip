@@ -365,13 +365,13 @@ function ActiveJobRow({ job, position, onOpen, onCancel }: { job: Job; position:
           </span>
         ) : (
           <ProgressRing value={job.percent} size={32} stroke={3}>
-            <span className="font-mono text-[9px] tabular text-accent-hover">{Math.round(job.percent)}%</span>
+            <span className="font-mono text-[9px] tabular text-accent">{Math.round(job.percent)}%</span>
           </ProgressRing>
         )}
         <span className="min-w-0 flex-1">
           <span className="block truncate text-sm font-medium leading-5 text-ink">{sourceLabel(job.request.videoUrl)}</span>
           <span className="block truncate text-xs text-ink-muted">
-            <span className={queued ? 'text-ink-subtle' : 'text-accent-hover'}>{stage}</span>
+            <span className={queued ? 'text-ink-subtle' : 'text-accent'}>{stage}</span>
             {detail && detail !== stage && ` · ${detail}`}
           </span>
         </span>
@@ -409,7 +409,7 @@ const STATUS_DOT: Record<HistoryEntry['status'], 'success' | 'accent' | 'danger'
 
 const STATUS_TEXT: Record<HistoryEntry['status'], string> = {
   completed: 'text-success',
-  running: 'text-accent-hover',
+  running: 'text-accent',
   failed: 'text-danger',
   cancelled: 'text-ink-subtle',
   interrupted: 'text-warning',

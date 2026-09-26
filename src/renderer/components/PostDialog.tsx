@@ -468,7 +468,7 @@ export function PostDialog({ clips, onClose, onNavigate }: PostDialogProps): Rea
   } else if (!accountsLoaded) {
     body = (
       <div className="flex items-center justify-center gap-3 px-4 py-8 text-sm text-ink-muted">
-        <Loader2 className="h-4 w-4 animate-spin text-accent-hover" />
+        <Loader2 className="h-4 w-4 animate-spin text-accent" />
         Loading your Zernio accounts…
       </div>
     )
@@ -504,7 +504,7 @@ export function PostDialog({ clips, onClose, onNavigate }: PostDialogProps): Rea
         <fieldset disabled={metadataBusy || sending} className="space-y-5">
         <Section
           title="Post to"
-          aside={selectedAccounts.length > 0 && <span className="rounded-full bg-accent/[0.14] px-2 py-0.5 text-2xs font-medium text-accent-hover">{selectedAccounts.length} selected</span>}
+          aside={selectedAccounts.length > 0 && <span className="rounded-full bg-accent px-2 py-0.5 text-2xs font-medium text-accent-ink">{selectedAccounts.length} selected</span>}
         >
           {accountsError && <p className="mb-2.5 text-xs text-warning">{accountsError.message} These are the accounts Zernio reported last.</p>}
           <AccountPicker
@@ -636,7 +636,7 @@ export function PostDialog({ clips, onClose, onNavigate }: PostDialogProps): Rea
                   </>
                 ) : (
                   <p className="flex items-center gap-2 text-sm text-ink-muted">
-                    <Loader2 className="h-4 w-4 animate-spin text-accent-hover" />
+                    <Loader2 className="h-4 w-4 animate-spin text-accent" />
                     {mode === 'now' ? `Publishing to ${selectedAccounts.length} account${selectedAccounts.length === 1 ? '' : 's'}…` : 'Scheduling…'}
                   </p>
                 )}

@@ -298,7 +298,7 @@ export function FormatStep({ draft, update }: { draft: ClipDraft; update: Update
                   <span
                     className={cn(
                       'rounded-[4px] border-[1.5px] transition-colors duration-200',
-                      selected ? 'border-accent-hover bg-accent/25' : 'border-ink-subtle bg-white/[0.04]'
+                      selected ? 'border-accent bg-accent/25' : 'border-ink-subtle bg-white/[0.04]'
                     )}
                     style={{ width: f.w, height: f.h }}
                   />
@@ -616,13 +616,13 @@ function formatSeconds(total: number): string {
 
 /** Tiny 9:16 diagram of a framing style: split panels, full bleed, or letterbox. */
 function FramingGlyph({ style, selected }: { style: 'auto' | 'fill' | 'fit'; selected: boolean }): React.JSX.Element {
-  const fill = selected ? 'bg-accent-hover/80' : 'bg-ink-subtle/60'
+  const fill = selected ? 'bg-accent' : 'bg-ink-subtle/60'
   return (
     <span
       aria-hidden
       className={cn(
         'flex h-[24px] w-[14px] shrink-0 flex-col gap-px overflow-hidden rounded-[4px] border-[1.5px] p-px transition-colors duration-200',
-        selected ? 'border-accent-hover' : 'border-ink-subtle'
+        selected ? 'border-accent' : 'border-ink-subtle'
       )}
     >
       {style === 'auto' && (

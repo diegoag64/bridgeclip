@@ -74,7 +74,7 @@ export function JobProgress({ job, onCancel, leading }: JobProgressProps): React
     <Page width="focus">
       {leading && <div className="mb-2">{leading}</div>}
       <div className="text-center">
-        <p className="eyebrow text-accent-hover">{queued ? 'Waiting in the queue' : 'Generating clips'}</p>
+        <p className="eyebrow text-accent">{queued ? 'Waiting in the queue' : 'Generating clips'}</p>
         <h1 className="mx-auto mt-1.5 max-w-[560px] truncate text-xl font-semibold tracking-[-0.025em] text-ink" title={source}>
           {sourceLabel(source)}
         </h1>
@@ -87,7 +87,7 @@ export function JobProgress({ job, onCancel, leading }: JobProgressProps): React
               {pct}
               <span className="ml-0.5 text-xl text-ink-subtle">%</span>
             </p>
-            <p className="mt-1.5 text-xs font-medium text-accent-hover">{STAGE_LABELS[job.status] ?? 'Working'}</p>
+            <p className="mt-1.5 text-xs font-medium text-accent">{STAGE_LABELS[job.status] ?? 'Working'}</p>
           </ProgressRing>
 
           <p className="mt-4 h-5 max-w-full truncate text-center text-sm text-ink-muted" aria-live="polite">
@@ -121,7 +121,7 @@ export function JobProgress({ job, onCancel, leading }: JobProgressProps): React
                       done &&
                         'bg-ink text-canvas shadow-[inset_0_1px_0_rgb(255_255_255/0.9),0_4px_14px_-4px_rgb(255_255_255/0.35)]',
                       active &&
-                        'animate-pulse-ring bg-accent/25 text-accent-hover shadow-[inset_0_1px_0_rgb(255_255_255/0.22),inset_0_0_0_1px_rgb(var(--accent)/0.6)]',
+                        'animate-pulse-ring bg-accent text-accent-ink shadow-[inset_0_1px_0_rgb(255_255_255/0.16)]',
                       !done && !active && 'bg-black/25 text-ink-faint shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1),inset_0_1px_2px_rgb(0_0_0/0.3)]'
                     )}
                     aria-current={active ? 'step' : undefined}

@@ -33,7 +33,6 @@ const config: Config = {
         },
         accent: {
           DEFAULT: channel('accent'),
-          hover: channel('accent-hover'),
           ink: channel('accent-ink'),
           cyan: channel('accent-cyan')
         },

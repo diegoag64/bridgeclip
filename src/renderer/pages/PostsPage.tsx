@@ -277,7 +277,7 @@ function PostRow({ post }: { post: PostRecord }): React.JSX.Element {
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium text-ink" title={post.clipTitle}>{post.clipTitle || 'Untitled clip'}</p>
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
-            <p className={cn('mr-0.5 text-xs', post.status === 'failed' || post.status === 'missing' ? 'text-danger' : post.status === 'scheduled' ? 'text-accent-hover' : 'text-ink-muted')}>
+            <p className={cn('mr-0.5 text-xs', post.status === 'failed' || post.status === 'missing' ? 'text-danger' : post.status === 'scheduled' ? 'text-accent' : 'text-ink-muted')}>
               {confirming ? <span className="text-ink">Cancel this post? Zernio won’t publish it.</span> : whenText(post)}
             </p>
             {post.targets.map((target, index) => {
@@ -286,7 +286,7 @@ function PostRow({ post }: { post: PostRecord }): React.JSX.Element {
                 <>
                   <PlatformIcon platform={target.platform} className="h-4 w-4 rounded-full [&_svg]:h-2.5 [&_svg]:w-2.5" />
                   <span className="max-w-[140px] truncate text-ink">{target.handle ?? platformName(target.platform)}</span>
-                  <span className={cn(badge.tone === 'danger' ? 'text-danger' : badge.tone === 'accent' ? 'text-accent-hover' : 'text-ink-subtle')}>· {badge.label}</span>
+                  <span className={cn(badge.tone === 'danger' ? 'text-danger' : badge.tone === 'accent' ? 'text-accent' : 'text-ink-subtle')}>· {badge.label}</span>
                 </>
               )
               const className = 'inline-flex h-[22px] items-center gap-1.5 rounded-full bg-white/[0.05] pl-[3px] pr-2 text-2xs text-ink-muted shadow-[inset_0_0_0_1px_rgb(255_255_255/0.09),inset_0_1px_0_rgb(255_255_255/0.06)]'

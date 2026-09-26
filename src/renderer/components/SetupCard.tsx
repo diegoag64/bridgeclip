@@ -43,7 +43,7 @@ export function SetupCard({ onOpenSettings, className }: { onOpenSettings: () =>
             <KeyRound />
           </IconTile>
           <div className="min-w-0">
-            <p className="eyebrow text-accent-hover">One-time setup</p>
+            <p className="eyebrow text-accent">One-time setup</p>
             <h2 className="mt-0.5 text-base font-semibold text-ink">Connect OpenRouter</h2>
             <p className="mt-0.5 max-w-2xl text-xs text-ink-muted">
               BridgeClip has no account and no server. One OpenRouter key covers transcription with MAI Transcribe 2 and clip selection.

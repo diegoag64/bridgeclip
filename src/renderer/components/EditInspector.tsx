@@ -125,7 +125,7 @@ function SourceContextView({ context }: { context: SourceContextAudit }): React.
         {brief.background.length > 0 && <div><p className="font-medium">Researched background</p><ul className="mt-1 list-disc space-y-1 pl-5 text-ink-muted">{brief.background.map((item, i) => <li key={i}>{item.claim}<span className="block break-all text-xs">{item.url}</span></li>)}</ul></div>}
         {brief.vocabulary.length > 0 && <p className="text-xs text-ink-muted">Transcription hints from metadata: {brief.vocabulary.join(', ')}</p>}
       </>}
-      {context.citations.length > 0 && <div><p className="font-medium">Research sources</p><ul className="mt-1 space-y-2">{context.citations.map(source => <li key={source.url} className="text-xs"><button className="text-left text-accent-hover hover:underline" onClick={() => void getApi().shell.openPath(source.url)}>{source.title}</button><span className="block break-all text-ink-muted">{source.url}</span></li>)}</ul></div>}
+      {context.citations.length > 0 && <div><p className="font-medium">Research sources</p><ul className="mt-1 space-y-2">{context.citations.map(source => <li key={source.url} className="text-xs"><button className="text-left text-accent hover:underline" onClick={() => void getApi().shell.openPath(source.url)}>{source.title}</button><span className="block break-all text-ink-muted">{source.url}</span></li>)}</ul></div>}
       <p className="text-xs text-ink-subtle">{context.requests.map(r => r.model).filter((m, i, all) => all.indexOf(m) === i).join(', ')} · Recorded {new Date(context.created_at).toLocaleString()}</p>
     </div>
   </details>
