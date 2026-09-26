@@ -222,25 +222,57 @@ export function resolvePythonPath(enginePath: string, userPythonPath: string): s
   return userPythonPath || (process.platform === 'win32' ? 'python' : 'python3')
 }
 
+interface PythonValidationResult {
+  ok: boolean
+  python: string
+  error: string | null
+  hint: string | null
+  repairCommand: string | null
+}
+
 /**
  * Validate that the resolved Python can import the bundled clipping engine.
- * Returns { ok, python, error }.
+ * Return safe diagnostics and repair steps without exposing subprocess tracebacks.
  */
 export async function validatePython(
   pythonPath: string,
   enginePath: string
-): Promise<{ ok: boolean; python: string; error: string | null }> {
+): Promise<PythonValidationResult> {
+  const failure = (error: string, hint: string, installDependencies = false): PythonValidationResult => {
+    // Commands are displayed for the user to copy, never executed by the app.
+    const quote = (value: string): string => process.platform === 'win32'
+      ? `'${value.replace(/'/g, "''")}'`
+      : `'${value.replace(/'/g, "'\\''")}'`
+    return {
+      ok: false, python: pythonPath, error,
+      hint: app.isPackaged
+        ? 'Reinstall BridgeClip from the official download, reopen the app, then select Re-check. If this continues, report it using Report an issue in About.'
+        : hint,
+      repairCommand: !app.isPackaged && installDependencies
+        ? `${process.platform === 'win32' ? '& ' : ''}${quote(pythonPath)} -m pip install --require-hashes -r ${quote(join(enginePath, 'requirements.lock'))}`
+        : null
+    }
+  }
   try {
-    await execFileAsync(
+    const { stdout } = await execFileAsync(
       pythonPath, ['-c', `
-import cv2
-from clip_engine.bridge_contract import BRIDGE_CONTRACT_VERSION
-from clip_engine.services.ai_clipping_pipeline import ClippingJobRequest
-from clip_engine.services.layout_analyzer import LayoutAnalyzer
-if BRIDGE_CONTRACT_VERSION != ${BRIDGE_CONTRACT_VERSION}:
-    raise SystemExit('Incompatible clipping engine contract')
-if not LayoutAnalyzer().available:
-    raise SystemExit('Smart framing model is unavailable')
+import json
+try:
+    import cv2
+    from clip_engine.bridge_contract import BRIDGE_CONTRACT_VERSION
+    from clip_engine.services.ai_clipping_pipeline import ClippingJobRequest
+    from clip_engine.services.layout_analyzer import LayoutAnalyzer
+    if BRIDGE_CONTRACT_VERSION != ${BRIDGE_CONTRACT_VERSION}:
+        result = {"status": "contract"}
+    elif not LayoutAnalyzer().available:
+        result = {"status": "model"}
+    else:
+        result = {"status": "ok"}
+except ModuleNotFoundError as error:
+    result = {"status": "dependency", "module": error.name}
+except Exception:
+    result = {"status": "initialization"}
+print(json.dumps(result))
 `],
       {
         cwd: enginePath,
@@ -248,9 +280,31 @@ if not LayoutAnalyzer().available:
         timeout: 10000
       }
     )
-    return { ok: true, python: pythonPath, error: null }
-  } catch {
-    return { ok: false, python: pythonPath, error: 'The clipping engine is missing a required dependency, smart framing model, or compatible bridge contract.' }
+    const result = JSON.parse(stdout.trim()) as { status?: string; module?: string }
+    if (result.status === 'ok') return { ok: true, python: pythonPath, error: null, hint: null, repairCommand: null }
+    if (result.status === 'contract' || (result.status === 'dependency' && result.module?.startsWith('clip_engine'))) {
+      return failure('The clipping engine is missing or incompatible with this app.', 'Restore the engine folder from the same BridgeClip version as the app, restart npm run dev, then select Re-check.')
+    }
+    if (result.status === 'model') {
+      return failure('The smart framing face detection model is unavailable.', 'Restore engine/assets/models/face_detection_yunet_2023mar.onnx from the BridgeClip repository, then select Re-check.')
+    }
+    if (result.status === 'dependency') {
+      const moduleName = typeof result.module === 'string' && /^[a-zA-Z_][a-zA-Z0-9_.]{0,79}$/.test(result.module) ? ` (${result.module})` : ''
+      return failure(`A required Python module${moduleName} is not installed.`, 'Install the locked dependencies into the Python environment shown above. Run this command in Terminal (PowerShell on Windows), then select Re-check.', true)
+    }
+    return failure('The clipping engine could not initialize.', 'Check that Python path points to a Python 3.12 environment. Reinstall its locked dependencies with this command, then select Re-check.', true)
+  } catch (error) {
+    const cause = error as NodeJS.ErrnoException & { killed?: boolean }
+    if (cause.killed || cause.code === 'ETIMEDOUT') {
+      return {
+        ok: false, python: pythonPath, error: 'The clipping engine check timed out after 10 seconds.',
+        hint: 'Select Re-check. If it keeps timing out, restart the app and try again.', repairCommand: null
+      }
+    }
+    if (cause.code === 'ENOENT' || cause.code === 'EACCES' || cause.code === 'EPERM') {
+      return failure('The Python interpreter could not be started.', 'Set Python path below to an executable Python 3.12 interpreter with the engine dependencies installed, then select Re-check.')
+    }
+    return failure('The clipping engine check failed before it could report a result.', 'Select Re-check. If it continues to fail, verify the Python path below, reinstall the locked dependencies with this command, and restart the app.', true)
   }
 }
 

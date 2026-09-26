@@ -47,6 +47,8 @@ export interface ToolStatus {
   pythonDeps: boolean
   pythonPath: string
   pythonError: string | null
+  pythonHint?: string | null
+  pythonRepairCommand?: string | null
   ffmpeg: boolean
   ffmpegCaptions: boolean
   ffprobe: boolean

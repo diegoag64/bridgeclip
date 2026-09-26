@@ -401,6 +401,8 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
       pythonDeps: pythonValidation.ok,
       pythonPath: resolvedPython,
       pythonError: pythonValidation.error,
+      pythonHint: pythonValidation.hint,
+      pythonRepairCommand: pythonValidation.repairCommand,
       ffmpeg,
       ffmpegCaptions,
       ffprobe,
