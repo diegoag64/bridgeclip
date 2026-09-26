@@ -174,7 +174,11 @@ export function LibraryPage({ onNavigate, initialRun }: { onNavigate: (page: App
         output={open.output}
         outputDir={open.entry.outputDir}
         onNavigate={onNavigate}
-        leading={<BackLink label="Library" onClick={() => setOpen(null)} />}
+        leading={<BackLink label="Library" onClick={() => {
+          setOpen(null)
+          setCounts({})
+          void load()
+        }} />}
       />
     )
   }

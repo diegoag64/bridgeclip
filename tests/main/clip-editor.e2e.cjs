@@ -341,7 +341,13 @@ test('review editor refines candidates, restores discards, edits captions and ba
   assert.equal(output.clips[0].duration_ms, 4800)
   assert.ok(fs.statSync(output.clips[0].s3_url).size > 1000)
   if (shots) execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-ss', '1.2', '-i', output.clips[0].s3_url, '-frames:v', '1', '-y', path.join(shots, 'export-with-captions.png')])
-  await page.getByRole('button', { name: 'Exports', exact: true }).click()
+  // Use the editor's in-page back link, not the sidebar (which remounts Library).
+  await editor.getByRole('button', { name: 'Library', exact: true }).click()
+  await libraryCard.getByText('1 clip', { exact: true }).waitFor()
+  await libraryCard.getByText('1 Not Posted', { exact: true }).waitFor()
+  assert.equal(await libraryCard.getByText('No clips baked yet', { exact: true }).count(), 0)
+  await page.getByText('1 run · 1 clips', { exact: true }).waitFor()
+  await libraryCard.getByRole('button', { name: `Open ${project.title}`, exact: true }).click()
   await page.getByRole('button', { name: 'Open editor', exact: true }).waitFor()
   // A baked clip plus only discards lands on the list with a quiet editor action.
   await reopenFromLibrary(0)
