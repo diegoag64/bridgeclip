@@ -326,6 +326,55 @@ test('settings migration writes a private file', () => {
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 
+test('engine checks distinguish missing modules, models, contracts and timeouts with actionable repairs', async () => {
+  let result = { status: 'ok' }
+  let rejection = null
+  const app = { isPackaged: false }
+  const execFile = () => {}
+  execFile[require('node:util').promisify.custom] = async () => {
+    if (rejection) throw rejection
+    return { stdout: JSON.stringify(result), stderr: 'private traceback must never reach the renderer' }
+  }
+  const runner = loadSource('pipeline-runner.ts', {
+    electron: { app }, child_process: { execFile },
+    './settings-store': {}, './logger': {}, '../shared/job-output': {},
+    '../shared/job-contract': jobContract, './run-history': {}, './tools': {}
+  })
+  const check = () => runner.validatePython('/project with spaces/.venv/bin/python', '/project with spaces/engine')
+  assert.equal((await check()).ok, true)
+  result = { status: 'dependency', module: 'cv2' }
+  const missing = await check()
+  assert.match(missing.error, /cv2/)
+  assert.match(missing.hint, /Re-check/)
+  assert.ok(missing.repairCommand.includes("'/project with spaces/.venv/bin/python' -m pip install --require-hashes"))
+  assert.ok(missing.repairCommand.endsWith(`-r '${path.join('/project with spaces/engine', 'requirements.lock')}'`))
+  result = { status: 'dependency', module: 'private/secret' }
+  assert.doesNotMatch((await check()).error, /private/)
+  result = { status: 'dependency', module: 'clip_engine' }
+  assert.match((await check()).hint, /same BridgeClip version/)
+  result = { status: 'model' }
+  const model = await check()
+  assert.match(model.hint, /face_detection_yunet_2023mar.onnx/)
+  assert.equal(model.repairCommand, null)
+  result = { status: 'contract' }
+  assert.match((await check()).error, /incompatible/)
+  result = { status: 'initialization' }
+  assert.match((await check()).error, /initialize/)
+  rejection = { killed: true, stderr: 'private traceback' }
+  const timeout = await check()
+  assert.match(timeout.error, /timed out/)
+  assert.equal(timeout.repairCommand, null)
+  rejection = { code: 'ENOENT' }
+  assert.match((await check()).hint, /Python path/)
+  app.isPackaged = true
+  rejection = null
+  result = { status: 'dependency', module: 'cv2' }
+  const packaged = await check()
+  assert.match(packaged.hint, /Reinstall BridgeClip/)
+  assert.equal(packaged.repairCommand, null)
+  assert.doesNotMatch(JSON.stringify(packaged), /private traceback/)
+})
+
 test('Windows resolves the saved legacy Python default without replacing an installed or explicit interpreter', () => {
   const winProcess = Object.create(process)
   Object.defineProperty(winProcess, 'platform', { value: 'win32' })

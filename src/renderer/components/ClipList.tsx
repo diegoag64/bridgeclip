@@ -191,7 +191,7 @@ export function ClipList({ output, outputDir: runDirectory, leading, onNewClip, 
       )}
 
       {/* Floating glass toolbar; sticks just below the 40px title-bar strip. */}
-      <div className="glass-thick sticky top-12 z-10 mt-4 flex items-center justify-between gap-3 rounded-2xl py-1.5 pl-3 pr-1.5">
+      <div className="glass-thick sticky top-0 z-20 mt-4 flex items-center justify-between gap-3 rounded-2xl py-1.5 pl-3 pr-1.5">
         <div className="flex min-w-0 items-center gap-3">
           <Checkbox
             checked={allSelected}

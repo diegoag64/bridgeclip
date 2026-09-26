@@ -462,7 +462,7 @@ function DevPathField({
   )
 }
 
-interface ToolRow { name: string; ok: boolean | null; detail?: ReactNode; optional?: boolean }
+interface ToolRow { name: string; ok: boolean | null; detail?: ReactNode; hint?: string | null; repairCommand?: string | null; failureLabel?: string; optional?: boolean }
 
 function toolRows(status: ToolStatus | null): ToolRow[] {
   return [
@@ -470,7 +470,10 @@ function toolRows(status: ToolStatus | null): ToolRow[] {
     {
       name: 'Clipping dependencies and smart framing',
       ok: status?.pythonDeps ?? null,
-      detail: status && !status.pythonDeps ? status.pythonError : 'Includes OpenCV and the smart framing model'
+      detail: status && !status.pythonDeps ? status.pythonError : 'Includes OpenCV and the smart framing model',
+      hint: status && !status.pythonDeps ? status.pythonHint : null,
+      repairCommand: status && !status.pythonDeps ? status.pythonRepairCommand : null,
+      failureLabel: 'Needs attention'
     },
     { name: 'FFmpeg', ok: status?.ffmpeg ?? null },
     {
@@ -498,7 +501,7 @@ function ToolList({ rows, checking }: { rows: ToolRow[]; checking: boolean }): R
         <div className="mb-3 flex items-center gap-2 px-1 text-xs">
           <StatusDot tone={missing > 0 ? 'danger' : 'success'} />
           <span className={cn('flex-1', missing > 0 ? 'text-danger' : 'text-ink-muted')}>
-            {missing > 0 ? `${missing} required tool${missing === 1 ? '' : 's'} missing` : `Everything BridgeClip needs is installed (${rows.filter((row) => row.ok).length} tools)`}
+            {missing > 0 ? `${missing} required check${missing === 1 ? '' : 's'} need${missing === 1 ? 's' : ''} attention` : `Everything BridgeClip needs is installed (${rows.filter((row) => row.ok).length} tools)`}
           </span>
           {missing === 0 && (
             <Button
@@ -526,12 +529,18 @@ function ToolList({ rows, checking }: { rows: ToolRow[]; checking: boolean }): R
                     {row.detail}
                   </p>
                 )}
+                {row.hint && <p className="mt-2 text-xs leading-relaxed text-ink-muted">{row.hint}</p>}
+                {row.repairCommand && (
+                  <pre className="mt-2 whitespace-pre-wrap break-all rounded-lg bg-black/20 p-2 font-mono text-2xs text-ink" data-selectable>
+                    <code>{row.repairCommand}</code>
+                  </pre>
+                )}
               </div>
               {row.ok == null ? (
                 <span className="shrink-0 text-xs text-ink-faint">{checking ? 'Checking…' : 'Not checked'}</span>
               ) : (
                 <Badge tone={row.ok ? 'neutral' : row.optional ? 'warning' : 'danger'} className="shrink-0">
-                  {row.ok ? 'Found' : row.optional ? 'Unavailable' : 'Missing'}
+                  {row.ok ? 'Found' : row.optional ? 'Unavailable' : row.failureLabel ?? 'Missing'}
                 </Badge>
               )}
             </div>

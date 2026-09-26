@@ -95,7 +95,7 @@ export function ClipCard({
   return (
     <article
       className={cn(
-        'glass group relative flex flex-col rounded-2xl p-1.5 transition-[transform,box-shadow] duration-300 ease-out',
+        'glass group relative isolate flex flex-col rounded-2xl p-1.5 transition-[transform,box-shadow] duration-300 ease-out',
         selected
           ? 'shadow-accent-ring'
           : 'hover:-translate-y-0.5 hover:shadow-[inset_0_1px_0_rgb(255_255_255/0.1),0_0_0_1px_rgb(255_255_255/0.08),0_24px_48px_-20px_rgb(0_0_0/0.75)]'

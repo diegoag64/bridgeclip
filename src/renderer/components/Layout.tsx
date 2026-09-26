@@ -21,7 +21,7 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps): Reac
           {children}
         </div>
         {/* Title-bar strip: drag handle, and the edge content scrolls under. Stops short of the scrollbar. */}
-        <div aria-hidden className="scroll-edge drag absolute left-0 right-3 top-0 h-10" />
+        <div aria-hidden className="scroll-edge drag absolute left-0 right-3 top-0 z-30 h-10" />
       </main>
     </div>
   )
