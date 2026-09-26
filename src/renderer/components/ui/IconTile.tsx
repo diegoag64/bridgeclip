@@ -15,7 +15,7 @@ const TONES: Record<Tone, string> = {
   neutral:
     'text-ink bg-white/[0.08] shadow-[inset_0_1px_0_rgb(255_255_255/0.18),inset_0_0_0_1px_rgb(255_255_255/0.1),0_6px_16px_-8px_rgb(0_0_0/0.6)]',
   accent:
-    'text-accent-hover bg-accent/20 shadow-[inset_0_1px_0_rgb(255_255_255/0.2),inset_0_0_0_1px_rgb(var(--accent)/0.4)]',
+    'text-accent-ink bg-accent shadow-[inset_0_1px_0_rgb(255_255_255/0.16)]',
   success:
     'text-success bg-success/15 shadow-[inset_0_1px_0_rgb(255_255_255/0.16),inset_0_0_0_1px_rgb(var(--success)/0.35)]',
   warning:

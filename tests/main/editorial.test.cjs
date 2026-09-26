@@ -138,8 +138,12 @@ test('sponsor and opening checks survive parsing and appear in the edit inspecto
   assert.equal(audit.candidates[0].report.coherence.attempts[0].policy_judgment.answers.opening_context.noul, .1)
   const { RecordedEditView } = load('src/renderer/components/EditInspector.tsx')
   const html = renderToStaticMarkup(React.createElement(RecordedEditView, { audit }))
-  assert.match(html, /not_sponsored/)
-  assert.match(html, /opening_context/)
+  // Nested JSON starts folded; the policy evaluation remains available in Jev.
+  assert.match(html, /sponsorship &amp; opening/)
+  const { jevTraceEntries } = load('src/renderer/components/JevTrace.tsx')
+  const policy = jevTraceEntries(audit.candidates[0].report).find(e => e.title.includes('sponsorship'))
+  assert.equal(policy.judgment.questions.not_sponsored.instructions, 'Check not_sponsored')
+  assert.equal(policy.judgment.questions.opening_context.instructions, 'Check opening_context')
   assert.match(html, /Sponsor disclosures are not trimmed/)
 })
 

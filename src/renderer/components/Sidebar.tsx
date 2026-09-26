@@ -157,7 +157,7 @@ function NavButton({ item, expanded, active, onNavigate }: {
       <Icon
         className={cn(
           'h-4 w-4 shrink-0 transition-colors',
-          active ? 'text-accent-hover' : 'text-ink-subtle group-hover:text-ink-muted'
+          active ? 'text-accent' : 'text-ink-subtle group-hover:text-ink-muted'
         )}
         strokeWidth={active ? 2.2 : 1.9}
       />
@@ -168,7 +168,7 @@ function NavButton({ item, expanded, active, onNavigate }: {
         <>
           <span className="flex-1 truncate text-left">{item.label}</span>
           {badge && (
-            <span aria-hidden className="rounded-full bg-accent/20 px-1.5 font-mono text-2xs tabular text-accent-hover group-hover:hidden">{badge}</span>
+            <span aria-hidden className="rounded-full bg-accent px-1.5 font-mono text-2xs tabular text-accent-ink group-hover:hidden">{badge}</span>
           )}
           <kbd className="font-sans text-2xs text-ink-faint opacity-0 transition-opacity group-hover:opacity-100">
             {MOD_KEY}
@@ -202,7 +202,7 @@ function ActiveJobsCard({ expanded, onOpen }: { expanded: boolean; onOpen: () =>
       <div className={cn('flex items-center gap-2 text-xs', !expanded && 'justify-center')}>
         {expanded && <StatusDot tone="accent" pulse />}
         {expanded && <span className="truncate font-medium text-ink">{title}</span>}
-        <span className={cn('font-mono text-2xs tabular text-accent-hover', expanded && 'ml-auto')}>{percent}%</span>
+        <span className={cn('font-mono text-2xs tabular text-accent', expanded && 'ml-auto')}>{percent}%</span>
       </div>
       <ProgressBar value={percent} className={cn('h-1', expanded ? 'mt-2' : 'mt-1.5')} />
       {expanded && (

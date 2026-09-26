@@ -181,6 +181,7 @@ test('the native picker authorizes media and shell opening rejects aliased appli
       },
       './settings-store': { loadSettings: () => ({ outputDirectory: library }) },
       './file-manager': {},
+      './clip-editor': {},
       './edit-inspector': { inspectEdits: async () => ({}) },
     './framing-inspector': {},
       './run-history': runHistory,
@@ -617,7 +618,7 @@ test('pipeline preserves split JSON messages and protects the job identity', asy
   }, window, undefined, '/tmp/queued-output')
   const forwarded = JSON.parse(workerInput)
   assert.equal(forwarded.video_speed, 1.5)
-  assert.equal(forwarded.contract_version, 2)
+  assert.equal(forwarded.contract_version, 3)
   assert.equal(forwarded.output_dir, '/tmp/queued-output')
   assert.equal(forwarded.clipping_mode, 'advanced')
   assert.equal(forwarded.planner_model, 'custom/planner')

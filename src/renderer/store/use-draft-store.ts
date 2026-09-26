@@ -16,6 +16,7 @@ export interface StartedJob {
  * survive navigating away (e.g. to Settings to add a key) and a failed run.
  */
 export interface ClipDraft {
+  workflow: 'automatic' | 'review'
   source: string
   clippingMode: 'quality' | 'economy' | 'advanced'
   plannerModel: string
@@ -52,6 +53,7 @@ interface DraftState extends ClipDraft {
 }
 
 export const useDraftStore = create<DraftState>((set) => ({
+  workflow: 'automatic',
   source: '',
   clippingMode: 'quality',
   plannerModel: '',

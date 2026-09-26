@@ -1,3 +1,4 @@
+import { stopEditorsForQuit } from './clip-editor'
 import { app, BrowserWindow, nativeTheme, shell, protocol } from 'electron'
 import { extname, join } from 'path'
 import { mkdirSync } from 'fs'
@@ -71,6 +72,10 @@ if (!gotTheLock) {
 // Electron binary, so without this the dock and taskbar show the Electron atom.
 const devIcon = join(__dirname, '../../build/icon.png')
 
+function refreshDevDockIcon(): void {
+  if (is.dev && !hiddenForTests) app.dock?.setIcon(devIcon)
+}
+
 function createWindow(): void {
   // The UI is dark-only; keep the vibrancy material and native menus dark too.
   nativeTheme.themeSource = 'dark'
@@ -108,7 +113,10 @@ function createWindow(): void {
   })
 
   mainWindow.on('ready-to-show', () => {
-    if (!hiddenForTests) mainWindow?.show()
+    if (!hiddenForTests) {
+      mainWindow?.show()
+      refreshDevDockIcon()
+    }
   })
 
   mainWindow.on('closed', () => {
@@ -143,7 +151,6 @@ app.whenReady().then(() => {
   cleanStaleWorkspaces()
   electronApp.setAppUserModelId('com.bridgemind.bridgeclip')
   if (hiddenForTests) app.dock?.hide()
-  else if (is.dev) app.dock?.setIcon(devIcon)
 
   // Boot-time diagnostic dump. This is the first thing in the log file and
   // gives any future failure a full environment snapshot to reference.
@@ -231,6 +238,9 @@ app.whenReady().then(() => {
   initAutoUpdater(() => mainWindow)
 
   app.on('activate', () => {
+    // Local runs share Electron's bundle identity. Restore our artwork when
+    // returning to the app as well as after the initial window appears.
+    refreshDevDockIcon()
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow()
     }
@@ -244,6 +254,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  stopEditorsForQuit()
   cancelQueuedJobsForQuit()
   stopAllJobsForQuit()
 })

@@ -1,3 +1,4 @@
+import { commitBeforeNavigation } from './lib/navigation'
 import { Fragment, useCallback, useEffect, useState } from 'react'
 import { Layout } from './components/Layout'
 import { NAV_ITEMS, SIDEBAR_SHORTCUT_KEY, type Page } from './components/Sidebar'
@@ -34,18 +35,20 @@ export default function App(): React.JSX.Element {
   const navigateRoot = useCallback((destination: Page): void => {
     // Keep a modal's progress and cancel controls mounted during an upload.
     if (document.querySelector('[role="dialog"][aria-modal="true"]')) return
-    if (destination === 'jobs') useJobStore.getState().focusJob(null)
-    setLibraryRun(null)
-    setPage(destination)
-    setPageVisit((visit) => visit + 1)
+    void commitBeforeNavigation().then(() => {
+      if (destination === 'jobs') useJobStore.getState().focusJob(null)
+      setLibraryRun(null)
+      setPage(destination)
+      setPageVisit((visit) => visit + 1)
+    }).catch(() => { /* The editor keeps the unsaved draft and shows the save error. */ })
   }, [])
 
   useEffect(() => { if (page !== 'library') setLibraryRun(null) }, [page])
-  const viewLibraryRun = (outputDir: string): void => {
+  const viewLibraryRun = useCallback((outputDir: string): void => {
     setLibraryRun(outputDir)
     setPage('library')
     setPageVisit((visit) => visit + 1)
-  }
+  }, [])
 
   useEffect(() => {
     setLoadError(false)
@@ -107,7 +110,7 @@ export default function App(): React.JSX.Element {
           <Fragment key={pageVisit}>
             {page === 'clip' && <ClipPage onNavigate={setPage} />}
             {page === 'library' && <LibraryPage onNavigate={setPage} initialRun={libraryRun} />}
-            {page === 'jobs' && <JobsPage onNavigate={setPage} />}
+            {page === 'jobs' && <JobsPage onNavigate={setPage} onViewLibrary={viewLibraryRun} />}
             {page === 'accounts' && <AccountsPage onNavigate={setPage} />}
             {page === 'posts' && <PostsPage onNavigate={setPage} />}
             {page === 'automations' && <AutomationsPage onNavigate={setPage} onViewLibrary={viewLibraryRun} />}

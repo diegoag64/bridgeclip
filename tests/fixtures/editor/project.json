@@ -1,0 +1,250 @@
+{
+  "version": 1,
+  "revision": 0,
+  "title": "A better way to find the moment",
+  "width": 1920,
+  "height": 1080,
+  "duration_ms": 12000,
+  "aspect_ratio": "9:16",
+  "candidates": [
+    {
+      "id": "candidate-1",
+      "title": "The result",
+      "ranges": [
+        [
+          1000,
+          5000
+        ],
+        [
+          7000,
+          10000
+        ]
+      ],
+      "scenes": [
+        {
+          "at_ms": 0,
+          "layout": "fill",
+          "crops": [
+            [
+              0.1,
+              0,
+              0.31640625,
+              1
+            ]
+          ]
+        },
+        {
+          "at_ms": 8000,
+          "layout": "split",
+          "crops": [
+            [
+              0,
+              0.1,
+              0.4,
+              0.35555556
+            ],
+            [
+              0.5,
+              0.3,
+              0.4,
+              0.35555556
+            ]
+          ]
+        }
+      ],
+      "captions": true,
+      "caption_preset": "pop",
+      "video_speed": 1.25,
+      "score": 0.8,
+      "reason": "",
+      "review": {
+        "signature": "[\"The result\",[[1000,5000],[7000,10000]],[[0,\"fill\",[[0.1,0,0.31640625,1]]],[8000,\"split\",[[0,0.1,0.4,0.35555556],[0.5,0.3,0.4,0.35555556]]]]]",
+        "reviewed_at": "2026-09-26T03:12:46.417626+00:00",
+        "decision": "needs_attention",
+        "questions": [
+          {
+            "id": "not_sponsored",
+            "prompt": "Is `retained_dialogue` free of sponsor reads, paid promotions, affiliate pitches or advertising segments, considering disclosures in `before` and `after`?",
+            "yes": "This is ordinary editorial discussion, criticism, education or an independent product example, with no evidence that the retained material belongs to an advertising segment. A brand name or price alone is not advertising. A completed sponsor segment elsewhere in before does not make the following editorial topic sponsored.",
+            "no": "Any retained material is part of a sponsor read or promotional pitch: sponsor acknowledgment, sales benefits followed by a signup/link/discount call to action, affiliate offer or paid endorsement. A disclosure just before the excerpt still applies to the ad even when the clip omits the disclosure. Informative technical details inside a sponsor read are still advertising.",
+            "probability": 0.95,
+            "threshold": 0.8,
+            "status": "success"
+          },
+          {
+            "id": "opening_context",
+            "prompt": "Does the opening of `retained_dialogue` establish its own setup, without relying on an example, demonstration, explanation or event shown only in `before`?",
+            "yes": "The excerpt introduces its subject and supplies the specific setup it relies on. And/so/but alone are fine. A reference is acceptable when the actual example or premise is explained inside the retained excerpt.",
+            "no": "The opening refers back to missing material, for example \"the reason I gave you this example is because\", \"as you just saw\", or \"that is why this works\", but the referenced example or demonstration itself is absent. Understanding the broad topic or a later application does not replace that missing setup. Do not use before to mentally fill the gap for a new viewer.",
+            "probability": 0.5,
+            "threshold": 0.75,
+            "status": "success"
+          },
+          {
+            "id": "self_contained",
+            "prompt": "Can a viewer identify the subject and understand the main point from `retained_dialogue` alone?",
+            "yes": "The main point and its essential referents are understandable. Ordinary discourse openings (and, so, but), rhetorical questions and references explained inside the excerpt are acceptable. Background or a full lecture is not required.",
+            "no": "An unidentified person, object, event or premise is essential to understanding the main point and is only explained outside the excerpt.",
+            "probability": 0.5,
+            "threshold": 0.7,
+            "status": "success"
+          },
+          {
+            "id": "complete_ending",
+            "prompt": "Does the main point in `retained_dialogue` reach a completed statement, answer or reaction?",
+            "yes": "The point lands before the excerpt ends. A following elaboration, example, transition or separate question in after does not invalidate a completed point.",
+            "no": "The excerpt ends mid-sentence or with an unfinished explanation, unanswered central question or promised payoff that is essential to this excerpt.",
+            "probability": 0.5,
+            "threshold": 0.75,
+            "status": "success"
+          },
+          {
+            "id": "logical_flow",
+            "prompt": "Can the statements in `retained_dialogue` be followed in the order presented?",
+            "yes": "The statements form a connected sequence. Conversational disfluencies and rhetorical questions are acceptable.",
+            "no": "An edit or abrupt topic change makes the sequence unintelligible or changes who says what.",
+            "probability": 0.5,
+            "threshold": 0.75,
+            "status": "success"
+          },
+          {
+            "id": "faithful_to_source",
+            "prompt": "Is the main point in `retained_dialogue` consistent with the actual statements in `before` and `after`?",
+            "yes": "No supplied statement contradicts or materially qualifies the excerpt in a way that changes its meaning. Omitting another example or later topic is acceptable. Judge faithful attribution, not whether the speaker is objectively correct.",
+            "no": "A specific omitted statement reverses, corrects, negates or materially qualifies the retained claim, making the excerpt misleading.",
+            "probability": 0.5,
+            "threshold": 0.65,
+            "status": "success"
+          },
+          {
+            "id": "title_supported",
+            "prompt": "Does `title` accurately describe the main point of `retained_dialogue`?",
+            "yes": "A fair concise description without invented facts or exaggerated claims.",
+            "no": "The title claims something not said or contradicts or exaggerates what is said.",
+            "probability": 0.5,
+            "threshold": 0.7,
+            "status": "success"
+          },
+          {
+            "id": "evidence",
+            "prompt": "Can the meaning and completeness of this spoken excerpt be assessed from `retained_dialogue`, `before`, `after` and `visual_observations`?",
+            "yes": "Spoken words carry the main point. An ordinary spoken explanation or opinion can be judged from a transcript without seeing the speaker or hearing their tone.",
+            "no": "Understanding the main point requires a specific unseen demonstration, object, gesture, or missing/garbled speech. Do not imagine the missing content.",
+            "probability": 1.0,
+            "threshold": 0.5,
+            "status": "success"
+          }
+        ],
+        "cuts": [
+          {
+            "interval": [
+              5000,
+              7000
+            ],
+            "questions": [
+              {
+                "id": "removal_safe",
+                "prompt": "Can removed_text and the interval be omitted without losing a referent, setup, event, reaction, qualification or payoff? A transcript gap does not prove that nothing happens visually.",
+                "yes": "The omission is dispensable",
+                "no": "The omission loses meaning or necessary visual content",
+                "probability": 0.5,
+                "threshold": 0.95,
+                "status": "success"
+              },
+              {
+                "id": "join_logical",
+                "prompt": "Will joining before directly to after preserve a natural logical sequence and the original meaning?",
+                "yes": "The joined material makes sense together",
+                "no": "The join is confusing or changes meaning",
+                "probability": 0.5,
+                "threshold": 0.95,
+                "status": "success"
+              },
+              {
+                "id": "evidence",
+                "prompt": "Is there enough evidence to approve this exact omission? Do not infer that silent footage is empty.",
+                "yes": "Evidence establishes the omission is safe",
+                "no": "Unseen content or missing context could matter",
+                "probability": 1.0,
+                "threshold": 0.5,
+                "status": "success"
+              }
+            ]
+          }
+        ]
+      },
+      "exports": []
+    },
+    {
+      "id": "candidate-2",
+      "title": "Why the ending matters",
+      "ranges": [
+        [
+          5000,
+          11000
+        ]
+      ],
+      "scenes": [
+        {
+          "at_ms": 0,
+          "layout": "fill",
+          "crops": [
+            [
+              0.1,
+              0,
+              0.31640625,
+              1
+            ]
+          ]
+        },
+        {
+          "at_ms": 8000,
+          "layout": "split",
+          "crops": [
+            [
+              0,
+              0.1,
+              0.4,
+              0.35555556
+            ],
+            [
+              0.5,
+              0.3,
+              0.4,
+              0.35555556
+            ]
+          ]
+        }
+      ],
+      "captions": true,
+      "caption_preset": "pop",
+      "video_speed": 1.25,
+      "score": 0.8,
+      "reason": "",
+      "review": null,
+      "exports": []
+    }
+  ],
+  "transcript": [
+    {
+      "start_ms": 0,
+      "end_ms": 2000,
+      "text": "Here is the setup."
+    },
+    {
+      "start_ms": 3000,
+      "end_ms": 5000,
+      "text": "The event happened."
+    },
+    {
+      "start_ms": 6000,
+      "end_ms": 8000,
+      "text": "That explains the result."
+    },
+    {
+      "start_ms": 9000,
+      "end_ms": 11000,
+      "text": "The qualification matters."
+    }
+  ]
+}

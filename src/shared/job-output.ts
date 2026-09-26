@@ -16,6 +16,7 @@ export interface ClipArtifact {
 }
 
 export interface JobOutput {
+  editor_project?: boolean
   job_id: string
   source_video_url: string
   source_video_description?: string | null
@@ -178,6 +179,7 @@ export function parseJobOutput(value: unknown): JobOutput | null {
     })
   }
   return {
+    editor_project: value.editor_project === true,
     job_id: boundedText(value.job_id, 128) ?? '',
     source_video_url: boundedText(value.source_video_url, 8192) ?? '',
     source_video_description: boundedText(value.source_video_description, 20000),

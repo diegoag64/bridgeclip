@@ -63,7 +63,7 @@ export function ApiKeyInput({
             <button
               type="button"
               onClick={() => getApi().shell.openPath(getKeyUrl)}
-              className="inline-flex items-center gap-0.5 rounded-full px-2 py-1 text-xs text-ink-muted transition-colors hover:bg-accent/10 hover:text-accent-hover"
+              className="inline-flex items-center gap-0.5 rounded-full px-2 py-1 text-xs text-ink-muted transition-colors hover:bg-accent/10 hover:text-accent"
             >
               Get a key
               <ArrowUpRight className="h-3 w-3" />

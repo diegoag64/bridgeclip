@@ -49,12 +49,16 @@ Blur is expensive. Only `glass-thick` and `glass-chip` use `backdrop-filter`. Pa
 | `ink-faint` | `#545967` | Placeholders, disabled, nav group labels |
 | `line` / `line-strong` | white 9% / 16% | Hairlines and dividers (`divide-white/[0.06]` inside tiles) |
 | `fill` / `fill-hover` / `fill-selected` | white 5% / 8% / 11% | Plain hover and pressed surfaces |
-| `accent` / `accent-hover` | `#5C8FFF` / `#86B0FF` | Primary buttons, chosen options, progress, focus ring |
-| `accent-cyan` | `#38CCFF` | The BridgeMind mark's blue. Not used for UI fills. |
+| `accent` | `#1A5FDF` | Deep blue: primary buttons, chosen options, progress, focus ring |
+| `--accent-button-hover` | `#286BE5` | Solid hover fill for primary buttons and editor trim handles |
+| `accent-ink` | `#FFFFFF` | White text and icons on solid accent fills |
+| `accent-cyan` | `#38CCFF` | The BridgeMind mark's blue |
 | `success` · `warning` · `danger` | `#4ADE80` · `#FBBF24` · `#FF6B6E` | Status only |
 | `brand.gold` | `#FFD500` | The virality score icon |
 
 Every token supports alpha modifiers: `bg-accent/10`, `text-danger`. Don't use `from-`/`via-`/`to-` gradient stops.
+
+Use the same `accent` blue for active navigation icons, selected options, progress and editor controls. Do not introduce a softer blue for active states. Use `accent-ink` for foregrounds on solid accent fills: `text-accent-ink` for text and icons, `bg-accent-ink` for switch thumbs. Keep buttons dark blue on hover so white labels stay legible. Keep buttons crisp with a subtle edge and no text shadow. Editor selections, crops and timeline controls use these same tokens rather than separate blues.
 
 ---
 
@@ -127,8 +131,8 @@ Depth, back to front: `app-backdrop` → `glass` panel → `glass-tile` / `glass
 | `Segmented` | Single choice in a glass track, with the chosen option as a raised pill. Roving tab stop. Also exports `onRadioKeyDown` for custom radio groups. |
 | `SettingRow` | Title and description with a control (usually `Switch`) on a `glass-tile`. `bare` drops the tile. |
 | `Switch`, `Checkbox` | Solid accent when on. The checkbox supports `indeterminate` and `variant="overlay"` for use on video. |
-| `Badge`, `StatusDot` | Tinted glass pills; tones `neutral` · `accent` · `success` · `warning` · `danger`. Dots are solid and can pulse. |
-| `IconTile` | A flat tinted tile holding an icon. Sizes `sm`–`xl`, same tones. |
+| `Badge`, `StatusDot` | Tinted glass pills, or solid blue with white text for `accent`; tones `neutral` · `accent` · `success` · `warning` · `danger`. Dots are solid and can pulse. |
+| `IconTile` | A flat tinted tile holding an icon; `accent` uses solid blue with a white icon. Sizes `sm`–`xl`, same tones. |
 | `Callout` | Tinted glass strip for errors, warnings, info and success, with optional title, action and dismiss. `role` is alert for danger, status otherwise. |
 | `ProgressBar` / `ProgressRing` | Solid accent fill, red when failed. The ring renders its children in the centre. |
 | `EmptyState` | Glass panel with an icon tile, title, one sentence and one action. |

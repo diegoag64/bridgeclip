@@ -384,7 +384,7 @@ export function Select({
                   {option.label}
                   {option.detail && <span className="text-ink-subtle"> · {option.detail}</span>}
                 </span>
-                {option.value === value && <Check aria-hidden className="h-3.5 w-3.5 shrink-0 text-accent-hover" strokeWidth={2.5} />}
+                {option.value === value && <Check aria-hidden className="h-3.5 w-3.5 shrink-0 text-accent" strokeWidth={2.5} />}
               </li>
             ))}
           </ul>

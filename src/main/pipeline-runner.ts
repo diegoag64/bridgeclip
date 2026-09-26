@@ -443,6 +443,7 @@ export function startClipJob(
     contract_version: BRIDGE_CONTRACT_VERSION,
     job_id: jobId,
     video_url: config.videoUrl,
+    workflow: config.workflow ?? 'automatic',
     clipping_mode: config.clippingMode ?? 'quality',
     ...(config.clippingMode === 'advanced' ? {
       planner_model: config.plannerModel,
@@ -772,7 +773,7 @@ function isProcessGroupAlive(pid: number): boolean {
   catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM' }
 }
 
-function runtimeEnvironment(): Record<string, string | undefined> {
+export function runtimeEnvironment(): Record<string, string | undefined> {
   const environment: Record<string, string | undefined> = {}
   for (const key of ['PATH', 'Path', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TMPDIR', 'TEMP', 'TMP', 'SystemRoot', 'WINDIR', 'COMSPEC', 'LANG', 'LC_ALL', 'SSL_CERT_FILE', 'SSL_CERT_DIR']) {
     if (process.env[key]) environment[key] = process.env[key]

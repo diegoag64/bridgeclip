@@ -11,6 +11,8 @@ import { parseJobOutput, type JobOutput } from '../shared/job-output'
 import { readRunRecord } from './run-history'
 
 export interface JobHistoryEntry {
+  editorProject?: boolean
+  candidateCount?: number
   favorite?: boolean
   jobId: string
   date: string
@@ -90,6 +92,8 @@ export async function getJobHistory(baseDir: string, activeJobIds: ReadonlySet<s
           date: record?.startedAt ?? result.modified.toISOString(),
           videoTitle: data.source_video_title,
           clipCount: data.clips.length,
+          editorProject: data.editor_project === true,
+          candidateCount: data.editor_project && typeof data.metrics?.planned_clip_count === 'number' ? data.metrics.planned_clip_count : undefined,
           status: 'completed',
           outputDir: join(baseDir, dir.name),
           totalCostUsd: typeof costVal === 'number' ? costVal : null,

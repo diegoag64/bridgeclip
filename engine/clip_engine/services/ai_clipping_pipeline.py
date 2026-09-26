@@ -116,6 +116,8 @@ class ClippingJobRequest:
     # "tight" cuts dead air and filler words; "natural" keeps original timing.
     pacing: str = "tight"
     video_speed: float = 1.0
+    workflow: str = 'automatic'
+    caption_preset: str = 'pop'
 
     def __post_init__(self):
         validate_video_speed(self.video_speed)
@@ -381,6 +383,30 @@ class AIClippingPipeline:
             editorial_vision = EditorialVision(self.settings, download_result.video_path, work_dir, round(video_duration * 1000))
             reviewer.source_context = context_brief
             reviewer.visual_observer = editorial_vision.observe if getattr(self.settings, 'jev_visual_context', False) else None
+            if request.workflow == 'review':
+                if not self.local_mode:
+                    raise ValueError('Review projects require local mode')
+                from clip_engine.services.manual_editor import prepare_project
+                project = await prepare_project(request, clip_plan.segments, transcription_result.segments,
+                    download_result, self.rendering_service, reviewer, self._get_local_output_dir(job_id),
+                    lambda message: self._update_progress(job_id, JobStatus.PLANNING, 60, message))
+                edit_audit['outcome'] = 'ready_for_review'
+                save_edit_audit()
+                costs = source_context['cost_usd'] + coherence_service.estimated_cost_usd
+                for api in (transcription_result.api_costs, clip_plan.api_costs):
+                    costs += getattr(api, 'estimated_cost_usd', 0) if api else 0
+                output = JobOutput(job_id=job_id, source_video_url=request.video_url,
+                    source_video_title=download_result.metadata.title, source_video_duration_seconds=video_duration,
+                    source_video_description=(getattr(download_result.metadata, 'description', '') or '')[:20000],
+                    source_video_channel=getattr(download_result.metadata, 'uploader', None),
+                    total_clips=0, clips=[], editor_project=True, transcript_url=transcript_upload.s3_url,
+                    processing_time_seconds=time.time() - start_time,
+                    metrics={'planned_clip_count': len(project['candidates']),
+                        'api_costs': {'total_estimated_cost_usd': costs, 'cost_incomplete': True}})
+                self._save_local_json(job_id, 'job_output', asdict(output))
+                self._update_progress(job_id, JobStatus.COMPLETED, 100, 'Ready to edit')
+                return ClippingJobResult(job_id=job_id, status=JobStatus.COMPLETED, output=output,
+                    processing_time_seconds=time.time() - start_time)
             accepted = []
             limit = getattr(self.intelligence_planner, 'discovery_limit', None) or request.max_clips or self.settings.max_clips_absolute
             pending = clip_plan.segments

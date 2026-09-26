@@ -1,3 +1,4 @@
+import { openEditor, saveEditor, runEditor, cancelEditor } from './clip-editor'
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { existsSync, realpathSync } from 'fs'
 import { loadSettings, publicSettings, replaceApiKey, savePublicSettings, type ApiKeyName, type PublicSettings } from './settings-store'
@@ -260,6 +261,11 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
     if (!isWithinDirectory(outputDir, loadSettings().outputDirectory)) throw new Error('Job is outside the library')
     return getJobOutput(outputDir, loadSettings().outputDirectory)
   })
+
+  handle('editor:open', (_event, path: unknown) => openEditor(path))
+  handle('editor:save', (_event, path: unknown, revision: unknown, edits: unknown) => saveEditor(path, revision, edits))
+  handle('editor:run', (_event, path: unknown, revision: unknown, id: unknown, action: unknown) => runEditor(path, revision, id, action))
+  handle('editor:cancel', (_event, path: unknown) => cancelEditor(path))
 
   handle('edits:inspect', (_event, outputDir: string) => inspectEdits(outputDir, loadSettings().outputDirectory))
 

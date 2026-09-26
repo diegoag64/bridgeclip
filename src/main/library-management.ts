@@ -1,3 +1,4 @@
+import { editorBusy } from './clip-editor'
 import { lstatSync, realpathSync, rmSync, unlinkSync, writeFileSync } from 'fs'
 import { basename, dirname, isAbsolute, join, resolve } from 'path'
 import { getJobOutput, isRunFavorite, LIBRARY_FAVORITE_FILE, removeRunThumbnails } from './file-manager'
@@ -19,6 +20,7 @@ async function checkedRun(raw: unknown): Promise<{ check: () => string; output: 
         !current.isDirectory() || current.isSymbolicLink() || realpathSync(path) !== canonical ||
         dirname(canonical) !== library || realpathSync(dirname(path)) !== library ||
         current.dev !== original.dev || current.ino !== original.ino) throw new Error('The Library run changed. Refresh and try again.')
+    if (editorBusy(path)) throw new Error('Wait for the editor to finish before changing this run.')
     if (liveJobIds().has(basename(path))) throw new Error('Wait for this run to finish before changing it.')
     return path
   }

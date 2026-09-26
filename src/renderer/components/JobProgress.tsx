@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, Check, Clapperboard, Clock3, Download, FileText, Film, Gauge, Github, RotateCcw, ScrollText, Sparkles } from 'lucide-react'
 import { cn, formatTimecode, sourceLabel } from '../lib/utils'
 import { getApi } from '../lib/ipc'
@@ -8,6 +8,8 @@ import { Page } from './ui/Page'
 import { ProgressRing } from './ui/ProgressBar'
 import { IconTile } from './ui/IconTile'
 import { Button } from './ui/Button'
+import { JsonViewer } from './ui/JsonViewer'
+import { inspectJsonValue } from '../lib/inspect-json'
 
 export const STAGE_LABELS: Record<string, string> = {
   queued: 'Queued',
@@ -74,7 +76,7 @@ export function JobProgress({ job, onCancel, leading }: JobProgressProps): React
     <Page width="focus">
       {leading && <div className="mb-2">{leading}</div>}
       <div className="text-center">
-        <p className="eyebrow text-accent-hover">{queued ? 'Waiting in the queue' : 'Generating clips'}</p>
+        <p className="eyebrow text-accent">{queued ? 'Waiting in the queue' : 'Generating clips'}</p>
         <h1 className="mx-auto mt-1.5 max-w-[560px] truncate text-xl font-semibold tracking-[-0.025em] text-ink" title={source}>
           {sourceLabel(source)}
         </h1>
@@ -87,7 +89,7 @@ export function JobProgress({ job, onCancel, leading }: JobProgressProps): React
               {pct}
               <span className="ml-0.5 text-xl text-ink-subtle">%</span>
             </p>
-            <p className="mt-1.5 text-xs font-medium text-accent-hover">{STAGE_LABELS[job.status] ?? 'Working'}</p>
+            <p className="mt-1.5 text-xs font-medium text-accent">{STAGE_LABELS[job.status] ?? 'Working'}</p>
           </ProgressRing>
 
           <p className="mt-4 h-5 max-w-full truncate text-center text-sm text-ink-muted" aria-live="polite">
@@ -121,7 +123,7 @@ export function JobProgress({ job, onCancel, leading }: JobProgressProps): React
                       done &&
                         'bg-ink text-canvas shadow-[inset_0_1px_0_rgb(255_255_255/0.9),0_4px_14px_-4px_rgb(255_255_255/0.35)]',
                       active &&
-                        'animate-pulse-ring bg-accent/25 text-accent-hover shadow-[inset_0_1px_0_rgb(255_255_255/0.22),inset_0_0_0_1px_rgb(var(--accent)/0.6)]',
+                        'animate-pulse-ring bg-accent text-accent-ink shadow-[inset_0_1px_0_rgb(255_255_255/0.16)]',
                       !done && !active && 'bg-black/25 text-ink-faint shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1),inset_0_1px_2px_rgb(0_0_0/0.3)]'
                     )}
                     aria-current={active ? 'step' : undefined}
@@ -164,6 +166,8 @@ export function JobProgress({ job, onCancel, leading }: JobProgressProps): React
 }
 
 export function JobFailure({ job, onRetry, leading }: { job: Job; onRetry: () => void; leading?: React.ReactNode }): React.JSX.Element {
+  const error = job.error || 'The clipping engine stopped without an error message.'
+  const structuredError = useMemo(() => inspectJsonValue(error).encoded, [error])
   return (
     <Page width="focus">
       {leading && <div className="mb-3">{leading}</div>}
@@ -176,12 +180,12 @@ export function JobFailure({ job, onRetry, leading }: { job: Job; onRetry: () =>
       </p>
 
       <section className="glass mt-5 overflow-hidden rounded-3xl p-2">
-        <pre
+        {structuredError ? <JsonViewer label="Engine error details" value={error} /> : <pre
           className="glass-well max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-2xl px-3 py-3.5 font-mono text-xs leading-relaxed text-ink/90"
           data-selectable
         >
-          {job.error || 'The clipping engine stopped without an error message.'}
-        </pre>
+          {error}
+        </pre>}
         {job.errorHint && (
           <p className="px-3 pb-3 pt-3 text-sm leading-relaxed text-ink-muted" data-selectable>
             {job.errorHint}

@@ -5,7 +5,7 @@ export type Tone = 'neutral' | 'accent' | 'success' | 'danger' | 'warning'
 
 const TONES: Record<Tone, string> = {
   neutral: 'bg-white/[0.06] text-ink-muted shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1),inset_0_1px_0_rgb(255_255_255/0.08)]',
-  accent: 'bg-accent/[0.14] text-accent-hover shadow-[inset_0_0_0_1px_rgb(var(--accent)/0.32),inset_0_1px_0_rgb(255_255_255/0.08)]',
+  accent: 'bg-accent text-accent-ink shadow-[inset_0_1px_0_rgb(255_255_255/0.08)]',
   success: 'bg-success/[0.12] text-success shadow-[inset_0_0_0_1px_rgb(var(--success)/0.28),inset_0_1px_0_rgb(255_255_255/0.06)]',
   danger: 'bg-danger/[0.12] text-danger shadow-[inset_0_0_0_1px_rgb(var(--danger)/0.3),inset_0_1px_0_rgb(255_255_255/0.06)]',
   warning: 'bg-warning/[0.12] text-warning shadow-[inset_0_0_0_1px_rgb(var(--warning)/0.28),inset_0_1px_0_rgb(255_255_255/0.06)]'

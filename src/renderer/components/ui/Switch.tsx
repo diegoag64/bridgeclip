@@ -28,8 +28,8 @@ export function Switch({ checked, onChange, disabled, label, className }: Switch
     >
       <span
         className={cn(
-          'block h-5 w-5 rounded-full bg-white shadow-[0_1px_3px_rgb(0_0_0/0.45),0_0_0_0.5px_rgb(0_0_0/0.1)] transition-transform duration-300 ease-spring',
-          checked ? 'translate-x-5' : 'translate-x-0.5'
+          'block h-5 w-5 rounded-full shadow-[0_1px_3px_rgb(0_0_0/0.45),0_0_0_0.5px_rgb(0_0_0/0.1)] transition-[transform,background-color] duration-300 ease-spring',
+          checked ? 'translate-x-5 bg-accent-ink' : 'translate-x-0.5 bg-white'
         )}
       />
     </button>

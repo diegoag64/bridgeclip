@@ -74,6 +74,7 @@ class JobOutput:
     created_at: str = None
     source_video_description: Optional[str] = None
     source_video_channel: Optional[str] = None
+    editor_project: bool = False
     
     def __post_init__(self):
         if self.created_at is None:

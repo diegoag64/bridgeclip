@@ -16,7 +16,7 @@ import bridge_runner as bridge
 
 class BridgeTests(unittest.TestCase):
     def config(self, **overrides):
-        return {"contract_version": 2, "layout_vision_enabled": True, "job_id": "job-123", "video_url": "https://example.com/video", **overrides}
+        return {"contract_version": 3, "layout_vision_enabled": True, "job_id": "job-123", "video_url": "https://example.com/video", **overrides}
 
     def test_real_subprocess_loads_in_repo_engine(self):
         repo_root = os.path.dirname(os.path.dirname(os.path.abspath(bridge.__file__)))
@@ -58,7 +58,7 @@ class BridgeTests(unittest.TestCase):
             "clip_engine.config": types.SimpleNamespace(
                 get_settings=lambda: types.SimpleNamespace(openrouter_api_key="test-openrouter"),
                 get_caption_preset=lambda name: None),
-            "clip_engine.bridge_contract": types.SimpleNamespace(BRIDGE_CONTRACT_VERSION=2),
+            "clip_engine.bridge_contract": types.SimpleNamespace(BRIDGE_CONTRACT_VERSION=3),
             "clip_engine.logging_safety": types.SimpleNamespace(install_safe_logging=lambda: None),
             "clip_engine.services.ai_clipping_pipeline": types.SimpleNamespace(
                 AIClippingPipeline=Pipeline, ClippingJobRequest=lambda **kwargs: kwargs,
@@ -91,7 +91,7 @@ class BridgeTests(unittest.TestCase):
             return types.SimpleNamespace(openrouter_api_key=None)
         config_module = types.SimpleNamespace(get_settings=get_settings, get_caption_preset=lambda name: None)
         pipeline_module = types.SimpleNamespace(AIClippingPipeline=None, ClippingJobRequest=None, JobStatus=None)
-        with patch.dict(sys.modules, {"clip_engine.config": config_module, "clip_engine.bridge_contract": types.SimpleNamespace(BRIDGE_CONTRACT_VERSION=2), "clip_engine.logging_safety": types.SimpleNamespace(install_safe_logging=lambda: None), "clip_engine.services.ai_clipping_pipeline": pipeline_module}), patch.dict(os.environ, {"LOCAL_MODE": "false"}), redirect_stdout(io.StringIO()):
+        with patch.dict(sys.modules, {"clip_engine.config": config_module, "clip_engine.bridge_contract": types.SimpleNamespace(BRIDGE_CONTRACT_VERSION=3), "clip_engine.logging_safety": types.SimpleNamespace(install_safe_logging=lambda: None), "clip_engine.services.ai_clipping_pipeline": pipeline_module}), patch.dict(os.environ, {"LOCAL_MODE": "false"}), redirect_stdout(io.StringIO()):
             self.assertFalse(asyncio.run(bridge.run(self.config(output_dir=os.path.abspath("output")))))
         self.assertEqual(observed, [("true", os.path.abspath("output"), "true")])
 
@@ -102,7 +102,7 @@ class BridgeTests(unittest.TestCase):
             return types.SimpleNamespace(openrouter_api_key=None)
         config_module = types.SimpleNamespace(get_settings=get_settings, get_caption_preset=lambda name: None)
         pipeline_module = types.SimpleNamespace(AIClippingPipeline=None, ClippingJobRequest=None, JobStatus=None)
-        modules = {"clip_engine.config": config_module, "clip_engine.bridge_contract": types.SimpleNamespace(BRIDGE_CONTRACT_VERSION=2), "clip_engine.logging_safety": types.SimpleNamespace(install_safe_logging=lambda: None), "clip_engine.services.ai_clipping_pipeline": pipeline_module}
+        modules = {"clip_engine.config": config_module, "clip_engine.bridge_contract": types.SimpleNamespace(BRIDGE_CONTRACT_VERSION=3), "clip_engine.logging_safety": types.SimpleNamespace(install_safe_logging=lambda: None), "clip_engine.services.ai_clipping_pipeline": pipeline_module}
         with patch.dict(sys.modules, modules), redirect_stdout(io.StringIO()):
             self.assertFalse(asyncio.run(bridge.run(self.config(layout_vision_enabled=False))))
         self.assertEqual(observed, ["false"])
@@ -116,7 +116,7 @@ class BridgeTests(unittest.TestCase):
             return types.SimpleNamespace(openrouter_api_key=None)
         modules = {
             "clip_engine.config": types.SimpleNamespace(get_settings=get_settings, get_caption_preset=lambda name: None),
-            "clip_engine.bridge_contract": types.SimpleNamespace(BRIDGE_CONTRACT_VERSION=2),
+            "clip_engine.bridge_contract": types.SimpleNamespace(BRIDGE_CONTRACT_VERSION=3),
             "clip_engine.logging_safety": types.SimpleNamespace(install_safe_logging=lambda: None),
             "clip_engine.services.ai_clipping_pipeline": types.SimpleNamespace(AIClippingPipeline=None, ClippingJobRequest=None, JobStatus=None),
         }
@@ -142,7 +142,7 @@ class BridgeTests(unittest.TestCase):
             return types.SimpleNamespace(openrouter_api_key=None)
         modules = {
             "clip_engine.config": types.SimpleNamespace(get_settings=get_settings, get_caption_preset=lambda name: None),
-            "clip_engine.bridge_contract": types.SimpleNamespace(BRIDGE_CONTRACT_VERSION=2),
+            "clip_engine.bridge_contract": types.SimpleNamespace(BRIDGE_CONTRACT_VERSION=3),
             "clip_engine.logging_safety": types.SimpleNamespace(install_safe_logging=lambda: None),
             "clip_engine.services.ai_clipping_pipeline": types.SimpleNamespace(AIClippingPipeline=None, ClippingJobRequest=None, JobStatus=None),
         }
@@ -185,7 +185,7 @@ class BridgeTests(unittest.TestCase):
             return types.SimpleNamespace(openrouter_api_key=None)
         config_module = types.SimpleNamespace(get_settings=get_settings, get_caption_preset=lambda name: None)
         pipeline_module = types.SimpleNamespace(AIClippingPipeline=None, ClippingJobRequest=None, JobStatus=None)
-        with patch.dict(sys.modules, {"clip_engine.config": config_module, "clip_engine.bridge_contract": types.SimpleNamespace(BRIDGE_CONTRACT_VERSION=2), "clip_engine.logging_safety": types.SimpleNamespace(install_safe_logging=lambda: None), "clip_engine.services.ai_clipping_pipeline": pipeline_module}), patch.dict(os.environ, {"YTDLP_PROXIES": "socks5h://user:pass@proxy:1"}), redirect_stdout(io.StringIO()):
+        with patch.dict(sys.modules, {"clip_engine.config": config_module, "clip_engine.bridge_contract": types.SimpleNamespace(BRIDGE_CONTRACT_VERSION=3), "clip_engine.logging_safety": types.SimpleNamespace(install_safe_logging=lambda: None), "clip_engine.services.ai_clipping_pipeline": pipeline_module}), patch.dict(os.environ, {"YTDLP_PROXIES": "socks5h://user:pass@proxy:1"}), redirect_stdout(io.StringIO()):
             asyncio.run(bridge.run(self.config()))
         self.assertEqual(observed, [("", "")])
 

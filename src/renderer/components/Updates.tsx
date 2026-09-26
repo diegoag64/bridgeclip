@@ -46,9 +46,9 @@ export function SidebarUpdateButton({ expanded }: { expanded: boolean }): React.
         className={cn('glass-tile glass-tile-hover group w-full rounded-xl text-left animate-fade-in', expanded ? 'px-2.5 py-2' : 'p-1.5')}
       >
         <div className={cn('flex items-center gap-2 text-xs', !expanded && 'justify-center')}>
-          {expanded ? <StatusDot tone="accent" /> : <RotateCw className="h-3.5 w-3.5 text-accent-hover" aria-hidden />}
+          {expanded ? <StatusDot tone="accent" /> : <RotateCw className="h-3.5 w-3.5 text-accent" aria-hidden />}
           {expanded && <span className="truncate font-medium text-ink">Update ready</span>}
-          {expanded && <span className="ml-auto shrink-0 text-2xs font-medium text-accent-hover">Restart</span>}
+          {expanded && <span className="ml-auto shrink-0 text-2xs font-medium text-accent">Restart</span>}
         </div>
       </button>
       {dialog}

@@ -117,6 +117,10 @@ class RenderRequest:
     skip_ranges_ms: list[tuple[int, int]] = field(default_factory=list)
     chapters: list[tuple[int, str]] = field(default_factory=list)
     debug_capture: bool = False
+    manual_plan: Optional[ClipLayoutPlan] = None
+    # Exact source-time selections from the manual editor; no automatic pacing,
+    # sliver removal or protected-interval restoration may change these cuts.
+    manual_ranges_ms: Optional[list[tuple[int, int]]] = None
     editorial_context: Optional[dict] = None
     editorial_service: Optional[JevService] = field(default=None, repr=False)
     coherence_reviewer: Optional[CoherenceReviewer] = field(default=None, repr=False)
@@ -293,7 +297,9 @@ class RenderingService:
             window_start_ms, window_ms = request.start_time_ms, duration_ms
 
         plan: Optional[ClipLayoutPlan] = None
-        if not is_landscape:
+        if request.manual_plan is not None:
+            plan = request.manual_plan
+        elif not is_landscape:
             plan = await self._plan_layout(request, source_w, source_h, window_start_ms, window_ms)
         analyzed = plan is not None
         # Pacing needs to know what's on screen even when the framing doesn't
@@ -312,22 +318,30 @@ class RenderingService:
                 source_width=source_w, source_height=source_h, face_samples=face_samples,
             )
 
-        skips = self._window_skips(request, window_start_ms, window_ms)
-        keeps = self._keep_intervals(request, pacing_plan, window_start_ms, window_ms)
-        protected = window_protection(request.editorial_context or {}, window_start_ms, window_ms)
-        # Existing audio-event protection must survive explicit skips too.
-        protected += reaction_intervals(request.transcript_segments or [], window_start_ms, window_ms)
-        if request.editorial_context is not None:
-            baseline = self._keep_intervals(replace(request, editorial_context=None), pacing_plan, window_start_ms, window_ms)
-            record_prevented_cuts(request.editorial_context, baseline, skips, protected, window_start_ms, window_ms, pacing_plan)
-        time_map = TimeMap(subtract_intervals(keeps, skips, protected, window_ms), window_ms)
-        # Natural timing still honours the planner's skips: they're edit
-        # decisions, not pacing.
-        natural_map = TimeMap(subtract_intervals([(0, window_ms)], skips, protected, window_ms), window_ms)
-        if request.coherence_reviewer:
-            time_map = await request.coherence_reviewer.audit_edit(request.title_text, time_map,
-                window_start_ms, window_ms, request.editorial_context, pacing_plan)
-            natural_map = TimeMap([(0, window_ms)], window_ms)
+        if request.manual_plan is not None:
+            ranges = request.manual_ranges_ms
+            if not ranges or any(start < window_start_ms or end > window_start_ms + window_ms or end <= start or
+                                 (i > 0 and start < ranges[i - 1][1]) for i, (start, end) in enumerate(ranges)):
+                raise RenderingError('Manual rendering requires valid selected intervals')
+            time_map = TimeMap([(a - window_start_ms, b - window_start_ms) for a, b in ranges], window_ms)
+            natural_map = time_map
+        else:
+            skips = self._window_skips(request, window_start_ms, window_ms)
+            keeps = self._keep_intervals(request, pacing_plan, window_start_ms, window_ms)
+            protected = window_protection(request.editorial_context or {}, window_start_ms, window_ms)
+            # Existing audio-event protection must survive explicit skips too.
+            protected += reaction_intervals(request.transcript_segments or [], window_start_ms, window_ms)
+            if request.editorial_context is not None:
+                baseline = self._keep_intervals(replace(request, editorial_context=None), pacing_plan, window_start_ms, window_ms)
+                record_prevented_cuts(request.editorial_context, baseline, skips, protected, window_start_ms, window_ms, pacing_plan)
+            time_map = TimeMap(subtract_intervals(keeps, skips, protected, window_ms), window_ms)
+            # Natural timing still honours the planner's skips: they're edit
+            # decisions, not pacing.
+            natural_map = TimeMap(subtract_intervals([(0, window_ms)], skips, protected, window_ms), window_ms)
+            if request.coherence_reviewer:
+                time_map = await request.coherence_reviewer.audit_edit(request.title_text, time_map,
+                    window_start_ms, window_ms, request.editorial_context, pacing_plan)
+                natural_map = TimeMap([(0, window_ms)], window_ms)
         smart = analyzed and not plan.is_letterbox_only
         vision_cost = plan.vision_cost_usd if analyzed else 0.0
 
@@ -344,9 +358,9 @@ class RenderingService:
             source_width=source_w, source_height=source_h, face_samples=face_samples,
         )
         ladder: list[tuple[ClipLayoutPlan, TimeMap, Optional[str]]] = [(plan, time_map, None)]
-        if smart:
+        if smart and request.manual_plan is None:
             ladder.append((letterbox, time_map, "letterbox"))
-        if time_map.keeps != natural_map.keeps:
+        if time_map.keeps != natural_map.keeps and request.manual_plan is None:
             ladder.append((letterbox, natural_map, "letterbox_natural"))
 
         render_fallback: Optional[str] = None

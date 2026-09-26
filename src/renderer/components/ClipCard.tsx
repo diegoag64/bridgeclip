@@ -175,7 +175,7 @@ export function ClipCard({
         </div>
         <div className="pointer-events-none absolute right-2 top-2 z-10 flex items-center gap-1">
           {topPick && (
-            <span className="inline-flex h-5 items-center rounded-full bg-accent px-2 text-2xs font-semibold text-white shadow-[inset_0_1px_0_rgb(255_255_255/0.35)]">
+            <span className="inline-flex h-5 items-center rounded-full bg-accent px-2 text-2xs font-semibold text-accent-ink shadow-[inset_0_1px_0_rgb(255_255_255/0.16)]">
               Top pick
             </span>
           )}
