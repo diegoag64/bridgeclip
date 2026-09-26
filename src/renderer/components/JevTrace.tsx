@@ -125,7 +125,7 @@ export function JevTrace({ trace }: { trace: EditorialTrace | null }): React.JSX
       <div className="mt-3">{entry.evidence ? <JsonViewer label="Saved input evidence" value={entry.evidence} /> : <p>Input evidence was not saved for this evaluation.</p>}</div>
     </details>
     {judgment && <details className="rounded-lg border border-white/10 p-3 text-xs"><summary className="cursor-pointer text-ink-muted">Full saved request / result · model, tokens, cost & cache</summary>
-      <JsonViewer className="mt-3" value={{ state: entry.evidence, ...judgment }} />
+      <JsonViewer className="mt-3" label="Jev request and result" value={{ state: entry.evidence, ...judgment }} />
     </details>}
   </section>
 }

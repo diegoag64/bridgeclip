@@ -25,7 +25,7 @@ function JudgmentDetails({ value }: { value: Judgment }): React.JSX.Element {
         <td>{a.type === 'noul' ? '—' : `${(a.confidence * 100).toFixed(1)}%`}</td>
       </tr>)}</tbody></table>
     <p className="text-ink-subtle">Noul is probability of yes. Concentration describes the answer distribution, not correctness.</p>
-    <details><summary className="cursor-pointer text-ink-muted">Questions, distributions and cache provenance</summary><JsonViewer className="mt-3" value={value} /></details>
+    <details><summary className="cursor-pointer text-ink-muted">Questions, distributions and cache provenance</summary><JsonViewer className="mt-3" label="Judgment request and result" value={value} /></details>
   </div>
 }
 
@@ -41,15 +41,15 @@ export function RecordedEditorialReview({ trace, seek }: { trace: EditorialTrace
     {trace.candidates.map((candidate, i) => <details key={i} className="rounded-lg border border-white/10 p-3">
       <summary className="cursor-pointer text-xs">{formatTimecode(candidate.interval[0])}–{formatTimecode(candidate.interval[1])} · {label(candidate.decision)} · {label(candidate.reason)}</summary>
       <div className="mt-3 space-y-3"><JudgmentDetails value={candidate.judgment} />
-        <details><summary className="cursor-pointer text-xs text-ink-muted">Observed facts, dialogue and visual inferences</summary><JsonViewer className="mt-3" value={{ evidence: candidate.evidence, overlappingLayouts: candidate.layout_segments, visual: candidate.visual, evaluations: candidate.judgment_history.map((judgment, i) => ({ judgment, evidence: candidate.evidence_history[i] })) }} /></details>
+        <details><summary className="cursor-pointer text-xs text-ink-muted">Observed facts, dialogue and visual inferences</summary><JsonViewer className="mt-3" label="Editorial evidence" value={{ evidence: candidate.evidence, overlappingLayouts: candidate.layout_segments, visual: candidate.visual, evaluations: candidate.judgment_history.map((judgment, i) => ({ judgment, evidence: candidate.evidence_history[i] })) }} /></details>
       </div>
     </details>)}
     {trace.qa && <details className="rounded-lg border border-white/10 p-3"><summary className="cursor-pointer text-xs">Final retained clip · context, title and editorial scores</summary>
       <div className="mt-3"><JudgmentDetails value={trace.qa.judgment} /></div>
-      <JsonViewer className="mt-3" value={trace.qa.evidence} />
+      <JsonViewer className="mt-3" label="Final quality evidence" value={trace.qa.evidence} />
     </details>}
     {trace.fillers.length > 0 && <details><summary className="cursor-pointer text-xs">Acknowledgments & hesitation</summary>
-      <JsonViewer className="mt-3" value={trace.fillers} /></details>}
-    {trace.duplicates.map((d, i) => <details key={i}><summary className="cursor-pointer text-xs">Takeaway comparison with clip {d.other_clip + 1} · review only</summary><JudgmentDetails value={d.judgment} /><JsonViewer className="mt-3" value={d.evidence} /></details>)}
+      <JsonViewer className="mt-3" label="Fillers and acknowledgments" value={trace.fillers} /></details>}
+    {trace.duplicates.map((d, i) => <details key={i}><summary className="cursor-pointer text-xs">Takeaway comparison with clip {d.other_clip + 1} · review only</summary><JudgmentDetails value={d.judgment} /><JsonViewer className="mt-3" label={`Duplicate comparison ${i + 1}`} value={d.evidence} /></details>)}
   </section>
 }

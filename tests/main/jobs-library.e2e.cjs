@@ -99,6 +99,13 @@ test('Jobs actions inspect runs and open completed jobs in the shared Library vi
   await page.getByRole('menuitem', { name: 'Open job', exact: true }).click()
   await page.getByRole('button', { name: 'Run again', exact: true }).waitFor()
   assert.equal(await page.locator('button[aria-current="page"]').getAttribute('aria-label'), 'Jobs')
+  await page.getByText('Test failure', { exact: true }).waitFor()
+  const structuredError = JSON.stringify({ message: 'Provider temporarily unavailable', retryable: true })
+  await publish({ ...snapshot(failedId, 'failed', failedDir), revision: 2, error: structuredError })
+  const errorDetails = page.getByRole('region', { name: 'Engine error details', exact: true })
+  await errorDetails.getByText('"Provider temporarily unavailable"', { exact: true }).waitFor()
+  await errorDetails.getByRole('radio', { name: 'Original', exact: true }).click()
+  assert.equal(await errorDetails.getByRole('textbox', { name: 'Original JSON' }).inputValue(), structuredError)
   await page.getByRole('button', { name: 'All jobs', exact: true }).click()
 
   const liveDir = writeRun(liveId, 'Watched test run', 'running')

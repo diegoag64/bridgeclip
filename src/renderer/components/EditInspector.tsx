@@ -91,20 +91,20 @@ export function RecordedEditView({ audit }: { audit: EditAudit }): React.JSX.Ele
           return <p key={`${t.start_ms}:${i}`} className={`rounded p-2 text-sm ${kept ? 'bg-emerald-950/40' : inside && accepted ? 'bg-amber-950/40' : 'text-ink-muted'}`}><span className="mr-3 font-mono text-2xs">{formatTimecode(t.start_ms)}–{formatTimecode(t.end_ms)}</span>{t.speaker && <span className="mr-2 text-xs text-purple-300">{t.speaker}</span>}{t.text}</p>
         })}{lines.length === 0 && <p className="text-sm text-ink-muted">No matching transcript passages.</p>}</div>
         <div className="flex items-center gap-3 text-xs"><Button size="sm" variant="ghost" disabled={page === 0} onClick={() => setPage(page - 1)}>Previous passages</Button><span>{Math.min(page * 100 + 1, lines.length)}–{Math.min((page + 1) * 100, lines.length)} of {lines.length}</span><Button size="sm" variant="ghost" disabled={(page + 1) * 100 >= lines.length} onClick={() => setPage(page + 1)}>Next passages</Button></div>
-        {candidate?.report?.moment && <details className="rounded-xl border border-white/10 p-3"><summary className="cursor-pointer text-sm">Proposed topic, setup and payoff</summary><JsonViewer className="mt-3" value={candidate.report.moment} /></details>}
+        {candidate?.report?.moment && <details className="rounded-xl border border-white/10 p-3"><summary className="cursor-pointer text-sm">Proposed topic, setup and payoff</summary><JsonViewer className="mt-3" label="Proposed moment" value={candidate.report.moment} /></details>}
         {coherence && <section className="space-y-3 rounded-xl border border-white/10 p-3"><h3 className="text-sm font-semibold">Coherence decisions · {coherence.status}</h3>
           <p className="text-xs text-ink-muted">Self-contained must reach {(coherence.self_contained_threshold ?? coherence.threshold) * 100}%. Faithful to source must reach {(coherence.faithful_to_source_threshold ?? coherence.threshold) * 100}%. Title supported must reach {(coherence.title_supported_threshold ?? coherence.threshold) * 100}%. Other content checks must reach {coherence.threshold * 100}%. {coherence.sponsor_threshold != null && <>Confidence that the clip is not sponsored must reach {coherence.sponsor_threshold * 100}%. </>}Sufficient evidence must reach {(coherence.evidence_threshold ?? coherence.threshold) * 100}%. Individual removals require {coherence.cut_threshold * 100}%. Unknown removals are restored. Unverified clips are omitted.</p>
           {coherence.reason === 'sponsored_or_uncertain_promotion' && <p className="text-xs text-amber-200">Omitted because the segment was promotional or could not be confidently cleared of sponsorship. Sponsor disclosures are not trimmed to turn ads into clips.</p>}
           {coherence.reason === 'needs_visual_evidence' && <p className="text-xs text-amber-200">This candidate needs visual evidence. More transcript alone could not resolve it. If visual review is disabled, enable additional visual context in Settings. Recorded visual attempts show any remaining evidence or budget limits.</p>}
-          {(coherence.visual_reviews ?? []).map((v, i) => <details key={`visual-${i}`}><summary className="cursor-pointer text-xs">Visual evidence review {i + 1}</summary><JsonViewer className="mt-3" value={v} /></details>)}
+          {(coherence.visual_reviews ?? []).map((v, i) => <details key={`visual-${i}`}><summary className="cursor-pointer text-xs">Visual evidence review {i + 1}</summary><JsonViewer className="mt-3" label={`Visual review ${i + 1}`} value={v} /></details>)}
           {coherence.attempts.map((a, i) => <details key={i}><summary className="cursor-pointer text-xs">{i + 1}. {a.stage.replaceAll('_', ' ')} · {a.decision.replaceAll('_', ' ')} · {a.reason.replaceAll('_', ' ')}</summary>
-            <JsonViewer className="mt-3" value={a} /></details>)}
+            <JsonViewer className="mt-3" label={`Coherence attempt ${i + 1}`} value={a} /></details>)}
           {coherence.repairs.map((r, i) => <details key={i}><summary className="cursor-pointer text-xs">Boundary repair {r.repair_round ?? i + 1} · request {i + 1} · {r.status.replaceAll('_', ' ')} · {r.model}</summary>
             {r.status === 'truncated' && <p className="mt-2 text-xs text-amber-200">The model reached its output limit before completing the repair. This response was not used to change the clip.</p>}
-            <JsonViewer className="mt-3" value={r} /></details>)}
+            <JsonViewer className="mt-3" label={`Boundary repair ${i + 1}`} value={r} /></details>)}
         </section>}
         {candidate?.report && <details className="rounded-xl border border-white/10 p-3"><summary className="cursor-pointer text-sm">Additional recorded context, protection and quality checks</summary>
-          <JsonViewer className="mt-3" value={{ ...candidate.report, coherence: undefined }} /></details>}
+          <JsonViewer className="mt-3" label="Additional clip checks" value={{ ...candidate.report, coherence: undefined }} /></details>}
       </div>
     </div>
   </div>

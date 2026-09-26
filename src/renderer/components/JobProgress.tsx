@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, Check, Clapperboard, Clock3, Download, FileText, Film, Gauge, Github, RotateCcw, ScrollText, Sparkles } from 'lucide-react'
 import { cn, formatTimecode, sourceLabel } from '../lib/utils'
 import { getApi } from '../lib/ipc'
@@ -8,6 +8,8 @@ import { Page } from './ui/Page'
 import { ProgressRing } from './ui/ProgressBar'
 import { IconTile } from './ui/IconTile'
 import { Button } from './ui/Button'
+import { JsonViewer } from './ui/JsonViewer'
+import { inspectJsonValue } from '../lib/inspect-json'
 
 export const STAGE_LABELS: Record<string, string> = {
   queued: 'Queued',
@@ -164,6 +166,8 @@ export function JobProgress({ job, onCancel, leading }: JobProgressProps): React
 }
 
 export function JobFailure({ job, onRetry, leading }: { job: Job; onRetry: () => void; leading?: React.ReactNode }): React.JSX.Element {
+  const error = job.error || 'The clipping engine stopped without an error message.'
+  const structuredError = useMemo(() => inspectJsonValue(error).encoded, [error])
   return (
     <Page width="focus">
       {leading && <div className="mb-3">{leading}</div>}
@@ -176,12 +180,12 @@ export function JobFailure({ job, onRetry, leading }: { job: Job; onRetry: () =>
       </p>
 
       <section className="glass mt-5 overflow-hidden rounded-3xl p-2">
-        <pre
+        {structuredError ? <JsonViewer label="Engine error details" value={error} /> : <pre
           className="glass-well max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-2xl px-3 py-3.5 font-mono text-xs leading-relaxed text-ink/90"
           data-selectable
         >
-          {job.error || 'The clipping engine stopped without an error message.'}
-        </pre>
+          {error}
+        </pre>}
         {job.errorHint && (
           <p className="px-3 pb-3 pt-3 text-sm leading-relaxed text-ink-muted" data-selectable>
             {job.errorHint}
