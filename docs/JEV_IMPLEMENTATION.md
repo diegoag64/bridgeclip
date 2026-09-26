@@ -31,12 +31,12 @@ Candidates include topic, setup and payoff anchors. Speaker turns remain visible
 throughout review. One bounded follow-up discovery pass can search underexplored
 sections; overlapping alternatives are resolved after review.
 
-Current policy (`coherence-v6`) requires every relevant check to pass independently:
+Current policy (`coherence-v7`) requires every relevant check to pass independently:
 
 | Check | Minimum probability |
 | --- | --- |
-| Self-contained meaning | 70% yes |
-| Opening context, completed ending, logical flow, source faithfulness, supported title | 75% yes each |
+| Self-contained meaning, source faithfulness, supported title | 70% yes each |
+| Opening context, completed ending, logical flow | 75% yes each |
 | Not sponsored | 90% yes |
 | Sufficient evidence | 50% for the sufficient option |
 | Safe removal and logical join for an internal cut | 95% yes each, plus sufficient evidence |

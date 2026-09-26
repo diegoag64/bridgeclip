@@ -194,6 +194,18 @@ def test_qa_flags_missing_or_visual_only_evidence_and_does_not_filter():
     assert set(report['qa']['judgment']['answers']) >= {'hook', 'standalone', 'arc', 'quotability', 'ending'}
 
 
+@pytest.mark.parametrize('probability,flagged', [(.699, True), (.70, False), (.79, False)])
+def test_final_title_review_uses_seventy_percent_threshold(probability, flagged):
+    async def evaluate(state, questions):
+        answers = response(questions)['answers']
+        answers['title_supported']['noul'] = probability
+        return {'status': 'success', 'answers': answers}
+    report = {'candidates': [], 'flags': []}
+    client = SimpleNamespace(enabled=True, evaluate=evaluate)
+    asyncio.run(review_retained_clip(client, 'A title', [segment(0, 1000, 'A complete statement.')], report))
+    assert ('title_needs_review' in report['flags']) == flagged
+
+
 def test_duplicate_review_is_bounded_and_preserves_distinct_clips():
     async def run():
         client, calls = service()

@@ -299,3 +299,27 @@ test('Jev trace uses relaxed per-check thresholds while preserving historical ru
   assert.equal(jevQuestionGate('self_contained', { type: 'noul', noul: .7 }, historic).passed, false)
   assert.equal(jevQuestionGate('evidence', entry.judgment.answers.evidence, historic).passed, false)
 })
+
+
+test('source and title gates use saved 70% thresholds without changing older runs', () => {
+  const { jevTraceEntries, jevQuestionGate } = load('src/renderer/components/JevTrace.tsx')
+  const saved = structuredClone(editFixture)
+  const coherence = saved.candidates[0].report.coherence
+  coherence.policy = 'coherence-v7'
+  coherence.threshold = .75
+  coherence.faithful_to_source_threshold = .7
+  coherence.title_supported_threshold = .7
+  const entry = jevTraceEntries(parseEditAudit(saved).candidates[0].report)[0]
+  for (const key of ['faithful_to_source', 'title_supported']) {
+    assert.deepEqual(jevQuestionGate(key, { type: 'noul', noul: .7 }, entry), { passed: true, required: 'Yes probability ≥ 70.0%' })
+    assert.equal(jevQuestionGate(key, { type: 'noul', noul: .699 }, entry).passed, false)
+  }
+  assert.equal(jevQuestionGate('logical_flow', { type: 'noul', noul: .7 }, entry).passed, false)
+  coherence.policy = 'coherence-v6'
+  delete coherence.faithful_to_source_threshold
+  delete coherence.title_supported_threshold
+  const historic = jevTraceEntries(parseEditAudit(saved).candidates[0].report)[0]
+  for (const key of ['faithful_to_source', 'title_supported']) {
+    assert.deepEqual(jevQuestionGate(key, { type: 'noul', noul: .7 }, historic), { passed: false, required: 'Yes probability ≥ 75.0%' })
+  }
+})

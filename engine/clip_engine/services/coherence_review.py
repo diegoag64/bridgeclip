@@ -20,6 +20,8 @@ from clip_engine.services.openrouter import chat_completion, json_schema_format,
 # Every content check must pass independently; good titles cannot offset bad cuts.
 PASS = .75
 SELF_CONTAINED_PASS = .70
+FAITHFUL_TO_SOURCE_PASS = .70
+TITLE_SUPPORTED_PASS = .70
 SPONSOR_PASS = .9
 EVIDENCE_PASS = .50
 CUT_PASS = .95
@@ -115,7 +117,8 @@ def removed_intervals(keeps, duration):
 
 
 def check_threshold(name, default=PASS):
-    return {'self_contained': SELF_CONTAINED_PASS, 'not_sponsored': SPONSOR_PASS,
+    return {'self_contained': SELF_CONTAINED_PASS, 'faithful_to_source': FAITHFUL_TO_SOURCE_PASS,
+            'title_supported': TITLE_SUPPORTED_PASS, 'not_sponsored': SPONSOR_PASS,
             'evidence': EVIDENCE_PASS}.get(name, default)
 
 
@@ -137,8 +140,9 @@ class CoherenceReviewer:
         self.repair_cost = 0.0
 
     def trace(self, report):
-        trace = report.setdefault('coherence', {'status': 'pending', 'policy': 'coherence-v6',
-            'threshold': PASS, 'self_contained_threshold': SELF_CONTAINED_PASS, 'sponsor_threshold': SPONSOR_PASS, 'evidence_threshold': EVIDENCE_PASS, 'cut_threshold': CUT_PASS, 'attempts': [], 'repairs': [], 'visual_reviews': []})
+        trace = report.setdefault('coherence', {'status': 'pending', 'policy': 'coherence-v7',
+            'threshold': PASS, 'self_contained_threshold': SELF_CONTAINED_PASS,
+            'faithful_to_source_threshold': FAITHFUL_TO_SOURCE_PASS, 'title_supported_threshold': TITLE_SUPPORTED_PASS, 'sponsor_threshold': SPONSOR_PASS, 'evidence_threshold': EVIDENCE_PASS, 'cut_threshold': CUT_PASS, 'attempts': [], 'repairs': [], 'visual_reviews': []})
         trace.setdefault('visual_reviews', [])
         return trace
 

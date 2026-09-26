@@ -46,7 +46,12 @@ export function jevQuestionGate(key: string, answer: JudgmentAnswer | undefined,
       required: `Sufficient evidence ≥ ${percent(trace.evidence_threshold)}` }
   }
   if (answer.type !== 'noul') return null
-  const threshold = key === 'not_sponsored' ? trace.sponsor_threshold : key === 'self_contained' ? (trace.self_contained_threshold ?? trace.threshold) : entry.stage === 'cut' ? trace.cut_threshold : trace.threshold
+  const contentThresholds: Record<string, number | undefined> = {
+    self_contained: trace.self_contained_threshold,
+    faithful_to_source: trace.faithful_to_source_threshold,
+    title_supported: trace.title_supported_threshold
+  }
+  const threshold = key === 'not_sponsored' ? trace.sponsor_threshold : entry.stage === 'cut' ? trace.cut_threshold : (contentThresholds[key] ?? trace.threshold)
   // Older traces may not record a sponsor threshold. Do not invent one.
   if (threshold == null) return null
   return { passed: answer.noul >= threshold, required: `Yes probability ≥ ${percent(threshold)}` }
