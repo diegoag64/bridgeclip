@@ -97,7 +97,7 @@ def test_relaxed_thresholds_apply_to_candidate_and_final_review(self_contained, 
     clip = ClipPlanSegment(0, 11000, .9, summary='Supported result')
     assert asyncio.run(r.prepare(clip, audit)) == accepted
     assert asyncio.run(r.judge(clip.summary, [(0, 11000)], audit, 'final_edit')) == accepted
-    assert audit['coherence']['policy'] == 'coherence-v7'
+    assert audit['coherence']['policy'] == 'coherence-v8'
     assert audit['coherence']['self_contained_threshold'] == .70
     assert audit['coherence']['evidence_threshold'] == .50
     if accepted:
@@ -105,9 +105,12 @@ def test_relaxed_thresholds_apply_to_candidate_and_final_review(self_contained, 
         r.visual_observer.assert_not_called()
 
 
-@pytest.mark.parametrize('check', ['faithful_to_source', 'title_supported'])
-@pytest.mark.parametrize('probability,accepted', [(.699, False), (.70, True), (.749, True)])
-def test_source_and_title_thresholds_apply_to_candidates_and_final_edits(check, probability, accepted):
+@pytest.mark.parametrize('check,probability,accepted', [
+    ('faithful_to_source', .649, False), ('faithful_to_source', .65, True), ('faithful_to_source', .699, True),
+    ('title_supported', .699, False), ('title_supported', .70, True), ('title_supported', .749, True),
+    ('not_sponsored', .799, False), ('not_sponsored', .80, True), ('not_sponsored', .899, True),
+])
+def test_source_title_and_sponsor_thresholds_apply_to_candidates_and_final_edits(check, probability, accepted):
     r, _ = reviewer()
     async def evaluate(state, questions):
         answers = response(questions)['answers']
@@ -120,7 +123,8 @@ def test_source_and_title_thresholds_apply_to_candidates_and_final_edits(check, 
     clip = ClipPlanSegment(0, 11000, .9, summary='Supported result')
     assert asyncio.run(r.prepare(clip, audit)) == accepted
     assert asyncio.run(r.judge(clip.summary, [(0, 11000)], audit, 'final_edit')) == accepted
-    assert audit['coherence']['faithful_to_source_threshold'] == .70
+    assert audit['coherence']['faithful_to_source_threshold'] == .65
+    assert audit['coherence']['sponsor_threshold'] == .80
     assert audit['coherence']['title_supported_threshold'] == .70
     assert audit['coherence']['threshold'] == .75
     if accepted:
@@ -316,7 +320,7 @@ def test_unchanged_first_repair_gets_wider_context_and_failed_check_feedback(mon
         payloads.append(payload)
         state = json.loads(payload['messages'][1]['content'])
         assert {c['name'] for c in state['failed_checks']} == {'opening_context', 'self_contained', 'complete_ending', 'logical_flow', 'faithful_to_source', 'title_supported'}
-        assert all(c['probability'] == .5 and c['required_probability'] == (.7 if c['name'] in {'self_contained', 'faithful_to_source', 'title_supported'} else .75) and c['question'] for c in state['failed_checks'])
+        assert all(c['probability'] == .5 and c['required_probability'] == {'self_contained': .7, 'faithful_to_source': .65, 'title_supported': .7}.get(c['name'], .75) and c['question'] for c in state['failed_checks'])
         assert all(set(c['criteria']) == {'true', 'false'} for c in state['failed_checks'])
         if len(payloads) == 1:
             assert all(s['id'] != 4 for s in state['source_segments'])
@@ -377,7 +381,7 @@ def test_evidence_only_failure_does_not_spend_on_boundary_repairs():
     assert audit['coherence']['reason'] == 'needs_visual_evidence'
 
 
-@pytest.mark.parametrize('probability', [.01, .5, .89])
+@pytest.mark.parametrize('probability', [.01, .5, .799])
 def test_sponsored_or_uncertain_segment_is_rejected_without_disguising_it(probability):
     from clip_engine.services.coherence_review import CLIP_QUESTIONS
     r, _ = reviewer()

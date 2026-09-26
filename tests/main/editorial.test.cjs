@@ -301,6 +301,26 @@ test('Jev trace uses relaxed per-check thresholds while preserving historical ru
 })
 
 
+test('source and sponsorship gates use the new saved thresholds while preserving historical requirements', () => {
+  const { jevTraceEntries, jevQuestionGate } = load('src/renderer/components/JevTrace.tsx')
+  const saved = structuredClone(editFixture)
+  const coherence = saved.candidates[0].report.coherence
+  coherence.policy = 'coherence-v8'
+  coherence.faithful_to_source_threshold = .65
+  coherence.sponsor_threshold = .8
+  const entry = jevTraceEntries(parseEditAudit(saved).candidates[0].report)[0]
+  for (const [key, probability, percentage] of [['faithful_to_source', .65, '65.0'], ['not_sponsored', .8, '80.0']]) {
+    assert.deepEqual(jevQuestionGate(key, { type: 'noul', noul: probability }, entry), { passed: true, required: `Yes probability ≥ ${percentage}%` })
+    assert.equal(jevQuestionGate(key, { type: 'noul', noul: probability - .001 }, entry).passed, false)
+  }
+  coherence.policy = 'coherence-v7'
+  coherence.faithful_to_source_threshold = .7
+  coherence.sponsor_threshold = .9
+  const historic = jevTraceEntries(parseEditAudit(saved).candidates[0].report)[0]
+  assert.equal(jevQuestionGate('faithful_to_source', { type: 'noul', noul: .65 }, historic).passed, false)
+  assert.equal(jevQuestionGate('not_sponsored', { type: 'noul', noul: .8 }, historic).passed, false)
+})
+
 test('source and title gates use saved 70% thresholds without changing older runs', () => {
   const { jevTraceEntries, jevQuestionGate } = load('src/renderer/components/JevTrace.tsx')
   const saved = structuredClone(editFixture)
