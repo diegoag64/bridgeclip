@@ -19,6 +19,8 @@ export interface CandidateEdit {
   captions: boolean; caption_preset: string; video_speed: number
   status: 'refining' | 'ready' | 'baked' | 'discarded'
   caption_edits: { segment: number; text: string }[]
+  /** Source-time intervals where our burned-in captions are hidden. */
+  caption_suppression_ranges: EditorRange[]
 }
 export interface EditorCandidate extends CandidateEdit {
   requires_visual_context?: boolean; score: number; reason: string; review: EditorReview | null; exports: number[]
@@ -28,7 +30,7 @@ export interface EditorProject {
   aspect_ratio: '9:16' | '16:9'; candidates: EditorCandidate[]
   transcript: { start_ms: number; end_ms: number; text: string }[]
 }
-export interface EditorSession { project: EditorProject; sourcePath: string; previewPath: string; operation?: 'save' | 'review' | 'export' | null }
+export interface EditorSession { project: EditorProject; sourcePath: string; previewPath: string; operation?: 'save' | 'review' | 'export' | 'export-all' | null; batch?: { completed: number; total: number } }
 
 export function editorProgress(candidates: Pick<CandidateEdit, 'status'>[]): { remaining: number; initialCandidate: number } {
   const unfinished = (c: Pick<CandidateEdit, 'status'>): boolean => c.status !== 'baked' && c.status !== 'discarded'
@@ -78,8 +80,13 @@ export function parseCandidateEdit(value: unknown, duration: number, transcriptC
     seen.add(segment)
     return { segment, text }
   }).sort((a, b) => a.segment - b.segment)
+  const caption_suppression_ranges = arr(v.caption_suppression_ranges === undefined ? [] : v.caption_suppression_ranges, 200).map((r) => {
+    const a = arr(r, 2); if (a.length !== 2) fail()
+    return [Math.round(num(a[0], 0, duration)), Math.round(num(a[1], 0, duration))] as EditorRange
+  })
+  if (caption_suppression_ranges.some(([a, b], i) => b - a < 100 || (i > 0 && a < caption_suppression_ranges[i - 1][1]))) fail()
   return { id, title, ranges, scenes, captions: v.captions as boolean, caption_preset, video_speed: num(v.video_speed, 1, 2),
-    status: status as CandidateEdit['status'], caption_edits }
+    status: status as CandidateEdit['status'], caption_edits, caption_suppression_ranges }
 }
 function question(value: unknown): EditorQuestion {
   const v = record(value)
@@ -114,8 +121,8 @@ export function parseEditorProject(value: unknown): EditorProject {
     transcript }
 }
 export function candidateEdit(c: CandidateEdit): CandidateEdit {
-  const { id, title, ranges, scenes, captions, caption_preset, video_speed, status, caption_edits } = c
-  return { id, title, ranges, scenes, captions, caption_preset, video_speed, status, caption_edits }
+  const { id, title, ranges, scenes, captions, caption_preset, video_speed, status, caption_edits, caption_suppression_ranges = [] } = c
+  return { id, title, ranges, scenes, captions, caption_preset, video_speed, status, caption_edits, caption_suppression_ranges }
 }
 export function renderEditKey(c: CandidateEdit): string {
   return JSON.stringify({ ...candidateEdit(c), status: undefined })

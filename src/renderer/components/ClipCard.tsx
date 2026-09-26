@@ -10,7 +10,6 @@ import { Badge } from './ui/Badge'
 import { Skeleton } from './ui/Skeleton'
 import { HoverCard } from './ui/HoverCard'
 import { LIBRARY_POSTING_LABELS, type LibraryClipPostingStatus } from '../../shared/library-posting'
-import { platformName } from './PlatformIcon'
 
 // How the engine framed a vertical clip (its dominant layout).
 const LAYOUT_LABELS: Record<string, string> = {
@@ -58,6 +57,7 @@ export function ClipCard({
   const [previewFailed, setPreviewFailed] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const title = clip.summary || `Clip ${clip.clip_index + 1}`
+  const postingBadge = postingStatus ? <Badge tone={postingStatus.state === 'posted' ? 'success' : postingStatus.state === 'partial' || postingStatus.state === 'failed' ? 'warning' : 'neutral'}>{LIBRARY_POSTING_LABELS[postingStatus.state]}</Badge> : null
   const score = (clip.virality_score * 10).toFixed(1)
   const clipVertical = aspect == null ? vertical : aspect < 1
   const layout = clipVertical && Object.prototype.hasOwnProperty.call(LAYOUT_LABELS, clip.layout_type)
@@ -194,9 +194,7 @@ export function ClipCard({
 
       <div className="px-2 pb-2 pt-3">
         <div className="mb-3 flex min-h-8 flex-wrap items-center justify-between gap-2">
-          {postingStatus && <HoverCard content={<span>{LIBRARY_POSTING_LABELS[postingStatus.state]}{postingStatus.platforms.length ? ` on ${postingStatus.platforms.map(platformName).join(', ')}` : ''}</span>}>
-            <Badge tone={postingStatus.state === 'posted' ? 'success' : postingStatus.state === 'partial' || postingStatus.state === 'failed' ? 'warning' : 'neutral'}>{LIBRARY_POSTING_LABELS[postingStatus.state]}</Badge>
-          </HoverCard>}
+          {postingBadge}
           {!selecting && <div className="ml-auto flex items-center gap-1.5">
             {onPost && <MediaAction label={`Post “${title}”`} title="Post or schedule to social accounts" icon={<Send />} onClick={onPost} />}
             {onAddToAutomation && <MediaAction label={`Add “${title}” to automation`} title="Add to an automation queue" icon={<ListPlus />} onClick={onAddToAutomation} />}

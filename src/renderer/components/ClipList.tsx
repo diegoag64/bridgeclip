@@ -2,7 +2,7 @@ import { parseJobOutput } from '../../shared/job-output'
 import { editorProgress } from '../../shared/clip-editor'
 import { ClipEditor } from './ClipEditor'
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
-import { ArrowLeft, Check, ChevronDown, Clapperboard, Download, FolderOpen, ListPlus, Plus, Scissors, Send, Youtube } from 'lucide-react'
+import { ArrowLeft, Check, ChevronDown, Clapperboard, Download, FolderOpen, ListPlus, Plus, Scissors, Search, Send, Youtube } from 'lucide-react'
 import { basename, cn, errorMessage } from '../lib/utils'
 import { getApi } from '../lib/ipc'
 import { clipFilePath } from '../lib/thumbnails'
@@ -19,6 +19,7 @@ import { PostDialog, type PostableClip } from './PostDialog'
 import { Page } from './ui/Page'
 import { PageHeader } from './ui/PageHeader'
 import { Button } from './ui/Button'
+import { TextInput } from './ui/Field'
 import { Checkbox } from './ui/Checkbox'
 import { EmptyState } from './ui/EmptyState'
 import { Callout } from './ui/Callout'
@@ -34,6 +35,8 @@ interface ClipListProps {
   output: JobOutput
   /** The directory containing job_output.json, available for Library runs without clips. */
   outputDir?: string
+  /** Exact clip linked from an automation bank; independent of editable titles. */
+  initialClipIndex?: number
   /** Shown above the title, e.g. a back link from the Library. */
   leading?: ReactNode
   onNewClip?: () => void
@@ -67,7 +70,7 @@ function ClipRun(props: ClipListProps): React.JSX.Element {
       if (!active) return
       const { remaining } = editorProgress(session.project.candidates)
       setRemaining(remaining)
-      setEditing(props.output.clips.length === 0 && remaining > 0)
+      setEditing(props.initialClipIndex === undefined && props.output.clips.length === 0 && remaining > 0)
     }).catch((cause) => {
       if (active) setEditorError(errorMessage(cause, 'Could not read editor progress. Open the editor to retry.'))
     }).finally(() => { if (active) setOpening(false) })
@@ -85,9 +88,13 @@ function ClipRun(props: ClipListProps): React.JSX.Element {
   return <GeneratedClipList {...props} output={output} editor={hasEditor ? { remaining, error: editorError, onOpen: () => setEditing(true) } : undefined} />
 }
 
-function GeneratedClipList({ output, outputDir: runDirectory, leading, onNewClip, onNavigate, editor }: ClipListProps & {
+function GeneratedClipList({ output, outputDir: runDirectory, leading, onNewClip, onNavigate, initialClipIndex, editor }: ClipListProps & {
   editor?: { remaining: number | null; error: string | null; onOpen: () => void }
 }): React.JSX.Element {
+  const [query, setQuery] = useState('')
+  const [focusedClip, setFocusedClip] = useState(initialClipIndex)
+  const search = query.trim().toLowerCase()
+  const filtering = focusedClip !== undefined || search.length > 0
   const sourceUrl = youtubeSourceUrl(output.source_video_url)
   const postRecords = usePostsStore((state) => state.posts)
   const refreshError = usePostsStore((state) => state.error)
@@ -167,17 +174,20 @@ function GeneratedClipList({ output, outputDir: runDirectory, leading, onNewClip
   }, [output.clips])
 
   const clips = useMemo(() => {
-    const list = [...output.clips]
+    const list = output.clips.filter((clip) => {
+      if (focusedClip !== undefined && clip.clip_index !== focusedClip) return false
+      return !search || [clip.summary, `Clip ${clip.clip_index + 1}`, ...(clip.tags ?? [])].join(' ').toLowerCase().includes(search)
+    })
     if (sort === 'editorial') return list.sort((a, b) => (editorialScore(b.editorial, weights) ?? -1) - (editorialScore(a.editorial, weights) ?? -1))
     return sort === 'score'
       ? list.sort((a, b) => b.virality_score - a.virality_score)
       : list.sort((a, b) => a.start_time_ms - b.start_time_ms)
-  }, [output.clips, sort, weights])
+  }, [output.clips, sort, weights, focusedClip, search])
 
   const statusByClip = new Map(postingStatus?.map((status) => [status.clipIndex, status]))
   const unposted = clips.filter((clip) => statusByClip.get(clip.clip_index)?.state !== 'posted')
   const posted = clips.filter((clip) => statusByClip.get(clip.clip_index)?.state === 'posted')
-  const visibleClips = [...(unpostedExpanded ? unposted : []), ...(postedExpanded ? posted : [])]
+  const visibleClips = filtering ? clips : [...(unpostedExpanded ? unposted : []), ...(postedExpanded ? posted : [])]
   const visibleIds = visibleClips.map((clip) => clip.clip_index).join(',')
   useEffect(() => {
     const visible = new Set(visibleIds.split(',').filter(Boolean).map(Number))
@@ -309,6 +319,14 @@ function GeneratedClipList({ output, outputDir: runDirectory, leading, onNewClip
         </Callout>
       )}
 
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <TextInput className="w-full max-w-sm" aria-label="Search clips" placeholder="Search clips by title, tag or number"
+          value={query} onChange={(event) => { setQuery(event.target.value); setFocusedClip(undefined) }}
+          leading={<Search className="h-3.5 w-3.5" />} />
+        {focusedClip !== undefined && <span className="text-sm text-ink-muted">From content bank · Clip {focusedClip + 1}</span>}
+        {filtering && <Button size="sm" variant="ghost" onClick={() => { setQuery(''); setFocusedClip(undefined) }}>Show all clips</Button>}
+      </div>
+
       {/* Floating glass toolbar; sticks just below the 40px title-bar strip. */}
       <div className="glass-thick sticky top-0 z-20 mt-4 flex items-center justify-between gap-3 rounded-2xl py-1.5 pl-3 pr-1.5">
         <div className="flex min-w-0 items-center gap-3">
@@ -324,7 +342,7 @@ function GeneratedClipList({ output, outputDir: runDirectory, leading, onNewClip
                 <span className="font-medium text-ink">{selected.size}</span> selected
               </>
             ) : (
-              `${clips.length} clips`
+              filtering ? `${clips.length} of ${output.clips.length} clips` : `${clips.length} clips`
             )}
           </span>
           {notice && (
@@ -386,7 +404,11 @@ function GeneratedClipList({ output, outputDir: runDirectory, leading, onNewClip
       </div>
 
       {hasEditorial && <EditorialWeights value={weights} onChange={setWeights} />}
-      {clips.length === 0 ? (
+      {filtering ? (
+        clips.length ? renderGrid(clips) : <EmptyState className="mt-4" icon={<Search />}
+          title={focusedClip !== undefined ? 'This clip is no longer in this run' : 'No clips match your search'}
+          description={focusedClip !== undefined ? 'Show all clips to browse the remaining exports.' : 'Try another title, tag or clip number.'} />
+      ) : clips.length === 0 ? (
         <EmptyState
           className="mt-4"
           icon={<Clapperboard />}

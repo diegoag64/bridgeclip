@@ -4,6 +4,7 @@ import { realpathSync } from 'fs'
 import { promisify } from 'util'
 import { youtubeSourceUrl } from '../shared/video-source'
 import type { AutomationSourceContext } from '../shared/automations'
+import type { LibraryClipTarget } from '../shared/library-posting'
 import type { JobOutput } from '../shared/job-output'
 import { getJobHistory, getJobOutput } from './file-manager'
 import { isWithinDirectory, openAuthorizedMedia } from './security'
@@ -14,15 +15,16 @@ export { youtubeSourceUrl } from '../shared/video-source'
 const execFileAsync = promisify(execFile)
 
 /** Resolve actual clip provenance; enhanced titles are not stable identifiers. */
-export async function findLibraryRunForClip(bankFile: string | null, library: string, sourceClipPath?: string): Promise<string | null> {
+export async function findLibraryClipForClip(bankFile: string | null, library: string, sourceClipPath?: string): Promise<LibraryClipTarget | null> {
   const runs = (await getJobHistory(library)).filter((run) => run.status === 'completed')
   if (sourceClipPath && isWithinDirectory(sourceClipPath, library)) {
     for (const run of runs) {
       if (!isWithinDirectory(sourceClipPath, run.outputDir)) continue
       const output = await getJobOutput(run.outputDir, library)
-      if (output?.clips.some((clip) => {
+      const clip = output?.clips.find((clip) => {
         try { return realpathSync(clip.s3_url.replace(/^file:\/\//, '')) === realpathSync(sourceClipPath) } catch { return false }
-      })) return run.outputDir
+      })
+      if (clip) return { outputDir: run.outputDir, clipIndex: clip.clip_index }
     }
   }
   if (!bankFile) return null
@@ -46,7 +48,7 @@ export async function findLibraryRunForClip(bankFile: string | null, library: st
             }
             const hash = createHash('sha256')
             for await (const chunk of candidate.handle.createReadStream({ autoClose: false })) hash.update(chunk)
-            if (hash.digest('hex') === bankHash) return run.outputDir
+            if (hash.digest('hex') === bankHash) return { outputDir: run.outputDir, clipIndex: clip.clip_index }
           } finally { await candidate.handle.close() }
         } catch { /* Deleted or unreadable clips are not a match. */ }
       }

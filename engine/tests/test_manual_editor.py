@@ -243,7 +243,7 @@ def test_manual_render_never_replans_or_restores_user_cuts(monkeypatch, tmp_path
 def test_export_appends_library_clip_and_preserves_source_and_previous_exports(monkeypatch, tmp_path):
     from dataclasses import asdict
     from clip_engine.services.rendering_service import RenderResult
-    c = {**candidate(), 'status': 'ready', 'caption_edits': [{'segment': 1, 'text': 'The corrected event happened.'}]}
+    c = {**candidate(), 'status': 'ready', 'caption_edits': [{'segment': 1, 'text': 'The corrected event happened.'}], 'caption_suppression_ranges': [[2000, 4000]]}
     project = {'version': 1, 'revision': 3, 'width': 1920, 'height': 1080, 'duration_ms': 12000, 'aspect_ratio': '9:16', 'candidates': [c],
         'transcript': [{'start_ms': s.start_time_ms, 'end_ms': s.end_time_ms, 'text': s.text} for s in transcript()]}
     (tmp_path / 'editor-project.json').write_text(json.dumps(project))
@@ -254,6 +254,7 @@ def test_export_appends_library_clip_and_preserves_source_and_previous_exports(m
     async def render(self, request):
         assert request.apply_padding is False and request.pacing == 'natural'
         assert request.manual_ranges_ms == [(1000, 5000), (7000, 10000)] and request.include_captions
+        assert request.caption_suppression_ranges_ms == [(2000, 4000)]
         assert request.transcript_segments[1].text == 'The corrected event happened.'
         assert [w.word for w in request.transcript_segments[1].words] == ['The', 'corrected', 'event', 'happened.']
         Path(request.output_path).write_bytes(b'final clip')
@@ -369,3 +370,55 @@ def test_pipeline_review_stops_before_automatic_repairs_and_render(monkeypatch, 
     assert all(c['review']['decision'] == 'needs_attention' for c in project['candidates'])
     assert source.exists() and not (tmp_path / 'work/review-run').exists()
     pipeline.rendering_service.render_clip.assert_not_called()
+
+
+@pytest.mark.parametrize('ranges', [None, 'bad', [[0]], [[0, 100, 200]], [[-1, 1000]], [[0, 12001]],
+    [[0, 99]], [[1000, 1000]], [[2000, 3000], [1000, 2000]], [[0, 2000], [1000, 3000]],
+    [[float('nan'), 1000]], [[0, float('inf')]], [[True, 1000]], [[i * 100, i * 100 + 100] for i in range(201)]])
+def test_invalid_caption_suppression_is_rejected(ranges):
+    with pytest.raises(ValueError, match='suppression'):
+        validate_candidate({**candidate(), 'caption_suppression_ranges': ranges}, 12000)
+
+
+@pytest.mark.parametrize('speed', [1, 2])
+def test_caption_suppression_pixels_follow_source_cuts_and_speed(monkeypatch, tmp_path, speed):
+    """Actual captions vanish mid-event, including linger; source pixels survive."""
+    import shutil
+    import subprocess
+    import numpy as np
+    from clip_engine.config import get_caption_preset
+    from clip_engine.services import rendering_service
+
+    if not shutil.which('ffmpeg') or not shutil.which('ffprobe'):
+        pytest.skip('FFmpeg and FFprobe are needed for the caption suppression render check')
+    renderer = RenderingService()
+    monkeypatch.setattr(renderer.settings, 'local_mode', True)
+    monkeypatch.setattr(rendering_service, 'get_output_dimensions', lambda _: (160, 240))
+    source = tmp_path / 'source.mp4'
+    subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i',
+        'color=c=black:s=160x240:r=30:d=6,drawbox=x=10:y=10:w=30:h=10:color=yellow:t=fill',
+        '-c:v', 'libx264', '-pix_fmt', 'yuv420p', str(source)], check=True, capture_output=True, timeout=30)
+    c = {**candidate(), 'ranges': [[1000, 3000], [4000, 6000]],
+        'scenes': [{'at_ms': 0, 'layout': 'fill', 'crops': [[0, 0, 1, 1]]}],
+        'caption_suppression_ranges': [[0, 1500], [2500, 4500], [5500, 6000]]}
+    validate_candidate(c, 6000)
+    style = get_caption_preset('sweep')
+    style.font_size = 24
+    transcript = [TranscriptSegment(0, 6000, 'Hello world', words=[
+        TranscriptWord('Hello', 0, 2000), TranscriptWord('world', 2000, 6000)])]
+    request = RenderRequest(video_path=str(source), output_path=str(tmp_path / 'out.mp4'),
+        start_time_ms=1000, end_time_ms=6000, source_width=160, source_height=240,
+        transcript_segments=transcript, caption_style=style, apply_padding=False, video_speed=speed,
+        manual_ranges_ms=c['ranges'], manual_plan=manual_plan({'width': 160, 'height': 240}, c),
+        caption_suppression_ranges_ms=c['caption_suppression_ranges'])
+    result = asyncio.run(renderer.render_clip(request))
+    assert result.duration_ms == 4000 // speed
+    raw = subprocess.run(['ffmpeg', '-v', 'error', '-i', result.output_path, '-f', 'rawvideo',
+        '-pix_fmt', 'rgb24', 'pipe:1'], check=True, capture_output=True, timeout=30)
+    frames = np.frombuffer(raw.stdout, dtype=np.uint8).reshape(-1, 240, 160, 3)
+    for ms, hidden in [(200, True), (800, False), (1800, True), (2300, True), (2800, False), (3800, True)]:
+        frame = frames[round(ms / speed / 1000 * 30)]
+        # A yellow source mark represents captions already baked into the source.
+        assert frame[15, 20, 0] > 200 and frame[15, 20, 1] > 200 and frame[15, 20, 2] < 50
+        caption_pixels = np.count_nonzero(frame[40:, :, :].max(axis=2) > 100)
+        assert (caption_pixels == 0) if hidden else (caption_pixels > 5), (ms, hidden, caption_pixels)

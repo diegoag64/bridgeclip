@@ -1,3 +1,4 @@
+import type { LibraryClipTarget } from '../shared/library-posting'
 import type { CandidateEdit, EditorSession } from '../shared/clip-editor'
 import type { EditAudit } from '../shared/editorial'
 import { contextBridge, ipcRenderer } from 'electron'
@@ -69,14 +70,14 @@ export interface BridgeClipAPI {
   editor: {
     open: (path: string) => Promise<EditorSession>
     save: (path: string, revision: number, edits: CandidateEdit[]) => Promise<EditorSession>
-    run: (path: string, revision: number, id: string, action: 'review' | 'export') => Promise<EditorSession>
+    run: (path: string, revision: number, id: string, action: 'review' | 'export' | 'export-all') => Promise<EditorSession>
     cancel: (path: string) => Promise<void>
   }
   edits: { inspect: (outputDir: string) => Promise<EditAudit> }
   framing: { inspect: (outputDir: string, clipIndex: number) => Promise<FramingInspection> }
   models: { list: (refresh?: boolean) => Promise<OpenRouterCatalog> }
   automations: {
-    libraryRun: (id: string, contentId: string) => Promise<string | null>
+    libraryClip: (id: string, contentId: string) => Promise<LibraryClipTarget | null>
     reorder: (id: string, contentId: string, beforeId: string | null) => Promise<Automation[]>
     enhancementGroups: (id: string) => Promise<AutomationSourceGroup[]>
     enhanceBatch: (id: string, contentIds: string[], key: string) => Promise<AutomationBatchResult>
@@ -215,7 +216,7 @@ const api: BridgeClipAPI = {
   framing: { inspect: (outputDir, clipIndex) => ipcRenderer.invoke('framing:inspect', outputDir, clipIndex) },
   models: { list: (refresh = false) => ipcRenderer.invoke('models:list', refresh) },
   automations: {
-    libraryRun: (id, contentId) => ipcRenderer.invoke('automations:libraryRun', id, contentId),
+    libraryClip: (id, contentId) => ipcRenderer.invoke('automations:libraryClip', id, contentId),
     reorder: (id, contentId, beforeId) => ipcRenderer.invoke('automations:reorder', id, contentId, beforeId),
     enhancementGroups: (id) => ipcRenderer.invoke('automations:enhancementGroups', id),
     enhanceBatch: (id, contentIds, key) => ipcRenderer.invoke('automations:enhanceBatch', id, contentIds, key),

@@ -103,7 +103,7 @@ async def prepare_project(request, segments, transcript, download, renderer, rev
             'requires_visual_context': bool((getattr(segment, 'moment', None) or {}).get('requires_visual_context')),
             'reason': (getattr(segment, 'reasoning', '') or '')[:4000], 'captions': request.include_captions,
             'caption_preset': request.caption_preset, 'video_speed': request.video_speed, 'exports': [], 'review': None,
-            'status': 'refining', 'caption_edits': []}
+            'status': 'refining', 'caption_edits': [], 'caption_suppression_ranges': []}
         await review_candidate(c, reviewer)
         project['candidates'].append(c)
     if not project['candidates']:
@@ -181,6 +181,17 @@ def validate_candidate(c, duration, transcript_count=100000):
         raise ValueError('Invalid export settings')
     if c.get('status', 'refining') not in ('refining', 'ready', 'baked', 'discarded'):
         raise ValueError('Invalid clip status')
+    suppressed = c.get('caption_suppression_ranges', [])
+    if not isinstance(suppressed, list) or len(suppressed) > 200:
+        raise ValueError('Invalid caption suppression ranges')
+    previous = 0
+    for interval in suppressed:
+        if not isinstance(interval, list) or len(interval) != 2:
+            raise ValueError('Invalid caption suppression range')
+        a, b = interval
+        if not number(a, previous, duration) or not number(b, a + 100, duration):
+            raise ValueError('Invalid caption suppression range')
+        previous = b
     edits = c.get('caption_edits', [])
     if not isinstance(edits, list) or len(edits) > 2000:
         raise ValueError('Invalid caption edits')
@@ -311,6 +322,7 @@ async def run_editor(config):
             result = await renderer.render_clip(RenderRequest(video_path=source, output_path=str(Path(work) / 'clip.mp4'),
                 start_time_ms=a, end_time_ms=b, source_width=project['width'], source_height=project['height'],
                 transcript_segments=render_transcript, include_captions=c['captions'], caption_style=get_caption_preset(c['caption_preset']),
+                caption_suppression_ranges_ms=[tuple(interval) for interval in c.get('caption_suppression_ranges', [])],
                 apply_padding=False, aspect_ratio=project['aspect_ratio'], pacing='natural', video_speed=c['video_speed'],
                 manual_ranges_ms=[tuple(interval) for interval in c['ranges']], manual_plan=manual_plan(project, c)))
             os.replace(result.output_path, path)

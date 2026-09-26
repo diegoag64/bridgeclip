@@ -289,3 +289,164 @@ test('enabled Jev reaches the worker and locks the project until review finishes
     await assert.rejects(f.main.runEditor(f.run, 0, 'candidate-1', 'review'), /Enable Jev/)
   } finally { f.cleanup() }
 })
+
+test('caption suppression validates source intervals and changes render state without changing review evidence', () => {
+  const c = schema.parseEditorProject(clone()).candidates[0]
+  assert.deepEqual(c.caption_suppression_ranges, [])
+  const ranges = [[0, 2000], [4000, 7000], [11000, 12000]]
+  const next = schema.refineEdit({ ...c, status: 'ready' }, { caption_suppression_ranges: ranges })
+  assert.equal(next.status, 'refining')
+  assert.equal(schema.editSignature(next), schema.editSignature(c))
+  assert.deepEqual(schema.parseCandidateEdit(next, 12000).caption_suppression_ranges, ranges)
+  for (const value of [null, 'bad', [[0]], [[0, 100, 200]], [[-1, 1000]], [[0, 12001]], [[0, 99]],
+    [[1000, 1000]], [[2000, 3000], [1000, 2000]], [[0, 2000], [1000, 3000]], [[NaN, 1000]],
+    [[0, Infinity]], [[true, 1000]], Array.from({ length: 201 }, (_, i) => [i * 100, i * 100 + 100])]) {
+    assert.throws(() => schema.parseCandidateEdit({ ...c, caption_suppression_ranges: value }, 12000))
+  }
+})
+
+test('caption suppression persists per candidate through save and reopen without modifying text or cuts', async () => {
+  const f = setup()
+  try {
+    const opened = await f.main.openEditor(f.run)
+    const c = opened.project.candidates[0]
+    c.caption_suppression_ranges = [[2000, 4000], [6000, 9000]]
+    await f.main.saveEditor(f.run, 0, opened.project.candidates)
+    const saved = (await f.reload().openEditor(f.run)).project
+    assert.deepEqual(saved.candidates[0].caption_suppression_ranges, c.caption_suppression_ranges)
+    assert.deepEqual(saved.candidates[1].caption_suppression_ranges, [])
+    assert.deepEqual(saved.candidates[0].ranges, c.ranges)
+    assert.deepEqual(saved.transcript, opened.project.transcript)
+    assert.deepEqual(saved.candidates[0].review, c.review)
+  } finally { f.cleanup() }
+})
+
+
+test('older main-process sessions and empty caption suppression have the same render identity', () => {
+  const c = schema.parseEditorProject(clone()).candidates[0]
+  const legacy = { ...c }
+  delete legacy.caption_suppression_ranges
+  assert.deepEqual(schema.candidateEdit(legacy).caption_suppression_ranges, [])
+  assert.equal(schema.renderEditKey(legacy), schema.renderEditKey(c))
+  assert.equal(schema.refineEdit({ ...legacy, status: 'ready' }, { caption_suppression_ranges: [] }).status, 'ready')
+  assert.equal(schema.refineEdit({ ...legacy, status: 'ready' }, { caption_suppression_ranges: [[1000, 2000]] }).status, 'refining')
+})
+
+
+test('additional caption-free sections use available retained footage without replacing previous ranges', () => {
+  const { nextCaptionRange } = loadMain("export * from './src/renderer/lib/caption-ranges'")
+  const cuts = [[2000, 5000], [7000, 10000]]
+  const ranges = [[3000, 4500]]
+  assert.deepEqual(nextCaptionRange(ranges, cuts, 3500), [4500, 5000])
+  assert.deepEqual(nextCaptionRange(ranges, cuts, 5500), [7000, 9000])
+  assert.deepEqual(nextCaptionRange(ranges, cuts, 11000), [2000, 3000])
+  assert.deepEqual(nextCaptionRange([[0, 6000]], cuts, 3500), [7000, 9000])
+  assert.deepEqual(nextCaptionRange([[3000, 4500], [4500, 5000]], cuts, 4500), [7000, 9000])
+  assert.equal(nextCaptionRange([[0, 12000]], cuts, 3500), null)
+  assert.equal(nextCaptionRange([[2000, 4950], [7000, 10000]], cuts, 4000), null)
+  assert.deepEqual(ranges, [[3000, 4500]])
+})
+
+function batchSetup() {
+  const { EventEmitter } = require('node:events')
+  const { PassThrough } = require('node:stream')
+  const workers = []
+  const f = setup({ child_process: { ...require('node:child_process'), spawn: () => {
+    const child = new EventEmitter()
+    child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.stdin = new PassThrough()
+    child.stdin.end = (data) => {
+      const config = JSON.parse(data)
+      workers.push({ config, finish(ok = true) {
+        if (ok) {
+          const file = path.join(f.run, 'editor-project.json')
+          const project = JSON.parse(fs.readFileSync(file))
+          assert.equal(config.revision, project.revision)
+          const candidate = project.candidates.find(c => c.id === config.candidate_id)
+          assert.equal(candidate.status, 'ready')
+          candidate.status = 'baked'; candidate.exports.push(project.revision)
+          project.revision++
+          fs.writeFileSync(file, JSON.stringify(project))
+        }
+        child.stdout.write(JSON.stringify({ ok })); child.emit('close', ok ? 0 : 1)
+      } })
+    }
+    return child
+  } } })
+  const project = schema.parseEditorProject(clone())
+  project.candidates = ['refining', 'ready', 'baked', 'discarded', 'ready'].map((status, i) => ({
+    ...structuredClone(project.candidates[0]), id: `candidate-${i}`, status,
+    captions: i !== 4, caption_suppression_ranges: i === 1 ? [[2000, 3000], [7000, 9000]] : []
+  }))
+  fs.writeFileSync(path.join(f.run, 'editor-project.json'), JSON.stringify(project))
+  return { ...f, workers }
+}
+const nextWorker = async (workers, count) => {
+  for (let i = 0; workers.length < count && i < 100; i++) await new Promise(r => setImmediate(r))
+  assert.equal(workers.length, count)
+  return workers[count - 1]
+}
+
+test('batch bakes only ready clips sequentially, keeps caption settings, revisions and project lock', async () => {
+  const f = batchSetup()
+  try {
+    const pending = f.main.runEditor(f.run, 0, 'candidate-0', 'export-all')
+    const first = await nextWorker(f.workers, 1)
+    assert.equal(first.config.candidate_id, 'candidate-1')
+    assert.equal(first.config.action, 'export')
+    assert.deepEqual((await f.main.openEditor(f.run)).batch, { completed: 0, total: 2 })
+    await assert.rejects(f.main.saveEditor(f.run, 0, []), /Wait/)
+    await assert.rejects(f.main.runEditor(f.run, 0, '', 'export-all'), /already running/)
+    first.finish()
+    const second = await nextWorker(f.workers, 2)
+    assert.equal(second.config.candidate_id, 'candidate-4')
+    assert.equal(second.config.revision, 1)
+    const reopened = await f.main.openEditor(f.run)
+    assert.equal(reopened.operation, 'export-all')
+    assert.deepEqual(reopened.batch, { completed: 1, total: 2 })
+    assert.equal(reopened.project.candidates[4].captions, false)
+    assert.deepEqual(reopened.project.candidates[1].caption_suppression_ranges, [[2000, 3000], [7000, 9000]])
+    second.finish()
+    const done = await pending
+    assert.equal(done.operation, null)
+    assert.equal(done.project.revision, 2)
+    assert.deepEqual(done.project.candidates.map(c => c.status), ['refining', 'baked', 'baked', 'discarded', 'baked'])
+    await assert.rejects(f.main.runEditor(f.run, 2, '', 'export-all'), /at least one clip ready/)
+    await assert.rejects(f.main.runEditor(f.run, 0, '', 'export-all'), /changed/)
+    assert.equal(f.workers.length, 2)
+  } finally { f.cleanup() }
+})
+
+for (const cancelled of [false, true]) test(`batch ${cancelled ? 'cancellation' : 'failure'} preserves completed exports and leaves unfinished clips ready`, async () => {
+  const f = batchSetup()
+  try {
+    const pending = f.main.runEditor(f.run, 0, '', 'export-all')
+    const rejected = assert.rejects(pending, cancelled ? /Baked 1 of 2.*cancelled/ : /Baked 1 of 2.*Batch stopped/)
+    ;(await nextWorker(f.workers, 1)).finish()
+    const second = await nextWorker(f.workers, 2)
+    if (cancelled) f.main.cancelEditor(f.run)
+    second.finish(false)
+    await rejected
+    const reopened = await f.main.openEditor(f.run)
+    assert.equal(reopened.operation, null)
+    assert.equal(reopened.project.candidates[1].status, 'baked')
+    assert.equal(reopened.project.candidates[4].status, 'ready')
+    const retry = f.main.runEditor(f.run, 1, '', 'export-all')
+    const remaining = await nextWorker(f.workers, 3)
+    assert.equal(remaining.config.candidate_id, 'candidate-4')
+    remaining.finish()
+    await retry
+  } finally { f.cleanup() }
+})
+
+test('cancelling between batch clips never starts the next worker', async () => {
+  const f = batchSetup()
+  try {
+    const pending = f.main.runEditor(f.run, 0, '', 'export-all')
+    const rejected = assert.rejects(pending, /Baked 1 of 2.*cancelled/)
+    ;(await nextWorker(f.workers, 1)).finish()
+    f.main.cancelEditor(f.run)
+    await rejected
+    assert.equal(f.workers.length, 1)
+    assert.equal((await f.main.openEditor(f.run)).project.candidates[4].status, 'ready')
+  } finally { f.cleanup() }
+})

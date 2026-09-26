@@ -76,7 +76,7 @@ const CONTENT_STATUS: Record<AutomationContentStatus, { label: string; tone: 'id
 
 const LIST_FORMAT = new Intl.ListFormat('en', { style: 'long', type: 'conjunction' })
 
-export function AutomationsPage({ onNavigate, onViewLibrary }: { onNavigate: (page: PageName) => void; onViewLibrary: (outputDir: string) => void }): React.JSX.Element {
+export function AutomationsPage({ onNavigate, onViewLibrary }: { onNavigate: (page: PageName) => void; onViewLibrary: (outputDir: string, clipIndex?: number) => void }): React.JSX.Element {
   const configured = useSettingsStore((state) => state.zernioConfigured)
   const writingConfigured = useSettingsStore((state) => state.openrouterConfigured)
   const { accounts, profiles, hydrate, load: loadAccounts, loading: accountsLoading, setProfile, createProfile } = useAccountsStore()
@@ -316,8 +316,8 @@ export function AutomationsPage({ onNavigate, onViewLibrary }: { onNavigate: (pa
     if (!selected || busy) return
     setBusy('library'); setError(null); setNotice(null)
     try {
-      const run = await getApi().automations.libraryRun(selected.id, item.id)
-      if (run) onViewLibrary(run)
+      const run = await getApi().automations.libraryClip(selected.id, item.id)
+      if (run) onViewLibrary(run.outputDir, run.clipIndex)
       else setError('This clip’s source run is no longer in the Library, or it was added from outside the Library.')
     } catch (cause) { setError(errorMessage(cause, 'Could not open the source run.')) }
     finally { setBusy(null) }
@@ -845,7 +845,7 @@ function ContentRow({ item, nextUp, tiktokReviewNeeded, tiktokSelected, onReview
               </div>}
             </div>
           }><Info aria-hidden className="h-4 w-4" /></HoverCard>
-          <Button size="sm" variant="ghost" icon={<FolderOpen className="h-3.5 w-3.5" />} disabled={busy} onClick={onViewLibrary} aria-label={`View ${item.title} in Library`} title="Open the source run in Library">View in Library</Button>
+          <Button size="sm" variant="ghost" icon={<FolderOpen className="h-3.5 w-3.5" />} disabled={busy} onClick={onViewLibrary} aria-label={`View ${item.title} in Library`} title="Show this clip in Library">View in Library</Button>
           <ActionMenu label={`Actions for ${item.title}`} disabled={busy || item.status === 'posting'} actions={[
             { label: editing ? 'Close editor' : 'Edit', icon: <Pencil className="h-3.5 w-3.5" />, disabled: Boolean(item.metadataDraft), onSelect: onEdit },
             ...(item.status === 'queued' && tiktokSelected && !tiktokReviewNeeded ? [{ label: 'Edit TikTok', disabled: reviewDisabled || Boolean(item.metadataDraft), onSelect: onReviewTikTok }] : []),

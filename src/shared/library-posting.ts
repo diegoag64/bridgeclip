@@ -1,6 +1,8 @@
 import type { AutomationAccount, AutomationSourceContext } from './automations'
 import type { FacebookFormat, PostRecord } from './zernio-posts'
 
+export interface LibraryClipTarget { outputDir: string; clipIndex: number }
+
 export type LibraryPostingState = 'not_posted' | 'posted' | 'partial' | 'scheduled' | 'publishing' | 'draft' | 'failed'
 export interface LibraryClipPostingStatus {
   clipIndex: number
