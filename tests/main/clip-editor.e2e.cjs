@@ -43,9 +43,12 @@ test('review editor refines candidates, restores discards, edits captions and ba
   const libraryCard = page.locator('article').filter({ has: page.getByRole('button', { name: `Open ${project.title}`, exact: true }) })
   await libraryCard.getByLabel('Editing: 2 clips left to finish', { exact: true }).waitFor()
   if (shots) await page.screenshot({ path: path.join(shots, 'library-editing-candidates.png') })
-  await page.getByRole('button', { name: new RegExp(project.title) }).first().click()
+  // Jobs uses the same Library landing rules for a review run with no exports.
+  await page.getByRole('button', { name: 'Jobs', exact: true }).first().click()
+  await page.getByTitle('Open in Library', { exact: true }).click()
   const editor = page.getByRole('region', { name: 'Clip editor' })
   await editor.waitFor()
+  assert.equal(await page.locator('button[aria-current="page"]').getAttribute('aria-label'), 'Library')
   await page.waitForFunction(() => document.querySelector('.editor-source-frame video')?.readyState >= 2)
   const stage = page.locator('.editor-stagebar .editor-status')
   assert.equal(await stage.innerText(), 'Refining')

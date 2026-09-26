@@ -44,11 +44,11 @@ export default function App(): React.JSX.Element {
   }, [])
 
   useEffect(() => { if (page !== 'library') setLibraryRun(null) }, [page])
-  const viewLibraryRun = (outputDir: string): void => {
+  const viewLibraryRun = useCallback((outputDir: string): void => {
     setLibraryRun(outputDir)
     setPage('library')
     setPageVisit((visit) => visit + 1)
-  }
+  }, [])
 
   useEffect(() => {
     setLoadError(false)
@@ -110,7 +110,7 @@ export default function App(): React.JSX.Element {
           <Fragment key={pageVisit}>
             {page === 'clip' && <ClipPage onNavigate={setPage} />}
             {page === 'library' && <LibraryPage onNavigate={setPage} initialRun={libraryRun} />}
-            {page === 'jobs' && <JobsPage onNavigate={setPage} />}
+            {page === 'jobs' && <JobsPage onNavigate={setPage} onViewLibrary={viewLibraryRun} />}
             {page === 'accounts' && <AccountsPage onNavigate={setPage} />}
             {page === 'posts' && <PostsPage onNavigate={setPage} />}
             {page === 'automations' && <AutomationsPage onNavigate={setPage} onViewLibrary={viewLibraryRun} />}
