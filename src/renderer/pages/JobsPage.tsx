@@ -455,7 +455,6 @@ function PreviousJobRow({ entry, hasDetails, onOpen, onOpenFolder }: { entry: Hi
       ) : (
         <div className={cellClass}>{cells}</div>
       )}
-      <InspectEditsButton outputDir={entry.outputDir} />
       <Button
         size="sm"
         variant="ghost"
