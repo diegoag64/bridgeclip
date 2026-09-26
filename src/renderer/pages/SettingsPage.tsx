@@ -23,7 +23,7 @@ type SectionTone = 'success' | 'warning' | 'danger' | 'idle'
 
 /** `showUpdates` changes each time Help → Check for Updates… asks for the Updates row. */
 export function SettingsPage({ showUpdates = 0 }: { showUpdates?: number }): React.JSX.Element {
-  const { outputDirectory, pythonPath, customVocabulary, openrouterConfigured, zernioConfigured, jevEnabled, jevVisualContext, saving, save, toolStatus, toolError, checkTools, checkingTools } =
+  const { outputDirectory, pythonPath, customVocabulary, openrouterConfigured, zernioConfigured, jevEnabled, jevVisualContext, sourceContextWebResearch, saving, save, toolStatus, toolError, checkTools, checkingTools } =
     useSettingsStore()
   const keys = useApiKeyDrafts()
   const [isPackaged, setIsPackaged] = useState(true)
@@ -154,6 +154,13 @@ export function SettingsPage({ showUpdates = 0 }: { showUpdates?: number }): Rea
                   getKeyUrl={PROVIDER_LINKS.openrouter}
                 />
               </KeyRow>
+              <label className="flex items-start gap-3 px-3 py-2 text-sm text-ink-muted">
+                <input type="checkbox" className="mt-1" checked={sourceContextWebResearch === 'on'}
+                  onChange={(e) => commit({ sourceContextWebResearch: e.target.checked ? 'on' : 'off' })} />
+                <span>Research the source before clipping
+                  <span className="mt-1 block text-xs text-ink-subtle">Gemini builds a channel and video overview before transcription. Research each YouTube or Twitch source with up to two web searches through OpenRouter. Adds time and provider charges. Turn off to use metadata only. Local files are never searched. View the brief and sources in the transcript inspector.</span>
+                </span>
+              </label>
               <p className="eyebrow px-1 pt-2">Optional</p>
               <label className="flex items-start gap-3 px-3 py-2 text-sm text-ink-muted">
                 <input type="checkbox" className="mt-1" checked={jevEnabled === 'on'}

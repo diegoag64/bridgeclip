@@ -392,6 +392,7 @@ class IntelligencePlannerService:
         end_time_seconds: Optional[float] = None,
         aspect_ratio: str = "9:16",
         discovery_feedback: Optional[dict] = None,
+        source_context: Optional[dict] = None,
     ) -> ClipPlanResponse:
         """
         Plan viral clips from video content.
@@ -572,6 +573,7 @@ class IntelligencePlannerService:
             transcript,
             self._current_video_duration or effective_duration_seconds,
             longform,
+            source_context,
         )
         
         model_name = self.settings.planner_model
@@ -922,9 +924,15 @@ Do not overlap clips by more than 5 seconds."""
         transcript: list[TranscriptSegment],
         video_duration_seconds: float = 0.0,
         longform: bool = False,
+        source_context: Optional[dict] = None,
     ) -> list[dict]:
         """Build the planner messages (transcript, plus frames when provided)."""
         user_content = []
+        if source_context:
+            from clip_engine.services.source_context import CONTEXT_RULE
+            system_prompt += '\n' + CONTEXT_RULE + ' In insights, confirm or correct the pre-transcription format and channel assumptions using this transcript. Treat reaction/commentary differently from interviews or tutorials; identify setup, quoted material and the host response.'
+            user_content.append({'type': 'text', 'text': 'PRE-TRANSCRIPTION SOURCE CONTEXT (background, not evidence):\n'
+                                 + json.dumps(source_context, ensure_ascii=False)})
 
         video_duration = video_duration_seconds or (
             transcript[-1].end_time_ms / 1000 if transcript else 0

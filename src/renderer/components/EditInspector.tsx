@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { X } from 'lucide-react'
-import type { EditAudit } from '../../shared/editorial'
+import type { EditAudit, SourceContextAudit } from '../../shared/editorial'
 import { getApi } from '../lib/ipc'
 import { errorMessage, formatTimecode } from '../lib/utils'
 import { Dialog } from './ui/Dialog'
@@ -53,6 +53,7 @@ export function RecordedEditView({ audit }: { audit: EditAudit }): React.JSX.Ele
       {audit.preferred_range.some(t => t != null) && <p className="mt-1 text-xs text-ink-muted">Preferred range: {formatTimecode((audit.preferred_range[0] ?? 0) * 1000)}–{formatTimecode(audit.preferred_range[1] == null ? audit.duration_ms : audit.preferred_range[1] * 1000)}. Complete excerpts may extend beyond it.</p>}
       <p className="mt-2 text-xs text-ink-subtle">Exact saved evidence, requests and answers. The rules explain acceptance and rejection; this is not hidden model reasoning. Opening this view makes no AI calls.</p>
       {audit.outcome === 'legacy_transcript_only' && <p className="mt-2 text-xs text-amber-200">This older run has a transcript but no saved edit trace. It may cover only the previously selected range. Regenerate it to record full-source context and decisions.</p>}</div>
+    {audit.source_context && <SourceContextView context={audit.source_context} />}
     <details className="rounded-xl border border-white/10 p-3"><summary className="cursor-pointer text-sm">Planner requests & candidate discovery ({audit.planner.requests.length})</summary>
       <pre className="mt-3 max-h-96 overflow-auto whitespace-pre-wrap break-words text-xs">{JSON.stringify({ ...audit.planner, second_discovery: audit.discovery }, null, 2)}</pre></details>
     <div className="grid gap-4 lg:grid-cols-[240px_minmax(0,1fr)]">
@@ -103,4 +104,29 @@ export function RecordedEditView({ audit }: { audit: EditAudit }): React.JSX.Ele
 export function InspectEditsButton({ outputDir }: { outputDir: string }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   return <><Button size="sm" variant="ghost" onClick={() => setOpen(true)}>Inspect transcript & edits</Button>{open && <EditInspector outputDir={outputDir} onClose={() => setOpen(false)} />}</>
+}
+
+function SourceContextView({ context }: { context: SourceContextAudit }): React.JSX.Element {
+  const brief = context.brief
+  return <details className="rounded-xl border border-white/10 p-3">
+    <summary className="cursor-pointer text-sm">Source context · {context.research_status === 'completed' ? 'web research included' : 'metadata only'}</summary>
+    <div className="mt-3 space-y-3 text-sm">
+      <p className="text-xs text-ink-subtle">Prepared before transcription. This background guides discovery; the transcript and footage must support every clip.</p>
+      <p><span className="text-ink-muted">Source:</span> {context.source.title} {(context.source.channel || context.source.uploader) && <> · {context.source.channel || context.source.uploader}</>}</p>
+      {context.source.upload_date && <p className="text-xs text-ink-muted">Source upload date: {context.source.upload_date}</p>}
+      {context.research_status === 'unavailable' && <p className="text-amber-200">Web research could not be verified. This run continued with metadata only.</p>}
+      {!brief ? <p className="text-ink-muted">The context service was unavailable. The planner received the available source metadata.</p> : <>
+        <p>{brief.summary}</p>
+        <p><span className="font-medium">Channel overview:</span> {brief.channel_summary}</p>
+        <p><span className="font-medium">Likely video format:</span> {brief.format}</p>
+        {([['Topics', brief.topics], ['Perspectives to distinguish', brief.perspectives], ['What to look for', brief.clip_guidance], ['Uncertainties', brief.uncertainties]] as const).map(([label, items]) => items.length > 0 && <div key={label}>
+          <p className="font-medium">{label}</p><ul className="mt-1 list-disc space-y-1 pl-5 text-ink-muted">{items.map((item, i) => <li key={i}>{item}</li>)}</ul>
+        </div>)}
+        {brief.background.length > 0 && <div><p className="font-medium">Researched background</p><ul className="mt-1 list-disc space-y-1 pl-5 text-ink-muted">{brief.background.map((item, i) => <li key={i}>{item.claim}<span className="block break-all text-xs">{item.url}</span></li>)}</ul></div>}
+        {brief.vocabulary.length > 0 && <p className="text-xs text-ink-muted">Transcription hints from metadata: {brief.vocabulary.join(', ')}</p>}
+      </>}
+      {context.citations.length > 0 && <div><p className="font-medium">Research sources</p><ul className="mt-1 space-y-2">{context.citations.map(source => <li key={source.url} className="text-xs"><button className="text-left text-accent-hover hover:underline" onClick={() => void getApi().shell.openPath(source.url)}>{source.title}</button><span className="block break-all text-ink-muted">{source.url}</span></li>)}</ul></div>}
+      <p className="text-xs text-ink-subtle">{context.requests.map(r => r.model).filter((m, i, all) => all.indexOf(m) === i).join(', ')} · Recorded {new Date(context.created_at).toLocaleString()}</p>
+    </div>
+  </details>
 }

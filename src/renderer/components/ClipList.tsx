@@ -437,7 +437,7 @@ function readCosts(value: unknown): ApiCosts | null {
   if (layoutVision && typeof layoutVision.model === 'string' && validMoney(layoutVision.estimated_cost_usd)) {
     result.layout_vision = layoutVision as unknown as NonNullable<ApiCosts['layout_vision']>
   }
-  for (const key of ['editorial', 'editorial_vision', 'editorial_repair'] as const) {
+  for (const key of ['source_context', 'editorial', 'editorial_vision', 'editorial_repair'] as const) {
     const part = section(key)
     if (part && typeof part.provider === 'string' && typeof part.model === 'string' && validMoney(part.estimated_cost_usd)) {
       result[key] = { provider: part.provider, model: part.model, estimated_cost_usd: part.estimated_cost_usd }

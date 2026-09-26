@@ -215,6 +215,7 @@ function costParts(costs: ApiCosts): string | null {
   if (costs.cost_incomplete) return 'Partial: a model didn’t report its price'
   const parts = [
     costs.transcription && `Transcribe ${formatUsd(costs.transcription.estimated_cost_usd)}`,
+    costs.source_context && `context ${formatUsd(costs.source_context.estimated_cost_usd)}`,
     costs.planning && `plan ${formatUsd(costs.planning.estimated_cost_usd)}`,
     costs.layout_vision && `framing ${formatUsd(costs.layout_vision.estimated_cost_usd)}`,
     costs.editorial && `editorial ${formatUsd(costs.editorial.estimated_cost_usd)}`,

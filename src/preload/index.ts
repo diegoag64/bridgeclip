@@ -23,6 +23,7 @@ export interface ClipSettings {
   zernioConfigured: boolean
   jevEnabled: string
   jevVisualContext: string
+  sourceContextWebResearch: string
   outputDirectory: string
   pythonPath: string
   customVocabulary: string

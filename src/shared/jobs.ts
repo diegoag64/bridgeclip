@@ -31,11 +31,11 @@ export const MAX_PARALLEL_JOBS = 2
 /** Finished runs retained in the live session; older runs remain on disk. */
 export const MAX_FINISHED_JOBS = 50
 
-export type ActiveJobStatus = 'queued' | 'pending' | 'downloading' | 'transcribing' | 'planning' | 'rendering' | 'uploading'
+export type ActiveJobStatus = 'queued' | 'pending' | 'downloading' | 'contextualizing' | 'transcribing' | 'planning' | 'rendering' | 'uploading'
 export type TerminalJobStatus = 'completed' | 'failed' | 'cancelled'
 export type JobStatus = ActiveJobStatus | TerminalJobStatus
 
-export const ACTIVE_JOB_STATUSES: readonly ActiveJobStatus[] = ['queued', 'pending', 'downloading', 'transcribing', 'planning', 'rendering', 'uploading']
+export const ACTIVE_JOB_STATUSES: readonly ActiveJobStatus[] = ['queued', 'pending', 'downloading', 'contextualizing', 'transcribing', 'planning', 'rendering', 'uploading']
 
 export function isActiveJobStatus(status: string): status is ActiveJobStatus {
   return (ACTIVE_JOB_STATUSES as readonly string[]).includes(status)
