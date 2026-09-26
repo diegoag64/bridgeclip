@@ -24,6 +24,15 @@ def test_full_transcript_and_rejected_candidates_are_saved(monkeypatch, tmp_path
     monkeypatch.setattr(settings.__class__, 'temp_directory', property(lambda self: str(tmp_path / 'work')))
     monkeypatch.setattr(RenderingService, '_verify_ffmpeg', lambda self: None)
     pipeline = AIClippingPipeline()
+    from tests.test_source_context import brief
+    context_record = {'version': 1, 'status': 'ready', 'research_status': 'completed',
+        'created_at': '2026-09-26T00:00:00Z', 'source': {'title': 'Synthetic source'}, 'brief': brief(),
+        'citations': [], 'cost_usd': .002, 'cost_incomplete': False, 'requests': []}
+    order = []
+    async def build_context(metadata):
+        order.append('context')
+        return context_record
+    monkeypatch.setattr(pipeline.source_context_service, 'build', build_context)
     gate, _ = reviewer(lambda state, q: accept)
     gate.repair = AsyncMock(return_value=None)
     monkeypatch.setattr(module, 'CoherenceReviewer', lambda *args: gate)
@@ -33,9 +42,14 @@ def test_full_transcript_and_rejected_candidates_are_saved(monkeypatch, tmp_path
         return SimpleNamespace(video_path=str(tmp_path / 'source.mp4'), file_size_bytes=1,
             metadata=SimpleNamespace(title='Synthetic source', duration_seconds=12, width=1920, height=1080))
     async def transcribe(**kwargs):
+        assert order == ['context']
+        order.append('transcribe')
+        assert kwargs['keyterms'] == brief()['vocabulary']
         assert kwargs['start_seconds'] is None and kwargs['end_seconds'] is None
         return TranscriptionResult(segments=transcript(), full_text='Complete source')
     async def plan(**kwargs):
+        assert order == ['context', 'transcribe']
+        assert kwargs['source_context']['brief']['format'] == brief()['format']
         assert len(kwargs['transcript_result'].segments) == 4
         assert (kwargs['start_time_seconds'], kwargs['end_time_seconds']) == (3, 8)
         return ClipPlanResponse(segments=[ClipPlanSegment(0, 11000, .9, summary='Supported result')], total_clips=1)
@@ -51,6 +65,9 @@ def test_full_transcript_and_rejected_candidates_are_saved(monkeypatch, tmp_path
     monkeypatch.setattr(pipeline.rendering_service, 'render_clip', mocked_render)
     result = asyncio.run(pipeline.process_video(ClippingJobRequest(video_url='fixture.mp4', job_id='fixture', start_time_seconds=3, end_time_seconds=8)))
     audit = json.loads((tmp_path / 'out/fixture/edit_audit.json').read_text())
+    assert audit['source_context'] == context_record
+    assert gate.source_context['brief']['format'] == brief()['format']
+    assert json.loads((tmp_path / 'out/fixture/source_context.json').read_text()) == context_record
     assert audit['preferred_range'] == [3, 8] and len(audit['transcript']) == 4
     assert audit['candidates'][0]['status'] == ('rendered' if accept else 'rejected')
     assert audit['candidates'][0]['report']['coherence']['attempts'][0]['judgment']['questions']
@@ -58,6 +75,7 @@ def test_full_transcript_and_rejected_candidates_are_saved(monkeypatch, tmp_path
     assert mocked_render.await_count == int(accept)
     if accept:
         assert result.output.metrics["analysis_duration_seconds"] == 12
+        assert result.output.metrics["api_costs"]["source_context"]["estimated_cost_usd"] == .002
     if not accept:
         assert audit['outcome'] == 'no_approved_clips'
         assert 'No clip was forced' in result.error

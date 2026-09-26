@@ -16,6 +16,7 @@ export interface AppSettings {
   jevEnabled: string
   /** Additional OpenRouter frame observations, explicitly opt-in. */
   jevVisualContext: string
+  sourceContextWebResearch: string
   outputDirectory: string
   pythonPath: string
   /** Names and jargon the speech-to-text should spell correctly, one per line. */
@@ -23,7 +24,7 @@ export interface AppSettings {
 }
 
 export type ApiKeyName = 'openrouterApiKey' | 'zernioApiKey'
-export type PublicSettings = Pick<AppSettings, 'outputDirectory' | 'pythonPath' | 'customVocabulary' | 'jevEnabled' | 'jevVisualContext'> & {
+export type PublicSettings = Pick<AppSettings, 'outputDirectory' | 'pythonPath' | 'customVocabulary' | 'jevEnabled' | 'jevVisualContext' | 'sourceContextWebResearch'> & {
   openrouterConfigured: boolean
   zernioConfigured: boolean
 }
@@ -36,12 +37,13 @@ const DEFAULT_SETTINGS: AppSettings = {
   zernioApiKey: '',
   jevEnabled: 'on',
   jevVisualContext: 'off',
+  sourceContextWebResearch: 'on',
   outputDirectory: join(app.getPath('home'), 'BridgeClip'),
   pythonPath: process.platform === 'win32' ? 'python' : 'python3',
   customVocabulary: ''
 }
 
-const SETTINGS_VERSION = 9
+const SETTINGS_VERSION = 10
 
 type PersistedSecret = { scheme: 'safeStorage' | 'base64'; value: string } | ''
 
@@ -51,6 +53,7 @@ interface PersistedSettings {
   zernioApiKey: PersistedSecret
   jevEnabled: string
   jevVisualContext: string
+  sourceContextWebResearch: string
   outputDirectory: string
   pythonPath: string
   customVocabulary?: string
@@ -77,6 +80,7 @@ function normalizeSettings(settings: Partial<AppSettings>): AppSettings {
     zernioApiKey: (settings.zernioApiKey ?? DEFAULT_SETTINGS.zernioApiKey).trim(),
     jevEnabled: settings.jevEnabled ?? 'on',
     jevVisualContext: settings.jevVisualContext ?? 'off',
+    sourceContextWebResearch: settings.sourceContextWebResearch ?? 'on',
     outputDirectory: (settings.outputDirectory || DEFAULT_SETTINGS.outputDirectory).trim(),
     pythonPath: (settings.pythonPath || DEFAULT_SETTINGS.pythonPath).trim(),
     customVocabulary: vocabularyTerms(settings.customVocabulary ?? DEFAULT_SETTINGS.customVocabulary).join('\n')
@@ -85,6 +89,7 @@ function normalizeSettings(settings: Partial<AppSettings>): AppSettings {
   normalized.pythonPath ||= DEFAULT_SETTINGS.pythonPath
   if (!['off', 'on'].includes(normalized.jevEnabled)) throw new Error('Invalid Jev review setting')
   if (!['off', 'on'].includes(normalized.jevVisualContext)) throw new Error('Invalid visual context setting')
+  if (!['off', 'on'].includes(normalized.sourceContextWebResearch)) throw new Error('Invalid source research setting')
   if (!isAbsolute(normalized.outputDirectory)) throw new Error('Settings folders must be absolute paths')
   return normalized
 }
@@ -154,6 +159,7 @@ export function loadSettings(): AppSettings {
       ...secrets,
       jevEnabled: raw.jevEnabled ?? 'on',
       jevVisualContext: raw.jevVisualContext ?? raw.typesafeVisualContext ?? 'off',
+      sourceContextWebResearch: raw.sourceContextWebResearch ?? 'on',
       outputDirectory: typeof raw.outputDirectory === 'string' ? raw.outputDirectory : DEFAULT_SETTINGS.outputDirectory,
       pythonPath: typeof raw.pythonPath === 'string' ? raw.pythonPath : DEFAULT_SETTINGS.pythonPath,
       customVocabulary: typeof raw.customVocabulary === 'string' ? raw.customVocabulary : DEFAULT_SETTINGS.customVocabulary
@@ -176,6 +182,7 @@ function writeSettings(settings: AppSettings): void {
     zernioApiKey: encodeSecret(settings.zernioApiKey),
     jevEnabled: settings.jevEnabled,
     jevVisualContext: settings.jevVisualContext,
+    sourceContextWebResearch: settings.sourceContextWebResearch,
     outputDirectory: settings.outputDirectory,
     pythonPath: settings.pythonPath,
     customVocabulary: settings.customVocabulary
@@ -209,11 +216,12 @@ export function publicSettings(settings: AppSettings): PublicSettings {
     openrouterConfigured: Boolean(settings.openrouterApiKey),
     zernioConfigured: Boolean(settings.zernioApiKey),
     jevEnabled: settings.jevEnabled,
-    jevVisualContext: settings.jevVisualContext
+    jevVisualContext: settings.jevVisualContext,
+    sourceContextWebResearch: settings.sourceContextWebResearch
   }
 }
 
-export function savePublicSettings(update: Pick<PublicSettings, 'outputDirectory' | 'pythonPath' | 'customVocabulary' | 'jevEnabled' | 'jevVisualContext'>): PublicSettings {
+export function savePublicSettings(update: Pick<PublicSettings, 'outputDirectory' | 'pythonPath' | 'customVocabulary' | 'jevEnabled' | 'jevVisualContext' | 'sourceContextWebResearch'>): PublicSettings {
   const current = loadSettings()
   return publicSettings(saveSettings({
     ...current,
@@ -221,7 +229,8 @@ export function savePublicSettings(update: Pick<PublicSettings, 'outputDirectory
     pythonPath: update.pythonPath,
     customVocabulary: update.customVocabulary,
     jevEnabled: update.jevEnabled ?? current.jevEnabled,
-    jevVisualContext: update.jevVisualContext ?? current.jevVisualContext
+    jevVisualContext: update.jevVisualContext ?? current.jevVisualContext,
+    sourceContextWebResearch: update.sourceContextWebResearch ?? current.sourceContextWebResearch
   }))
 }
 
@@ -254,6 +263,7 @@ export function replaceApiKey(key: ApiKeyName, value: string): PublicSettings {
 export function getSettingsForBridge(settings: AppSettings): Record<string, string> {
   return {
     OPENROUTER_API_KEY: settings.openrouterApiKey,
+    SOURCE_CONTEXT_WEB_RESEARCH: settings.sourceContextWebResearch !== 'off' ? 'true' : 'false',
     JEV_ENABLED: settings.jevEnabled === 'on' ? 'true' : 'false',
     JEV_VISUAL_CONTEXT: settings.jevVisualContext === 'on' ? 'true' : 'false',
     LOCAL_MODE: 'true',

@@ -343,3 +343,35 @@ test('source and title gates use saved 70% thresholds without changing older run
     assert.deepEqual(jevQuestionGate(key, { type: 'noul', noul: .7 }, historic), { passed: false, required: 'Yes probability ≥ 75.0%' })
   }
 })
+
+test('source context survives saved audit parsing, keeps evidence labels, and renders its channel overview', () => {
+  const saved = structuredClone(editFixture)
+  const context = {
+    version: 1, status: 'ready', research_status: 'completed', created_at: '2026-09-26T00:00:00Z',
+    source: { title: 'A reaction to a demo', description: 'Source description', channel: 'Example Reviews', channel_id: 'UCfixture' },
+    brief: { summary: 'Likely a reaction to a demonstration.', channel_summary: 'A channel about technology reviews.',
+      format: 'Reaction/commentary', topics: ['Technology'], perspectives: ['Host versus demonstration'],
+      clip_guidance: ['Keep the setup and response.'], uncertainties: ['Confirm the host position.'], vocabulary: ['Example'],
+      background: [{ claim: 'The demo is a prototype.', url: 'https://example.org/demo' }] },
+    citations: [{ title: 'Original demo', url: 'https://example.org/demo' }], cost_usd: .003, cost_incomplete: false,
+    requests: [{ status: 'success', model: 'google/gemini-3.8-flash', web_requested: true, search_requests: 1, latency_ms: 20, usage: { cost: .003 } }],
+    api_key: 'must-not-survive'
+  }
+  saved.source_context = context
+  const contextEvidence = { rule: 'Background is not evidence.', status: context.status, metadata: context.source,
+    brief: context.brief, research_status: context.research_status, citations: context.citations, secret: 'must-not-survive' }
+  saved.candidates[0].report.coherence.attempts[0].evidence.source_context = contextEvidence
+  const audit = parseEditAudit(saved)
+  assert.equal(audit.source_context.brief.format, 'Reaction/commentary')
+  assert.equal(audit.candidates[0].report.coherence.attempts[0].evidence.source_context.rule, 'Background is not evidence.')
+  assert.equal(JSON.stringify(audit).includes('must-not-survive'), false)
+  const { RecordedEditView } = load('src/renderer/components/EditInspector.tsx')
+  const html = renderToStaticMarkup(React.createElement(RecordedEditView, { audit }))
+  assert.match(html, /Channel overview/)
+  assert.match(html, /A channel about technology reviews/)
+  assert.match(html, /Prepared before transcription/)
+  assert.match(html, /Original demo/)
+  assert.equal(parseEditAudit(editFixture).source_context, null)
+  saved.source_context.citations[0].url = 'javascript:alert(1)'
+  assert.throws(() => parseEditAudit(saved), /Invalid context source URL/)
+})

@@ -13,6 +13,7 @@ export const STAGE_LABELS: Record<string, string> = {
   queued: 'Queued',
   pending: 'Starting',
   downloading: 'Downloading',
+  contextualizing: 'Understanding the source',
   transcribing: 'Transcribing',
   planning: 'Finding moments',
   rendering: 'Rendering clips',
@@ -24,6 +25,7 @@ export const STAGE_LABELS: Record<string, string> = {
 
 const STEPS = [
   { label: 'Download', icon: Download, statuses: ['downloading'] },
+  { label: 'Context', icon: ScrollText, statuses: ['contextualizing'] },
   { label: 'Transcribe', icon: FileText, statuses: ['transcribing'] },
   { label: 'Find moments', icon: Sparkles, statuses: ['planning'] },
   { label: 'Render', icon: Film, statuses: ['rendering', 'uploading'] }

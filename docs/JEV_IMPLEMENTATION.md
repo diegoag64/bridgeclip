@@ -31,6 +31,8 @@ Candidates include topic, setup and payoff anchors. Speaker turns remain visible
 throughout review. One bounded follow-up discovery pass can search underexplored
 sections; overlapping alternatives are resolved after review.
 
+Before transcription, Gemini builds source context from title, description, channel and upload date, with bounded web research on every public YouTube/Twitch source. Its channel overview and video-format hypothesis guide discovery and are checked against the transcript. Jev receives the same labeled background in candidate, final-edit and cut evidence; repairs receive it too. Research cannot establish missing dialogue, visual events, speaker identities or a completed payoff. Metadata-only fallback is explicit, and saved source citations remain available in the inspector.
+
 Current policy (`coherence-v8`) requires every relevant check to pass independently:
 
 | Check | Minimum probability |

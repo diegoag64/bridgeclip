@@ -3,10 +3,11 @@ AI Clipping Pipeline - Orchestrator for the AI clipping workflow.
 
 Pipeline stages:
 1. Video download (YouTube via yt-dlp, S3, or direct URL)
-2. Audio extraction and transcription (MAI Transcribe 2 through OpenRouter)
-3. Intelligence planning (frontier LLM via OpenRouter)
-4. Clip rendering (smart per-shot 9:16 framing with captions)
-5. S3 upload (parallel uploads)
+2. Source context and web research
+3. Audio extraction and transcription (MAI Transcribe 2 through OpenRouter)
+4. Intelligence planning (frontier LLM via OpenRouter)
+5. Clip rendering (smart per-shot 9:16 framing with captions)
+6. S3 upload (parallel uploads)
 """
 
 import asyncio
@@ -26,6 +27,7 @@ from typing import Any, Callable, Optional
 from clip_engine.config import CaptionStyle, LayoutStyle, get_settings, is_longform, resolve_clip_duration_bounds
 from clip_engine.services.video_speed import validate_video_speed
 from clip_engine.error_policy import safe_failure_code, safe_processing_error
+from clip_engine.services.source_context import SourceContextService, context_for_prompt, transcription_terms
 from clip_engine.services.editorial_evidence import discovery_feedback, overlaps
 from clip_engine.services.jev_service import JevService, MODEL as JEV_MODEL
 from clip_engine.services.coherence_review import CoherenceReviewer, CoherenceRejected, no_approved_clips_message
@@ -75,6 +77,7 @@ class JobStatus(str, Enum):
 
     PENDING = "pending"
     DOWNLOADING = "downloading"
+    CONTEXTUALIZING = "contextualizing"
     TRANSCRIBING = "transcribing"
     PLANNING = "planning"
     RENDERING = "rendering"
@@ -153,7 +156,7 @@ class AIClippingPipeline:
     """
     Pipeline for AI-powered video clipping.
 
-    Orchestrates: download -> transcribe -> plan -> render (smart framing) -> upload
+    Orchestrates: download -> source context -> transcribe -> plan -> render (smart framing) -> upload
     """
 
     def __init__(
@@ -167,6 +170,7 @@ class AIClippingPipeline:
 
         self.video_downloader = VideoDownloaderService()
         self.transcription_service = TranscriptionService()
+        self.source_context_service = SourceContextService(self.settings)
         self.intelligence_planner = IntelligencePlannerService()
         self.rendering_service = RenderingService()
         self.s3_upload_service = S3UploadService()
@@ -183,7 +187,7 @@ class AIClippingPipeline:
         """
         Process a video through the full AI clipping pipeline.
 
-        Pipeline: download -> transcribe -> plan -> render (smart framing) -> upload
+        Pipeline: download -> source context -> transcribe -> plan -> render (smart framing) -> upload
         """
         start_time = time.time()
         job_id = request.job_id
@@ -261,6 +265,16 @@ class AIClippingPipeline:
 
             capture_memory("after_download")
 
+            # Establish the source's background before hearing or interpreting its speech.
+            current_stage = "source_context"
+            self._update_progress(job_id, JobStatus.CONTEXTUALIZING, 12, "Researching the source and building context...")
+            stage_start = time.perf_counter()
+            source_context = await self.source_context_service.build(download_result.metadata)
+            stage_timings["source_context"] = time.perf_counter() - stage_start
+            if self.local_mode:
+                self._save_local_json(job_id, "source_context", source_context)
+            context_brief = context_for_prompt(source_context)
+
             # Step 2: Transcribe audio
             current_stage = "transcription"
             self._update_progress(job_id, JobStatus.TRANSCRIBING, 15, "Transcribing the full source for context...")
@@ -273,7 +287,7 @@ class AIClippingPipeline:
                 transcription_result = await self.transcription_service.transcribe(
                     video_path=download_result.video_path,
                     work_dir=work_dir,
-                    keyterms=request.keyterms,
+                    keyterms=transcription_terms(request.keyterms, source_context),
                     start_seconds=None,
                     end_seconds=None,
                 )
@@ -331,6 +345,7 @@ class AIClippingPipeline:
             self._update_progress(job_id, JobStatus.PLANNING, 30, "Finding complete ideas near your preferred range...")
             stage_start = time.perf_counter()
             edit_audit = {'version': 1, 'title': download_result.metadata.title,
+                'source_context': source_context,
                 'duration_ms': round(video_duration * 1000),
                 'preferred_range': [request.start_time_seconds, effective_end_time],
                 'transcript': [{'start_ms': t.start_time_ms, 'end_ms': t.end_time_ms, 'text': t.text, 'speaker': t.speaker_label} for t in transcription_result.segments],
@@ -343,6 +358,7 @@ class AIClippingPipeline:
             planning_args = dict(
                 transcript_result=transcription_result,
                 video_metadata=download_result.metadata,
+                source_context=context_brief,
                 max_clips=request.max_clips,
                 auto_clip_count=request.auto_clip_count,
                 min_duration_seconds=request.min_clip_duration_seconds,
@@ -363,6 +379,7 @@ class AIClippingPipeline:
             logger.info(f"Planned {len(clip_plan.segments)} clips")
             reviewer = CoherenceReviewer(coherence_service, self.settings, transcription_result.segments, round(video_duration * 1000))
             editorial_vision = EditorialVision(self.settings, download_result.video_path, work_dir, round(video_duration * 1000))
+            reviewer.source_context = context_brief
             reviewer.visual_observer = editorial_vision.observe if getattr(self.settings, 'jev_visual_context', False) else None
             accepted = []
             limit = getattr(self.intelligence_planner, 'discovery_limit', None) or request.max_clips or self.settings.max_clips_absolute
@@ -748,7 +765,12 @@ class AIClippingPipeline:
 
             # Build API cost breakdown
             api_costs: dict[str, Any] = {}
-            total_cost = 0.0
+            total_cost = source_context['cost_usd']
+            api_costs['source_context'] = {
+                'provider': 'openrouter', 'model': self.settings.source_context_model,
+                'estimated_cost_usd': source_context['cost_usd'],
+                'attempts': len(source_context['requests']), 'cost_incomplete': source_context['cost_incomplete'],
+            }
 
             if transcription_result.api_costs:
                 tc = transcription_result.api_costs

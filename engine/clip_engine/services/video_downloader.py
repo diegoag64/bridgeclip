@@ -116,6 +116,8 @@ class VideoMetadata:
     description: Optional[str] = None
     thumbnail_url: Optional[str] = None
     source_type: VideoSourceType = "youtube"
+    channel: Optional[str] = None
+    channel_id: Optional[str] = None
 
 
 @dataclass
@@ -548,6 +550,8 @@ class VideoDownloaderService:
         # Preserve useful info from yt-dlp metadata (title, uploader, etc.)
         # but use actual dimensions from ffprobe
         actual_metadata.title = metadata.title
+        actual_metadata.channel = metadata.channel
+        actual_metadata.channel_id = metadata.channel_id
         actual_metadata.uploader = metadata.uploader
         actual_metadata.upload_date = metadata.upload_date
         actual_metadata.description = metadata.description
@@ -914,6 +918,8 @@ class VideoDownloaderService:
             fps=float(finite_number(info.get("fps"), 30)),
             format_id=info.get("format_id", "unknown"),
             extractor=info.get("extractor", "unknown"),
+            channel=info.get("channel"),
+            channel_id=info.get("channel_id"),
             uploader=info.get("uploader"),
             upload_date=info.get("upload_date"),
             description=info.get("description"),

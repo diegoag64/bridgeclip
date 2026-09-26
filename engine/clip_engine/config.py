@@ -591,6 +591,8 @@ class Settings(BaseSettings):
     openrouter_api_key: Optional[str] = None
     jev_enabled: bool = True
     jev_visual_context: bool = False
+    source_context_web_research: bool = True
+    source_context_model: str = "google/gemini-3.8-flash"
 
     # Security - API authentication
     bridgeclip_api_key: Optional[str] = None  # API key for authenticating incoming requests

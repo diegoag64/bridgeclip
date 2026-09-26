@@ -138,6 +138,7 @@ function evidence(value: unknown): Record<string, unknown> {
   if (v.observed_facts) { const facts = obj(v.observed_facts); result.observed_facts = {
     transcript_speech_gap: facts.transcript_speech_gap === true,
     visual_coverage: facts.visual_coverage == null ? null : str(facts.visual_coverage, 40) } }
+  if (v.source_context != null) result.source_context = sourceContextEvidence(v.source_context)
   result.visual_observations = observations(v.visual_observations)
   if (v.speaker_context != null) result.speaker_context = str(v.speaker_context, 2000)
   if (v.moment != null) result.moment = moment(v.moment)
@@ -226,11 +227,13 @@ function parseCoherence(value: unknown): CoherenceTrace | null {
           criteria: Object.fromEntries(Object.entries(obj(f.criteria ?? {})).slice(0, 10).map(([key, value]) => [str(key, 80), str(value, 4000)])),
           probability: num(f.probability, 1), required_probability: num(f.required_probability, 1) } }),
         previous_proposals: list(e.previous_proposals ?? [], 4, (x) => { const p = list(x, 3, x => x); if (p.length !== 3) throw new Error('Invalid previous proposal'); return [num(p[0]), num(p[1]), str(p[2], 200)] }),
+        source_context: sourceContextEvidence(e.source_context),
         source_segments: list(e.source_segments, 200, sourceRow), moment: moment(e.moment),
         judgments: answers(e.judgments) } } }) }
 }
 
 export interface EditAudit {
+  source_context?: SourceContextAudit | null
   version: 1; title: string; duration_ms: number; preferred_range: (number | null)[]; outcome: string
   transcript: { start_ms: number; end_ms: number; text: string; speaker: string | null }[]
   discovery: Record<string, unknown> | null
@@ -241,6 +244,7 @@ export function parseEditAudit(value: unknown): EditAudit {
   const v = obj(value), planner = obj(v.planner)
   if (v.version !== 1) throw new Error('Unsupported edit trace')
   return { version: 1, title: str(v.title, 2000), duration_ms: num(v.duration_ms),
+    source_context: v.source_context == null ? null : parseSourceContext(v.source_context),
     preferred_range: list(v.preferred_range, 2, maybeNumber), outcome: str(v.outcome, 80),
     discovery: v.discovery == null ? null : (() => { const d = obj(v.discovery); return { status: str(d.status, 40), search_intervals: list(d.search_intervals, 6, span), previous_candidates: list(d.previous_candidates, 100, (x) => { const c = obj(x); return { interval: span(c.interval), title: str(c.title, 2000), status: str(c.status, 40) } }) } })(),
     transcript: list(v.transcript, 100000, (x) => { const t = obj(x); return { start_ms: num(t.start_ms), end_ms: num(t.end_ms), text: str(t.text, 100000), speaker: t.speaker == null ? null : str(t.speaker, 100) } }),
@@ -255,4 +259,54 @@ export function parseEditAudit(value: unknown): EditAudit {
 
 function parseUsage(value: unknown): Record<string, number | null> | null {
   return value == null ? null : Object.fromEntries(['prompt_tokens', 'completion_tokens', 'total_tokens', 'cost'].map(k => [k, maybeNumber(obj(value)[k])]))
+}
+
+export interface SourceBrief {
+  summary: string; channel_summary: string; format: string
+  topics: string[]; perspectives: string[]; clip_guidance: string[]; uncertainties: string[]; vocabulary: string[]
+  background: { claim: string; url: string }[]
+}
+export interface SourceContextAudit {
+  status: string; research_status: string; created_at: string
+  source: Record<string, string>; brief: SourceBrief | null; citations: { title: string; url: string }[]
+  cost_usd: number; cost_incomplete: boolean
+  requests: { status: string; model: string; web_requested: boolean; search_requests: number | null; latency_ms: number; usage: Record<string, number | null> | null }[]
+}
+function contextUrl(value: unknown): string {
+  const raw = str(value, 2000), url = new URL(raw)
+  if (url.protocol !== 'https:' || url.username || url.password || /[\s\\]/.test(raw)) throw new Error('Invalid context source URL')
+  return raw
+}
+function sourceMetadata(value: unknown): Record<string, string> {
+  const v = obj(value)
+  return Object.fromEntries(Object.entries({ title: 500, description: 12000, channel: 300, uploader: 300, channel_id: 200, upload_date: 40, source_type: 40 })
+    .map(([key, limit]) => [key, str(v[key] ?? '', limit)]))
+}
+function sourceBrief(value: unknown): SourceBrief | null {
+  if (value == null) return null
+  const v = obj(value)
+  return { summary: str(v.summary, 1400), channel_summary: str(v.channel_summary, 1000), format: str(v.format, 200),
+    topics: list(v.topics, 8, x => str(x, 160)), perspectives: list(v.perspectives, 6, x => str(x, 240)),
+    clip_guidance: list(v.clip_guidance, 6, x => str(x, 240)), uncertainties: list(v.uncertainties, 6, x => str(x, 240)),
+    vocabulary: list(v.vocabulary, 20, x => str(x, 49)),
+    background: list(v.background, 4, x => { const item = obj(x); return { claim: str(item.claim, 500), url: contextUrl(item.url) } }) }
+}
+function sourceCitations(value: unknown): { title: string; url: string }[] {
+  return list(value, 4, x => { const v = obj(x); return { title: str(v.title, 300), url: contextUrl(v.url) } })
+}
+function parseSourceContext(value: unknown): SourceContextAudit {
+  const v = obj(value)
+  if (v.version !== 1) throw new Error('Unsupported source context')
+  return { status: str(v.status, 40), research_status: str(v.research_status, 40), created_at: str(v.created_at, 80),
+    source: sourceMetadata(v.source), brief: sourceBrief(v.brief), citations: sourceCitations(v.citations),
+    cost_usd: num(v.cost_usd), cost_incomplete: v.cost_incomplete === true,
+    requests: list(v.requests, 2, x => { const r = obj(x); return { status: str(r.status, 40), model: str(r.model, 160),
+      web_requested: r.web_requested === true, search_requests: r.search_requests == null ? null : num(r.search_requests, 2),
+      latency_ms: num(r.latency_ms), usage: parseUsage(r.usage) } }) }
+}
+function sourceContextEvidence(value: unknown): Record<string, unknown> | null {
+  if (value == null) return null
+  const v = obj(value)
+  return { rule: str(v.rule, 2000), status: str(v.status, 40), metadata: sourceMetadata(v.metadata),
+    brief: sourceBrief(v.brief), research_status: str(v.research_status, 40), citations: sourceCitations(v.citations) }
 }
