@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, Clapperboard, FolderOpen, ListVideo, RefreshCw, Search, Sparkles, Star, Trash2 } from 'lucide-react'
+import { AlertTriangle, Clapperboard, FolderOpen, ListVideo, Pencil, RefreshCw, Search, Sparkles, Star, Trash2 } from 'lucide-react'
 import { getApi } from '../lib/ipc'
 import { cn, errorMessage, formatRelativeDate, formatUsd, localFileUrl } from '../lib/utils'
 import { clipFilePath, loadThumbnail } from '../lib/thumbnails'
@@ -7,6 +7,7 @@ import { useSettingsStore } from '../store/use-settings-store'
 import { usePostsStore } from '../store/use-posts-store'
 import type { JobOutput } from '../store/use-job-store'
 import { parseJobOutput } from '../../shared/job-output'
+import { editorProgress } from '../../shared/clip-editor'
 import type { HistoryEntry } from '../../preload/index'
 import { BackLink, ClipList } from '../components/ClipList'
 import { Page } from '../components/ui/Page'
@@ -296,13 +297,15 @@ function RunCard({ entry, counts, busy, onFavorite, onDelete, onOpen, onOpenFold
   onOpenFolder: () => void
 }): React.JSX.Element {
   const failed = entry.status !== 'completed'
-  const thumb = useRunThumbnail(failed ? null : entry.outputDir)
+  const { thumb, remaining } = useRunPreview(failed ? null : entry)
+  const editing = remaining !== null && remaining > 0
   const [previewFailed, setPreviewFailed] = useState(false)
 
   return (
     <article
       className={cn(
-        'glass group relative rounded-2xl p-1.5 text-left transition-[transform,box-shadow] duration-300 ease-out',
+        'glass group relative rounded-2xl border p-1.5 text-left transition-[transform,box-shadow] duration-300 ease-out',
+        editing ? 'border-accent/60' : 'border-transparent',
         'hover:-translate-y-1 hover:shadow-[inset_0_1px_0_rgb(255_255_255/0.1),0_0_0_1px_rgb(255_255_255/0.08),0_28px_56px_-24px_rgb(0_0_0/0.8)]'
       )}
     >
@@ -330,9 +333,13 @@ function RunCard({ entry, counts, busy, onFavorite, onDelete, onOpen, onOpenFold
         {!failed && (
           <span className="glass-chip absolute left-2 top-2 inline-flex h-7 items-center gap-1 rounded-full px-2.5 text-2xs font-medium text-white">
             <Clapperboard className="h-3 w-3" />
-            {entry.editorProject && entry.clipCount === 0 ? `${entry.candidateCount ?? ''} candidates · Edit` : `${entry.clipCount} clip${entry.clipCount === 1 ? '' : 's'}`}
+            {entry.editorProject && entry.clipCount === 0 ? entry.candidateCount == null ? 'Clip candidates' : `${entry.candidateCount} candidates` : `${entry.clipCount} clip${entry.clipCount === 1 ? '' : 's'}`}
           </span>
         )}
+        {editing && <span className="absolute bottom-2 left-2 inline-flex items-center gap-1.5 rounded-full bg-accent px-2.5 py-1 text-2xs font-medium text-white shadow-lg"
+          aria-label={`Editing: ${remaining} clip${remaining === 1 ? '' : 's'} left to finish`} title={`${remaining} clip${remaining === 1 ? '' : 's'} left to finish`}>
+          <Pencil className="h-3 w-3" aria-hidden="true" />Editing<span className="opacity-80">· {remaining} left</span>
+        </span>}
       </div>
       <div className="px-2 pb-2 pt-3.5">
         <p className="truncate text-sm font-medium text-ink" title={entry.videoTitle}>
@@ -348,7 +355,7 @@ function RunCard({ entry, counts, busy, onFavorite, onDelete, onOpen, onOpenFold
           )}
         </p>
         <p className="mt-2 text-xs text-ink-muted" title="Only fully published clips count as posted. Scheduled, partial and inbox deliveries remain Not Posted.">
-          {entry.editorProject && entry.clipCount === 0 ? 'Ready to review & edit' : counts ? <><span className="text-success">{counts.posted} Posted</span><span className="mx-2 text-ink-faint">·</span><span>{counts.notPosted} Not Posted</span></>
+          {entry.editorProject && entry.clipCount === 0 ? remaining === 0 ? 'No clips to finish' : 'No clips baked yet' : counts ? <><span className="text-success">{counts.posted} Posted</span><span className="mx-2 text-ink-faint">·</span><span>{counts.notPosted} Not Posted</span></>
             : counts === null ? 'Posting status unavailable' : 'Checking posting status…'}
         </p>
       </div>
@@ -365,23 +372,34 @@ function RunCard({ entry, counts, busy, onFavorite, onDelete, onOpen, onOpenFold
   )
 }
 
-/** Thumbnail of a run's best clip, loaded through the shared thumbnail queue. */
-function useRunThumbnail(outputDir: string | null): string | null {
+/** Saved editing progress and the best clip's thumbnail (or source preview). */
+function useRunPreview(entry: HistoryEntry | null): { thumb: string | null; remaining: number | null } {
   const [thumb, setThumb] = useState<string | null>(null)
+  const [remaining, setRemaining] = useState<number | null>(null)
   useEffect(() => {
-    setThumb(null)
-    if (!outputDir) return
+    setThumb(null); setRemaining(null)
+    if (!entry) return
+    const outputDir = entry.outputDir
     let cancelled = false
     getApi()
       .history.getJob(outputDir)
-      .then((raw) => {
+      .then(async (raw) => {
         const output = parseJobOutput(raw)
         const best = output?.clips.reduce<JobOutput['clips'][number] | null>(
           (top, c) => (!top || c.virality_score > top.virality_score ? c : top),
           null
         )
         if (cancelled) return null
-        if (!best && output?.editor_project) return getApi().editor.open(outputDir).then((session) => loadThumbnail(session.previewPath, session.project.candidates[0].ranges[0][0] / 1000))
+        if (output?.editor_project) {
+          try {
+            const session = await getApi().editor.open(outputDir)
+            if (cancelled) return null
+            const progress = editorProgress(session.project.candidates)
+            setRemaining(progress.remaining)
+            if (!best) return loadThumbnail(session.previewPath, session.project.candidates[progress.initialCandidate].ranges[0][0] / 1000)
+          } catch { /* Existing exports remain usable if the editor project is unavailable. */ }
+        }
+        if (cancelled) return null
         if (!best) return null
         return loadThumbnail(clipFilePath(best.s3_url), best.duration_ms > 0 ? best.duration_ms / 2000 : undefined)
       })
@@ -392,6 +410,6 @@ function useRunThumbnail(outputDir: string | null): string | null {
     return () => {
       cancelled = true
     }
-  }, [outputDir])
-  return thumb
+  }, [entry])
+  return { thumb, remaining }
 }

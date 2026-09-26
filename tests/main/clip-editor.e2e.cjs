@@ -34,10 +34,15 @@ test('review editor refines candidates, restores discards, edits captions and ba
     try { await session.close() } finally { clearTimeout(stop); fs.rmSync(root, { recursive: true, force: true }) }
   })
   const { app, page } = session
+  const shots = process.env.BRIDGECLIP_E2E_SHOTS
+  if (shots) fs.mkdirSync(shots, { recursive: true })
   page.setDefaultTimeout(12000)
   const errors = []; page.on('pageerror', (e) => errors.push(e.message))
   await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.setSize(1500, 950); if (process.env.BRIDGECLIP_E2E_SHOTS) w.show() })
   await page.getByRole('button', { name: /^Library/ }).click()
+  const libraryCard = page.locator('article').filter({ has: page.getByRole('button', { name: `Open ${project.title}`, exact: true }) })
+  await libraryCard.getByLabel('Editing: 2 clips left to finish', { exact: true }).waitFor()
+  if (shots) await page.screenshot({ path: path.join(shots, 'library-editing-candidates.png') })
   await page.getByRole('button', { name: new RegExp(project.title) }).first().click()
   const editor = page.getByRole('region', { name: 'Clip editor' })
   await editor.waitFor()
@@ -45,20 +50,26 @@ test('review editor refines candidates, restores discards, edits captions and ba
   const stage = page.locator('.editor-stagebar .editor-status')
   assert.equal(await stage.innerText(), 'Refining')
   assert.equal(await page.getByRole('button', { name: 'Bake captions', exact: true }).isDisabled(), true)
-  const reopenFromLibrary = async () => {
+  const reopenFromLibrary = async (remaining) => {
     await page.getByRole('button', { name: /^Library/ }).first().click()
+    if (remaining > 0) await libraryCard.getByLabel(`Editing: ${remaining} clip${remaining === 1 ? '' : 's'} left to finish`, { exact: true }).waitFor()
+    else if (remaining === 0) {
+      // The preview finishes after saved editor progress has been read.
+      await libraryCard.locator('img').first().waitFor()
+      assert.equal(await libraryCard.locator('[aria-label^="Editing:"]').count(), 0)
+    }
     await page.getByRole('button', { name: new RegExp(project.title) }).first().click()
   }
   // Without exports, reopening skips the first discarded candidate.
   await page.getByRole('button', { name: 'Discard', exact: true }).click()
-  await reopenFromLibrary()
+  await reopenFromLibrary(1)
   await editor.waitFor()
   assert.equal(await page.getByLabel('Title', { exact: true }).inputValue(), 'Why the ending matters')
   assert.equal(await stage.innerText(), 'Refining')
   assert.equal(await page.locator('.editor-discarded').getAttribute('open'), null)
   // Nothing left to finish opens the list, even if every candidate was discarded.
   await page.getByRole('button', { name: 'Discard', exact: true }).click()
-  await reopenFromLibrary()
+  await reopenFromLibrary(0)
   await page.getByRole('button', { name: 'Open editor', exact: true }).waitFor()
   assert.equal(await editor.count(), 0)
   assert.equal(await page.getByRole('button', { name: 'Continue editing', exact: true }).count(), 0)
@@ -274,7 +285,6 @@ test('review editor refines candidates, restores discards, edits captions and ba
   assert.equal(saved.candidates[0].scenes[2].at_ms, 9000)
   assert.deepEqual(saved.candidates[0].scenes[2].crops, project.candidates[0].scenes[1].crops)
   const savedCrops = await crops()
-  const shots = process.env.BRIDGECLIP_E2E_SHOTS
   if (shots) { fs.mkdirSync(shots, { recursive: true }); await page.screenshot({ path: path.join(shots, 'editor-framing.png') }) }
   await page.getByRole('button', { name: 'Jev', exact: true }).click()
   if (shots) await page.screenshot({ path: path.join(shots, 'editor-review.png') })
@@ -331,7 +341,7 @@ test('review editor refines candidates, restores discards, edits captions and ba
   await page.getByRole('button', { name: 'Exports', exact: true }).click()
   await page.getByRole('button', { name: 'Open editor', exact: true }).waitFor()
   // A baked clip plus only discards lands on the list with a quiet editor action.
-  await reopenFromLibrary()
+  await reopenFromLibrary(0)
   await page.getByRole('button', { name: 'Open editor', exact: true }).waitFor()
   assert.equal(await editor.count(), 0)
   assert.equal(await page.getByRole('button', { name: 'Continue editing', exact: true }).count(), 0)
@@ -358,7 +368,11 @@ test('review editor refines candidates, restores discards, edits captions and ba
   // Older exports still open the list when their candidate is being refined again.
   await page.getByRole('button', { name: 'Exports', exact: true }).click()
   await page.getByRole('button', { name: 'Continue editing', exact: true }).waitFor()
-  await reopenFromLibrary()
+  await page.getByRole('button', { name: /^Library/ }).first().click()
+  await libraryCard.getByLabel('Editing: 1 clip left to finish', { exact: true }).waitFor()
+  await libraryCard.getByText('1 clip', { exact: true }).waitFor()
+  if (shots) await page.screenshot({ path: path.join(shots, 'library-editing-with-baked-clip.png') })
+  await page.getByRole('button', { name: new RegExp(project.title) }).first().click()
   await page.getByRole('button', { name: 'Continue editing', exact: true }).waitFor()
   await page.getByText('1 clip left to finish', { exact: true }).waitFor()
   assert.equal(await editor.count(), 0)
