@@ -187,7 +187,7 @@ export function editorialScore(summary: EditorialSummary | null | undefined, wei
 }
 
 export interface CoherenceTrace {
-  status: string; policy: string; threshold: number; self_contained_threshold?: number; sponsor_threshold?: number; evidence_threshold: number; cut_threshold: number
+  status: string; policy: string; threshold: number; self_contained_threshold?: number; faithful_to_source_threshold?: number; title_supported_threshold?: number; sponsor_threshold?: number; evidence_threshold: number; cut_threshold: number
   original_interval?: [number, number]; accepted_interval?: [number, number]
   reason: string | null; visual_reviews: { interval: [number, number]; result: Record<string, unknown> | null }[]
   attempts: { stage: string; keeps: [number, number][]; decision: string; reason: string; evidence: Record<string, unknown>; judgment: Judgment | null; policy_judgment?: Judgment | null }[]
@@ -199,6 +199,8 @@ function parseCoherence(value: unknown): CoherenceTrace | null {
   return { status: str(v.status, 40), policy: str(v.policy, 80), threshold: num(v.threshold, 1), cut_threshold: num(v.cut_threshold, 1),
     evidence_threshold: num(v.evidence_threshold ?? v.threshold, 1),
     ...(v.self_contained_threshold == null ? {} : { self_contained_threshold: num(v.self_contained_threshold, 1) }),
+    ...(v.faithful_to_source_threshold == null ? {} : { faithful_to_source_threshold: num(v.faithful_to_source_threshold, 1) }),
+    ...(v.title_supported_threshold == null ? {} : { title_supported_threshold: num(v.title_supported_threshold, 1) }),
     ...(v.sponsor_threshold == null ? {} : { sponsor_threshold: num(v.sponsor_threshold, 1) }),
     reason: v.reason == null ? null : str(v.reason, 80),
     visual_reviews: list(v.visual_reviews ?? [], 3, (x) => { const r = obj(x); return { interval: span(r.interval), result: visual(r.result) } }),

@@ -97,12 +97,34 @@ def test_relaxed_thresholds_apply_to_candidate_and_final_review(self_contained, 
     clip = ClipPlanSegment(0, 11000, .9, summary='Supported result')
     assert asyncio.run(r.prepare(clip, audit)) == accepted
     assert asyncio.run(r.judge(clip.summary, [(0, 11000)], audit, 'final_edit')) == accepted
-    assert audit['coherence']['policy'] == 'coherence-v6'
+    assert audit['coherence']['policy'] == 'coherence-v7'
     assert audit['coherence']['self_contained_threshold'] == .70
     assert audit['coherence']['evidence_threshold'] == .50
     if accepted:
         r.repair.assert_not_called()
         r.visual_observer.assert_not_called()
+
+
+@pytest.mark.parametrize('check', ['faithful_to_source', 'title_supported'])
+@pytest.mark.parametrize('probability,accepted', [(.699, False), (.70, True), (.749, True)])
+def test_source_and_title_thresholds_apply_to_candidates_and_final_edits(check, probability, accepted):
+    r, _ = reviewer()
+    async def evaluate(state, questions):
+        answers = response(questions)['answers']
+        if check in answers:
+            answers[check]['noul'] = probability
+        return {'status': 'success', 'answers': answers}
+    r.service.evaluate = evaluate
+    r.repair = AsyncMock(return_value=None)
+    audit = report()
+    clip = ClipPlanSegment(0, 11000, .9, summary='Supported result')
+    assert asyncio.run(r.prepare(clip, audit)) == accepted
+    assert asyncio.run(r.judge(clip.summary, [(0, 11000)], audit, 'final_edit')) == accepted
+    assert audit['coherence']['faithful_to_source_threshold'] == .70
+    assert audit['coherence']['title_supported_threshold'] == .70
+    assert audit['coherence']['threshold'] == .75
+    if accepted:
+        r.repair.assert_not_called()
 
 
 def test_unavailable_judgment_never_accepts_or_pays_for_repairs(monkeypatch):
@@ -294,7 +316,7 @@ def test_unchanged_first_repair_gets_wider_context_and_failed_check_feedback(mon
         payloads.append(payload)
         state = json.loads(payload['messages'][1]['content'])
         assert {c['name'] for c in state['failed_checks']} == {'opening_context', 'self_contained', 'complete_ending', 'logical_flow', 'faithful_to_source', 'title_supported'}
-        assert all(c['probability'] == .5 and c['required_probability'] == (.7 if c['name'] == 'self_contained' else .75) and c['question'] for c in state['failed_checks'])
+        assert all(c['probability'] == .5 and c['required_probability'] == (.7 if c['name'] in {'self_contained', 'faithful_to_source', 'title_supported'} else .75) and c['question'] for c in state['failed_checks'])
         assert all(set(c['criteria']) == {'true', 'false'} for c in state['failed_checks'])
         if len(payloads) == 1:
             assert all(s['id'] != 4 for s in state['source_segments'])

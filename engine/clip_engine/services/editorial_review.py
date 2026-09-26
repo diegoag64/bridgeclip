@@ -3,6 +3,7 @@ import re
 
 from clip_engine.services.jev_service import choice, noul, score
 from clip_engine.services.editorial_context import AMBIGUOUS_FILLERS
+from clip_engine.services.coherence_review import TITLE_SUPPORTED_PASS
 
 SCORE_LEVELS = {
     'hook': ['Opening gives no reason to continue', 'Opening identifies an interesting topic', 'Opening immediately establishes a specific compelling question or event'],
@@ -41,7 +42,7 @@ async def review_retained_clip(service, title, retained_segments, report):
     for key in ['missing_context', 'unresolved_payoff']:
         if answers[key]['noul'] >= .2:
             flags.append(key if answers[key]['noul'] >= .8 else f'uncertain_{key}')
-    if answers['title_supported']['noul'] < .8:
+    if answers['title_supported']['noul'] < TITLE_SUPPORTED_PASS:
         flags.append('title_needs_review')
 
 

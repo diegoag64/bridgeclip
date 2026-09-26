@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react'
 import type { Automation, AutomationContent, AutomationSourceContext } from '../../shared/automations'
 import { getApi } from '../lib/ipc'
 import { errorMessage } from '../lib/utils'
-import { platformName } from './PlatformIcon'
+import { MetadataDraftPreview } from './MetadataDraftPreview'
 import { Button } from './ui/Button'
 import { Callout } from './ui/Callout'
 import { Dialog, DialogFooter } from './ui/Dialog'
@@ -64,19 +64,7 @@ export function AutomationMetadataDialog({ automationId, item, youtubeOnly, onUp
         <details className="glass-well rounded-xl p-3 text-xs text-ink-muted"><summary>Current title & caption</summary>
           <p className="mt-2 font-medium text-ink">{item.title}</p><p className="mt-1 whitespace-pre-wrap">{item.caption}</p>
         </details>
-        {draft.posts.map((post) => <section key={post.platform} className="glass-well rounded-xl p-4">
-          <h3 className="text-sm font-semibold text-ink">{platformName(post.platform)}</h3>
-          {post.title && <p className="mt-2 font-medium text-ink" data-selectable>{post.title}</p>}
-          <p className="mt-2 whitespace-pre-wrap text-sm text-ink-muted" data-selectable>{post.caption}</p>
-          {post.tags.length > 0 && <p className="mt-2 text-xs text-ink-subtle">Keywords: {post.tags.join(', ')}</p>}
-        </section>)}
-        <details className="glass-well rounded-xl p-3 text-xs text-ink-muted" open={draft.research.status === 'unavailable'}>
-          <summary className="cursor-pointer font-medium text-ink">Context & research · {draft.research.status}{draft.research.scope === 'source' ? (draft.research.reused ? ' · reused video research' : ' · shared video research') : ''}</summary>
-          <p className="mt-2 whitespace-pre-wrap" data-selectable>{draft.source?.title || 'No original video identified'}{draft.source?.channel ? ` · ${draft.source.channel}` : ''}</p>
-          <p className="mt-2 whitespace-pre-wrap" data-selectable>{draft.source?.description || 'Original description unavailable; no description was assumed.'}</p>
-          <p className="mt-3 whitespace-pre-wrap" data-selectable>{draft.research.summary}</p>
-          {draft.research.sources.map((citation) => <p key={citation.url} className="mt-2 break-all" data-selectable>{citation.title}<br />{citation.url}</p>)}
-        </details>
+        <MetadataDraftPreview draft={draft} />
       </> : <>
         <p className="text-sm text-ink-muted">Uses this clip’s speech and original video context. Optional web research finds relevant topic terms. Uses your OpenRouter credits; nothing is published by this action.</p>
         {youtubeOnly && <p className="text-xs text-ink-subtle">Drafting for YouTube. Select destination accounts in the automation settings to include other platforms.</p>}

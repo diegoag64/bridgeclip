@@ -1,27 +1,58 @@
 import { execFile } from 'child_process'
 import { createHash } from 'crypto'
+import { realpathSync } from 'fs'
 import { promisify } from 'util'
+import { youtubeSourceUrl } from '../shared/video-source'
 import type { AutomationSourceContext } from '../shared/automations'
 import type { JobOutput } from '../shared/job-output'
 import { getJobHistory, getJobOutput } from './file-manager'
 import { isWithinDirectory, openAuthorizedMedia } from './security'
 import { resolveBinary } from './tools'
 
+export { youtubeSourceUrl } from '../shared/video-source'
+
 const execFileAsync = promisify(execFile)
 
-/** Only pass an extracted video ID to the metadata tool, never an arbitrary URL. */
-export function youtubeSourceUrl(value: unknown): string | null {
-  if (typeof value !== 'string' || value.length > 8192) return null
-  try {
-    const url = new URL(value)
-    if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.port) return null
-    let id: string | null = null
-    if (url.hostname === 'youtu.be') id = url.pathname.slice(1)
-    if (['youtube.com', 'www.youtube.com', 'm.youtube.com'].includes(url.hostname)) {
-      id = url.pathname === '/watch' ? url.searchParams.get('v') : /^\/(?:shorts|embed)\/([^/]+)$/.exec(url.pathname)?.[1] ?? null
+/** Resolve actual clip provenance; enhanced titles are not stable identifiers. */
+export async function findLibraryRunForClip(bankFile: string | null, library: string, sourceClipPath?: string): Promise<string | null> {
+  const runs = (await getJobHistory(library)).filter((run) => run.status === 'completed')
+  if (sourceClipPath && isWithinDirectory(sourceClipPath, library)) {
+    for (const run of runs) {
+      if (!isWithinDirectory(sourceClipPath, run.outputDir)) continue
+      const output = await getJobOutput(run.outputDir, library)
+      if (output?.clips.some((clip) => {
+        try { return realpathSync(clip.s3_url.replace(/^file:\/\//, '')) === realpathSync(sourceClipPath) } catch { return false }
+      })) return run.outputDir
     }
-    return id && /^[\w-]{11}$/.test(id) ? `https://www.youtube.com/watch?v=${id}` : null
-  } catch { return null }
+  }
+  if (!bankFile) return null
+  let bank: Awaited<ReturnType<typeof openAuthorizedMedia>>
+  try { bank = await openAuthorizedMedia(bankFile, library) } catch { return null }
+  try {
+    let bankHash: string | null = null
+    for (const run of runs) {
+      const output = await getJobOutput(run.outputDir, library)
+      for (const clip of output?.clips ?? []) {
+        const path = clip.s3_url.replace(/^file:\/\//, '')
+        if (!isWithinDirectory(path, run.outputDir)) continue
+        try {
+          const candidate = await openAuthorizedMedia(path, library)
+          try {
+            if (candidate.size !== bank.size) continue
+            if (!bankHash) {
+              const hash = createHash('sha256')
+              for await (const chunk of bank.handle.createReadStream({ autoClose: false })) hash.update(chunk)
+              bankHash = hash.digest('hex')
+            }
+            const hash = createHash('sha256')
+            for await (const chunk of candidate.handle.createReadStream({ autoClose: false })) hash.update(chunk)
+            if (hash.digest('hex') === bankHash) return run.outputDir
+          } finally { await candidate.handle.close() }
+        } catch { /* Deleted or unreadable clips are not a match. */ }
+      }
+    }
+    return null
+  } finally { await bank.handle.close() }
 }
 
 export function parseSourceContext(value: unknown): AutomationSourceContext | null {

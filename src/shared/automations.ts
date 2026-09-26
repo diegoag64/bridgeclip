@@ -74,6 +74,8 @@ export interface MetadataEnhancement {
 
 export interface AutomationContent {
   id: string
+  /** Original authorized file, retained when a library clip is copied to the bank. */
+  sourceClipPath?: string
   /** Changes only after a person reviews an uncertain post and returns the clip to the queue. */
   postingAttemptId?: string
   fileName: string
@@ -154,6 +156,26 @@ export function needsTikTokReview(automation: Pick<Automation, 'accounts'>, item
 
 export function nextAutomationContent(automation: Pick<Automation, 'accounts' | 'content'>): AutomationContent | undefined {
   return automation.content.find((item) => item.status === 'queued' && !needsTikTokReview(automation, item))
+}
+
+export function canReorderContent(item: AutomationContent): boolean {
+  return item.status === 'queued' && !item.postId
+}
+
+export function hasEnhancedMetadata(item: AutomationContent, platforms: readonly AutomationAccount['platform'][]): boolean {
+  return Boolean(item.metadataEnhancement && platforms.every((platform) => item.generatedMetadata?.some((post) => post.platform === platform)))
+}
+
+/** Reorder only queued slots. Submitted and uncertain items retain their positions. */
+export function reorderQueuedContent(content: AutomationContent[], id: string, beforeId: string | null): AutomationContent[] {
+  const queue = content.filter(canReorderContent)
+  const from = queue.findIndex((item) => item.id === id)
+  if (from < 0 || (beforeId !== null && !queue.some((item) => item.id === beforeId))) throw new Error('Only unposted queued clips can be reordered. Refresh the queue and try again.')
+  if (id === beforeId) return content
+  const [item] = queue.splice(from, 1)
+  queue.splice(beforeId === null ? queue.length : queue.findIndex((entry) => entry.id === beforeId), 0, item)
+  let index = 0
+  return content.map((entry) => canReorderContent(entry) ? queue[index++] : entry)
 }
 
 /** Return due local slots, including a short grace period after wake/reopen. */

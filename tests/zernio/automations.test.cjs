@@ -27,6 +27,33 @@ test('daily slots use the configured time zone and include a short restart grace
   assert.deepEqual(dueSlots(['20:00'], 'America/New_York', now), [{ time: '20:00', date: '2026-09-24' }])
 })
 
+test('reordered queues and original media provenance survive a fresh load', async () => {
+  const { dir, cleanup } = tempDir('bridgeclip-reorder-')
+  try {
+    const library = path.join(dir, 'library')
+    fs.mkdirSync(library)
+    const paths = ['first', 'second', 'third'].map((name) => {
+      const file = path.join(library, `${name}.mp4`)
+      fs.writeFileSync(file, name)
+      return file
+    })
+    const source = "export * as automations from './src/main/automations'; export * as settings from './src/main/settings-store'"
+    const mocks = { electron: fakeElectron(dir).electron }
+    const main = loadMain(source, mocks)
+    main.settings.replaceApiKey('zernioApiKey', KEY)
+    main.settings.savePublicSettings({ outputDirectory: library, pythonPath: 'python3' })
+    const [automation] = main.automations.createAutomation('Queue')
+    const [added] = await main.automations.addAutomationContent(automation.id, paths)
+    const [a, b, c] = added.content
+    assert.equal(a.sourceClipPath, fs.realpathSync(paths[0]))
+    main.automations.reorderAutomationContent(automation.id, c.id, a.id)
+    const reloaded = loadMain(source, mocks).automations.listAutomations()[0]
+    assert.deepEqual(reloaded.content.map((item) => item.id), [c.id, a.id, b.id])
+    assert.equal(reloaded.content[1].sourceClipPath, a.sourceClipPath)
+    assert.throws(() => main.automations.reorderAutomationContent(automation.id, 'invalid', null), /Choose queued/)
+  } finally { cleanup() }
+})
+
 test('library clips can be copied to a bank only from their saved run', async () => {
   const { dir, cleanup } = tempDir('bridgeclip-library-bank-')
   try {

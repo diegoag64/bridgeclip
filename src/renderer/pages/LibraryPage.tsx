@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, Clapperboard, FolderOpen, ListVideo, RefreshCw, Search, Sparkles } from 'lucide-react'
+import { AlertTriangle, Clapperboard, FolderOpen, ListVideo, RefreshCw, Search, Sparkles, Star, Trash2 } from 'lucide-react'
 import { getApi } from '../lib/ipc'
 import { cn, errorMessage, formatRelativeDate, formatUsd, localFileUrl } from '../lib/utils'
 import { clipFilePath, loadThumbnail } from '../lib/thumbnails'
 import { useSettingsStore } from '../store/use-settings-store'
+import { usePostsStore } from '../store/use-posts-store'
 import type { JobOutput } from '../store/use-job-store'
 import { parseJobOutput } from '../../shared/job-output'
 import type { HistoryEntry } from '../../preload/index'
@@ -15,9 +16,12 @@ import { TextInput } from '../components/ui/Field'
 import { EmptyState } from '../components/ui/EmptyState'
 import { Callout } from '../components/ui/Callout'
 import { Skeleton } from '../components/ui/Skeleton'
+import { ConfirmDialog, type ConfirmRequest } from '../components/ui/ConfirmDialog'
+import { HoverCard } from '../components/ui/HoverCard'
 import type { Page as AppPage } from '../components/Sidebar'
 
-export function LibraryPage({ onNavigate }: { onNavigate: (page: AppPage) => void }): React.JSX.Element {
+export function LibraryPage({ onNavigate, initialRun }: { onNavigate: (page: AppPage) => void; initialRun?: string | null }): React.JSX.Element {
+  const initialRunOpened = useRef(false)
   const outputDirectory = useSettingsStore((s) => s.outputDirectory)
   const [entries, setEntries] = useState<HistoryEntry[] | null>(null)
   const [query, setQuery] = useState('')
@@ -26,6 +30,16 @@ export function LibraryPage({ onNavigate }: { onNavigate: (page: AppPage) => voi
   const openRequestId = useRef(0)
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+  const [confirm, setConfirm] = useState<ConfirmRequest | null>(null)
+  const closeConfirm = useCallback(() => setConfirm(null), [])
+  const [busy, setBusy] = useState<Set<string>>(new Set())
+  const busyRef = useRef(new Set<string>())
+  const [counts, setCounts] = useState<Record<string, { posted: number; notPosted: number } | null>>({})
+  const posts = usePostsStore((state) => state.posts)
+  const postError = usePostsStore((state) => state.error)
+  const configured = useSettingsStore((state) => state.zernioConfigured)
+  const directoryRef = useRef(outputDirectory)
+  directoryRef.current = outputDirectory
 
   const load = useCallback(async () => {
     const request = ++requestId.current
@@ -45,18 +59,54 @@ export function LibraryPage({ onNavigate }: { onNavigate: (page: AppPage) => voi
   }, [])
 
   useEffect(() => {
-    load()
-  }, [load])
+    setOpen(null)
+    setConfirm(null)
+    setCounts({})
+    setEntries(null)
+    openRequestId.current++
+    void load()
+    return () => { requestId.current++; openRequestId.current++ }
+  }, [load, outputDirectory])
+
+  useEffect(() => {
+    if (!configured || open) return
+    void usePostsStore.getState().refresh()
+    const timer = window.setInterval(() => { void usePostsStore.getState().refresh() }, 30000)
+    return () => window.clearInterval(timer)
+  }, [configured, open])
+
+  const entryPaths = JSON.stringify(entries?.map((entry) => entry.outputDir).sort() ?? [])
+  useEffect(() => {
+    if (open) return
+    let active = true
+    // Resolve counts progressively, with one run at a time to bound disk I/O
+    // while recovering older automation copies by byte identity.
+    void (async () => {
+      for (const path of JSON.parse(entryPaths) as string[]) {
+        if (!active) return
+        try {
+          const statuses = await getApi().history.postingStatus(path)
+          const posted = statuses.filter((status) => status.state === 'posted').length
+          if (active) setCounts((current) => ({ ...current, [path]: { posted, notPosted: statuses.length - posted } }))
+        } catch {
+          if (active) setCounts((current) => ({ ...current, [path]: null }))
+        }
+      }
+    })()
+    return () => { active = false }
+  }, [entryPaths, posts, open, configured])
 
   const filtered = useMemo(() => {
     if (!entries) return []
     const q = query.trim().toLowerCase()
-    return q ? entries.filter((e) => e.videoTitle.toLowerCase().includes(q)) : entries
+    return entries.filter((entry) => !q || entry.videoTitle.toLowerCase().includes(q))
+      .sort((a, b) => Number(Boolean(b.favorite)) - Number(Boolean(a.favorite)))
   }, [entries, query])
 
   const totalClips = entries?.reduce((sum, e) => sum + e.clipCount, 0) ?? 0
 
-  const openRun = async (entry: HistoryEntry): Promise<void> => {
+  const openRun = useCallback(async (entry: HistoryEntry): Promise<void> => {
+    if (busyRef.current.has(entry.outputDir)) return
     const request = ++openRequestId.current
     setError(null)
     try {
@@ -76,7 +126,46 @@ export function LibraryPage({ onNavigate }: { onNavigate: (page: AppPage) => voi
     } catch (err) {
       if (request === openRequestId.current) setError(errorMessage(err, 'Could not open this run.'))
     }
+  }, [])
+
+  useEffect(() => {
+    if (!initialRun || !entries || initialRunOpened.current) return
+    initialRunOpened.current = true
+    const entry = entries.find((item) => item.outputDir === initialRun)
+    if (entry) void openRun(entry)
+    else setError('The source run is no longer in this Library. It may have been moved or deleted.')
+  }, [initialRun, entries, openRun])
+
+  const changeRun = async (entry: HistoryEntry, action: 'favorite' | 'delete'): Promise<void> => {
+    if (busyRef.current.has(entry.outputDir)) return
+    busyRef.current.add(entry.outputDir)
+    setBusy(new Set(busyRef.current))
+    const directory = directoryRef.current
+    ++requestId.current
+    ++openRequestId.current
+    setRefreshing(false)
+    setError(null)
+    try {
+      if (action === 'delete') await getApi().history.delete(entry.outputDir)
+      else await getApi().history.setFavorite(entry.outputDir, !entry.favorite)
+      if (directoryRef.current !== directory) return
+      setEntries((current) => current?.flatMap((item) => item.outputDir !== entry.outputDir ? [item]
+        : action === 'delete' ? [] : [{ ...item, favorite: !entry.favorite }]) ?? null)
+      await load()
+    } catch (cause) {
+      if (directoryRef.current === directory) setError(errorMessage(cause, action === 'delete' ? 'Could not delete this run. Refresh the Library to check its files.' : 'Could not update this favorite.'))
+    } finally {
+      busyRef.current.delete(entry.outputDir)
+      setBusy(new Set(busyRef.current))
+    }
   }
+
+  const confirmDelete = (entry: HistoryEntry): void => setConfirm({
+    title: 'Delete this Library item?',
+    body: <>Permanently delete “{entry.videoTitle}” and all {entry.clipCount} clips, plus every other file in its run folder? This includes saved transcripts, previews and logs. This cannot be undone. Published posts and copies saved outside this folder remain.<span className="mt-3 block break-all text-xs text-ink-subtle">{entry.outputDir}</span></>,
+    confirmLabel: 'Delete local files',
+    onConfirm: () => { void changeRun(entry, 'delete') }
+  })
 
   if (open) {
     return (
@@ -109,7 +198,7 @@ export function LibraryPage({ onNavigate }: { onNavigate: (page: AppPage) => voi
               iconOnly
               aria-label="Refresh"
               title="Refresh"
-              onClick={load}
+              onClick={() => { void load(); if (configured) void usePostsStore.getState().refresh(true) }}
               disabled={refreshing}
               icon={<RefreshCw className={cn('h-4 w-4', refreshing && 'animate-spin')} />}
             />
@@ -127,6 +216,7 @@ export function LibraryPage({ onNavigate }: { onNavigate: (page: AppPage) => voi
           {error}
         </Callout>
       )}
+      {configured && postError && <Callout tone="warning" className="mt-4">{postError} Showing saved posting status.</Callout>}
 
       {entries && entries.length > 0 && (
         <TextInput
@@ -172,8 +262,12 @@ export function LibraryPage({ onNavigate }: { onNavigate: (page: AppPage) => voi
           <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-4">
             {filtered.map((entry) => (
               <RunCard
-                key={entry.jobId}
+                key={entry.outputDir}
                 entry={entry}
+                counts={counts[entry.outputDir]}
+                busy={busy.has(entry.outputDir)}
+                onFavorite={() => { void changeRun(entry, 'favorite') }}
+                onDelete={() => confirmDelete(entry)}
                 onOpen={() => openRun(entry)}
                 onOpenFolder={async () => {
                   try {
@@ -187,12 +281,17 @@ export function LibraryPage({ onNavigate }: { onNavigate: (page: AppPage) => voi
           </div>
         )}
       </div>
+      {confirm && <ConfirmDialog request={confirm} onClose={closeConfirm} />}
     </Page>
   )
 }
 
-function RunCard({ entry, onOpen, onOpenFolder }: {
+function RunCard({ entry, counts, busy, onFavorite, onDelete, onOpen, onOpenFolder }: {
   entry: HistoryEntry
+  counts: { posted: number; notPosted: number } | null | undefined
+  busy: boolean
+  onFavorite: () => void
+  onDelete: () => void
   onOpen: () => void
   onOpenFolder: () => void
 }): React.JSX.Element {
@@ -201,14 +300,13 @@ function RunCard({ entry, onOpen, onOpenFolder }: {
   const [previewFailed, setPreviewFailed] = useState(false)
 
   return (
-    <button
-      onClick={failed ? onOpenFolder : onOpen}
-      aria-label={failed ? `Open folder for ${entry.status === 'incomplete' ? 'unfinished' : 'unreadable'} run` : undefined}
+    <article
       className={cn(
-        'glass group rounded-2xl p-1.5 text-left transition-[transform,box-shadow] duration-300 ease-out',
+        'glass group relative rounded-2xl p-1.5 text-left transition-[transform,box-shadow] duration-300 ease-out',
         'hover:-translate-y-1 hover:shadow-[inset_0_1px_0_rgb(255_255_255/0.1),0_0_0_1px_rgb(255_255_255/0.08),0_28px_56px_-24px_rgb(0_0_0/0.8)]'
       )}
     >
+      <button type="button" className="block w-full text-left" disabled={busy} onClick={failed ? onOpenFolder : onOpen} aria-label={`Open ${entry.videoTitle}`}>
       <div className="relative aspect-video overflow-hidden rounded-xl bg-black/40 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.06)]">
         {thumb && !previewFailed ? (
           <>
@@ -230,7 +328,7 @@ function RunCard({ entry, onOpen, onOpenFolder }: {
           <Skeleton className="h-full rounded-none" />
         )}
         {!failed && (
-          <span className="glass-chip absolute bottom-2.5 right-2.5 inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-2xs font-medium text-white">
+          <span className="glass-chip absolute left-2 top-2 inline-flex h-7 items-center gap-1 rounded-full px-2.5 text-2xs font-medium text-white">
             <Clapperboard className="h-3 w-3" />
             {entry.clipCount} clip{entry.clipCount === 1 ? '' : 's'}
           </span>
@@ -249,8 +347,21 @@ function RunCard({ entry, onOpen, onOpenFolder }: {
             </>
           )}
         </p>
+        <p className="mt-2 text-xs text-ink-muted" title="Only fully published clips count as posted. Scheduled, partial and inbox deliveries remain Not Posted.">
+          {counts ? <><span className="text-success">{counts.posted} Posted</span><span className="mx-2 text-ink-faint">·</span><span>{counts.notPosted} Not Posted</span></>
+            : counts === null ? 'Posting status unavailable' : 'Checking posting status…'}
+        </p>
       </div>
-    </button>
+      </button>
+      <div className="absolute right-3.5 top-3.5 flex items-center gap-1.5">
+        <HoverCard cardClassName="px-3 py-2 text-xs" content={entry.favorite ? 'Remove from favorites' : 'Favorite this Library item'}>
+          <Button size="sm" iconOnly className={cn('glass-chip', entry.favorite && 'text-brand-gold')} disabled={busy} aria-label={`${entry.favorite ? 'Unfavorite' : 'Favorite'} ${entry.videoTitle}`} aria-pressed={Boolean(entry.favorite)} onClick={onFavorite} icon={<Star className="h-3.5 w-3.5" fill={entry.favorite ? 'currentColor' : 'none'} />} />
+        </HoverCard>
+        <HoverCard cardClassName="px-3 py-2 text-xs" content="Delete this Library item and its local files">
+          <Button size="sm" iconOnly className="glass-chip hover:text-danger" disabled={busy} aria-label={`Delete ${entry.videoTitle}`} onClick={onDelete} icon={<Trash2 className="h-3.5 w-3.5" />} />
+        </HoverCard>
+      </div>
+    </article>
   )
 }
 

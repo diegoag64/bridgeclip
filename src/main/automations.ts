@@ -17,7 +17,8 @@ import { workspaceId } from './zernio/workspace-cache'
 import { logger } from './logger'
 import { generateAutomationMetadata, transcribeAutomationClip, researchAutomationTopic, generateAutomationMetadataBatch, metadataFailureCode, type MetadataBatchClip } from './automation-metadata'
 
-import { completeSourceContext, parseSourceContext, recoverSourceContext, sourceFromOutput, sourceResearchKey } from './automation-source'
+import { completeSourceContext, findLibraryRunForClip, parseSourceContext, recoverSourceContext, sourceFromOutput, sourceResearchKey } from './automation-source'
+import { reorderQueuedContent } from '../shared/automations'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const TIME = /^(?:[01]\d|2[0-3]):[0-5]\d$/
@@ -127,6 +128,7 @@ function validContent(value: unknown): value is AutomationContent {
     if (!validEnhancement(enhancement)) return false
   }
   return UUID.test(item.id) && (item.postingAttemptId === undefined || (typeof item.postingAttemptId === 'string' && UUID.test(item.postingAttemptId))) && typeof item.fileName === 'string' &&
+    (item.sourceClipPath === undefined || (typeof item.sourceClipPath === 'string' && item.sourceClipPath.length <= 8192 && !item.sourceClipPath.includes('\0'))) &&
     item.fileName === `${item.id}${extname(item.fileName)}` && VIDEO_EXTENSIONS.has(extname(item.fileName)) &&
     (item.metadataError === undefined || item.metadataError === null || (typeof item.metadataError === 'string' && item.metadataError.length <= 500)) &&
     typeof item.title === 'string' && item.title.length <= 500 &&
@@ -286,6 +288,19 @@ function checkProfileAccounts(overview: ZernioOverview, profileId: string, accou
 
 export function listAutomations(): Automation[] { return structuredClone(data().automations) }
 
+export async function automationLibraryRun(id: unknown, contentId: unknown): Promise<string | null> {
+  const { workspace, automation } = find(id)
+  const item = automation.content.find((entry) => entry.id === contentId)
+  if (!item) throw new Error('Clip not found.')
+  const library = loadSettings().outputDirectory
+  const path = join(bankPath(workspace, automation.id), item.fileName)
+  const validBank = isAutomationMedia(path)
+  if (validBank) authorizeMedia(path)
+  const run = await findLibraryRunForClip(validBank ? path : null, library, item.sourceClipPath)
+  if (currentWorkspace() !== workspace || loadSettings().outputDirectory !== library || !cached.includes(automation) || !automation.content.includes(item)) throw new Error('The automation changed. Try again.')
+  return run
+}
+
 /** Recognize only a recorded bank file in the current workspace. */
 export function isAutomationMedia(path: unknown): path is string {
   if (typeof path !== 'string') return false
@@ -404,7 +419,7 @@ export async function addAutomationContent(id: unknown, paths: string[], titles?
           throw new Error('Automation changed while adding content.')
         }
         const title = Array.from(titles?.[index] || basename(path, extname(path))).filter((character) => character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127).join('').replace(/[_-]+/g, ' ').trim().slice(0, 500) || 'Untitled clip'
-        const item: AutomationContent = { id: itemId, fileName, title, caption: title, sourceContext: sourceContext ?? null, transcript: null, generatedMetadata: null, status: 'queued', addedAt: new Date().toISOString(), postedAt: null, postId: null, error: null }
+        const item: AutomationContent = { id: itemId, sourceClipPath: source.canonical, fileName, title, caption: title, sourceContext: sourceContext ?? null, transcript: null, generatedMetadata: null, status: 'queued', addedAt: new Date().toISOString(), postedAt: null, postId: null, error: null }
         copiedFiles.push(dest)
         pendingItems.push(item)
       } catch (error) {
@@ -422,6 +437,16 @@ export async function addAutomationContent(id: unknown, paths: string[], titles?
     if (!committed) for (const file of copiedFiles) await unlink(file).catch(() => {})
     busy.delete(automation.id)
   }
+  return listAutomations()
+}
+
+export function reorderAutomationContent(id: unknown, contentId: unknown, beforeId: unknown): Automation[] {
+  const { workspace, automation } = find(id)
+  if (busy.has(automation.id)) throw new Error('Wait for the current operation to finish.')
+  if (typeof contentId !== 'string' || !UUID.test(contentId) || (beforeId !== null && (typeof beforeId !== 'string' || !UUID.test(beforeId)))) throw new Error('Choose queued clips to reorder.')
+  const previous = automation.content
+  automation.content = reorderQueuedContent(previous, contentId, beforeId)
+  try { save(workspace) } catch (error) { automation.content = previous; throw error }
   return listAutomations()
 }
 

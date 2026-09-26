@@ -22,3 +22,18 @@ export function normalizeVideoSource(value: string): string {
   const id = twitchVodId(value)
   return id ? `https://www.twitch.tv/videos/${id}` : value.trim()
 }
+
+/** Canonical public video link for source navigation and metadata lookups. */
+export function youtubeSourceUrl(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length > 8192) return null
+  try {
+    const url = new URL(value)
+    if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.port) return null
+    let id: string | null = null
+    if (url.hostname === 'youtu.be') id = url.pathname.slice(1)
+    if (['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com'].includes(url.hostname)) {
+      id = url.pathname === '/watch' ? url.searchParams.get('v') : /^\/(?:shorts|embed|live)\/([^/]+)$/.exec(url.pathname)?.[1] ?? null
+    }
+    return id && /^[\w-]{11}$/.test(id) ? `https://www.youtube.com/watch?v=${id}` : null
+  } catch { return null }
+}

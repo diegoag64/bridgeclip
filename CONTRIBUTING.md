@@ -15,6 +15,13 @@ Follow the [development instructions](README.md#develop). Install the in-repo en
 
 Run `npm run typecheck`, `npm run lint`, `npm test`, and `npm run build` when working on a local fork. For engine changes, install `pytest` in `engine/.venv` and run `engine/.venv/bin/python -m pytest -q engine/tests`; the runtime lockfile does not include test tools. Describe behavior, tests, and any user-visible screenshots or sample outputs in the PR.
 
-Use an imperative, scoped commit message such as `fix(clips): validate saved run output`. By contributing, you agree to follow the [code of conduct](CODE_OF_CONDUCT.md).
+Use imperative, scoped commit messages and pull request titles, such as `fix(clips): validate saved run output`. By contributing, you agree to follow the [code of conduct](CODE_OF_CONDUCT.md).
+
+## Pull request descriptions
+
+- Write every PR description as a concise, human-friendly list of changes in plain language. Avoid jargon and explain what people can now do or what works better.
+- Cover all meaningful changes in the final PR, with one short bullet per change. Update the description as the scope changes; do not append a running work log.
+- Focus on the result rather than file names, internal implementation details, or the order the work happened. Include technical details only when reviewers need them to understand a limitation or tradeoff.
+- End with a brief testing note: what was checked, any known failures, and anything important that was not tested. Include screenshots or examples when they help explain a visible change.
 
 Official CI logs and signing workflows are private. Build helpers, dependency pins, and release verification instructions remain available in this repository.
