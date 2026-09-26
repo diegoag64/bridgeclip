@@ -49,15 +49,17 @@ Blur is expensive. Only `glass-thick` and `glass-chip` use `backdrop-filter`. Pa
 | `ink-faint` | `#545967` | Placeholders, disabled, nav group labels |
 | `line` / `line-strong` | white 9% / 16% | Hairlines and dividers (`divide-white/[0.06]` inside tiles) |
 | `fill` / `fill-hover` / `fill-selected` | white 5% / 8% / 11% | Plain hover and pressed surfaces |
-| `accent` / `accent-hover` | `#38CCFF` / `#66D8FF` | BridgeMind cyan-blue: primary buttons, chosen options, progress, focus ring |
-| `accent-ink` | `#071821` | Dark text and icons on solid accent fills |
-| `accent-cyan` | Alias of `accent` | The BridgeMind mark's blue |
+| `accent` | `#1A5FDF` | Deep blue: primary buttons, chosen options, progress, focus ring |
+| `accent-hover` | `#85ACF4` | Lighter blue for text and icons on dark surfaces |
+| `--accent-button-hover` | `#286BE5` | Solid hover fill for primary buttons and editor trim handles |
+| `accent-ink` | `#FFFFFF` | White text and icons on solid accent fills |
+| `accent-cyan` | `#38CCFF` | The BridgeMind mark's blue |
 | `success` · `warning` · `danger` | `#4ADE80` · `#FBBF24` · `#FF6B6E` | Status only |
 | `brand.gold` | `#FFD500` | The virality score icon |
 
 Every token supports alpha modifiers: `bg-accent/10`, `text-danger`. Don't use `from-`/`via-`/`to-` gradient stops.
 
-Use `accent-ink` for foregrounds on solid accent fills: `text-accent-ink` for text and icons, `bg-accent-ink` for switch thumbs. White text does not have enough contrast on this blue. Keep buttons crisp with a subtle edge and no text shadow. Editor selections, crops and timeline controls use these same tokens rather than separate blues.
+Use `accent-ink` for foregrounds on solid accent fills: `text-accent-ink` for text and icons, `bg-accent-ink` for switch thumbs. Keep buttons dark blue on hover so white labels stay legible; use the lighter `accent-hover` for text on dark surfaces. Keep buttons crisp with a subtle edge and no text shadow. Editor selections, crops and timeline controls use these same tokens rather than separate blues.
 
 ---
 

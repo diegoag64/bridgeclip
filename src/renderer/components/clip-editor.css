@@ -57,7 +57,7 @@
 .editor-trim-handle:after { content:''; display:block; height:16px; width:3px; margin:auto; border-inline:1px solid rgb(var(--ink) / .65); }
 .editor-timeline-tools { display:flex; align-items:center; flex-wrap:wrap; gap:4px; margin-bottom:12px; }
 .editor-motion { border-top:1px solid #ffffff12; padding-top:14px; }
-.editor-trim-handle:hover { background:rgb(var(--accent-hover)); }
+.editor-trim-handle:hover { background:rgb(var(--accent-button-hover)); }
 .editor-trim-handle:hover:after { border-color:rgb(var(--accent-ink)); }
 .editor-playhead { position:absolute; top:0; bottom:0; width:1px; background:#eff3ff; pointer-events:none; }
 .editor-playhead:before { content:''; position:absolute; top:0; left:-4px; width:9px; height:6px; background:#eff3ff; border-radius:1px; }

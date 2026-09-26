@@ -36,10 +36,11 @@
     --ink-subtle: 124 129 144;
     --ink-faint: 84 89 103;
 
-    --accent: 56 204 255;       /* BridgeMind mark's cyan-blue */
-    --accent-hover: 102 216 255;
-    --accent-ink: 7 24 33;      /* Dark ink keeps solid cyan controls legible. */
-    --accent-cyan: var(--accent);
+    --accent: 26 95 223;        /* Primary blue: #1A5FDF */
+    --accent-hover: 133 172 244; /* Lighter accent for text on dark surfaces. */
+    --accent-button-hover: 40 107 229;
+    --accent-ink: 255 255 255;
+    --accent-cyan: 56 204 255;  /* BridgeMind mark */
 
     --success: 74 222 128;
     --danger: 255 107 110;
@@ -253,11 +254,11 @@
   }
 
   .btn-primary:hover:not(:disabled) {
-    background: rgb(var(--accent-hover));
+    background: rgb(var(--accent-button-hover));
     box-shadow:
       inset 0 1px 0 rgb(255 255 255 / 0.2),
       inset 0 -1px 0 rgb(0 0 0 / 0.12),
-      0 0 0 1px rgb(var(--accent-hover) / 0.7);
+      0 0 0 1px rgb(var(--accent-button-hover) / 0.7);
   }
 
   .btn-primary:disabled {
