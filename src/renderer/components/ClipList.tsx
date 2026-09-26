@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { ArrowLeft, Check, Clapperboard, Download, FolderOpen, ListPlus, Plus, Send } from 'lucide-react'
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
+import { ArrowLeft, Check, ChevronDown, Clapperboard, Download, FolderOpen, ListPlus, Plus, Send } from 'lucide-react'
 import { basename, cn, errorMessage } from '../lib/utils'
 import { getApi } from '../lib/ipc'
 import { clipFilePath } from '../lib/thumbnails'
@@ -52,6 +52,7 @@ export function ClipList({ output, outputDir: runDirectory, leading, onNewClip, 
   const [postingStatus, setPostingStatus] = useState<LibraryClipPostingStatus[] | null>(null)
   const [postingError, setPostingError] = useState<string | null>(null)
   const [postedExpanded, setPostedExpanded] = useState(false)
+  const [unpostedExpanded, setUnpostedExpanded] = useState(true)
   const [statusRetry, setStatusRetry] = useState(0)
   const [sort, setSort] = useState<Sort>('score')
   const [weights, setWeights] = useState({ ...defaultWeights })
@@ -114,7 +115,7 @@ export function ClipList({ output, outputDir: runDirectory, leading, onNewClip, 
     return () => { active = false }
   }, [outputDir, postRecords, statusRetry])
 
-  useEffect(() => { setPostingStatus(null); setPostedExpanded(false) }, [outputDir])
+  useEffect(() => { setPostingStatus(null); setPostedExpanded(false); setUnpostedExpanded(true) }, [outputDir])
 
   const topIndex = useMemo(() => {
     let best: ClipArtifact | null = null
@@ -133,7 +134,7 @@ export function ClipList({ output, outputDir: runDirectory, leading, onNewClip, 
   const statusByClip = new Map(postingStatus?.map((status) => [status.clipIndex, status]))
   const unposted = clips.filter((clip) => statusByClip.get(clip.clip_index)?.state !== 'posted')
   const posted = clips.filter((clip) => statusByClip.get(clip.clip_index)?.state === 'posted')
-  const visibleClips = postedExpanded ? clips : unposted
+  const visibleClips = [...(unpostedExpanded ? unposted : []), ...(postedExpanded ? posted : [])]
   const visibleIds = visibleClips.map((clip) => clip.clip_index).join(',')
   useEffect(() => {
     const visible = new Set(visibleIds.split(',').filter(Boolean).map(Number))
@@ -343,18 +344,18 @@ export function ClipList({ output, outputDir: runDirectory, leading, onNewClip, 
         />
       ) : (
         <>
-          <div className="mt-5 flex items-center justify-between gap-3">
-            <h2 className="text-base font-semibold text-ink">{postingStatus ? `Not posted · ${unposted.length}` : 'Clips'}</h2>
+          <div className="mt-4 flex justify-end">
             <Button size="sm" variant="ghost" onClick={() => { void usePostsStore.getState().refresh(true); setStatusRetry((value) => value + 1) }}>Refresh post status</Button>
           </div>
-          {postingError && <Callout tone="warning" className="mt-3">{postingError} All clips remain visible.</Callout>}
+          {postingError && <Callout tone="warning" className="mt-3">{postingError} Clips are listed together below.</Callout>}
           {configured && refreshError && !postingError && <Callout tone="warning" className="mt-3">{refreshError} Showing saved posting status.</Callout>}
           {!postingStatus && !postingError && <p role="status" className="mt-2 text-xs text-ink-muted">Checking posting history…</p>}
-          {unposted.length ? renderGrid(unposted) : <p className="mt-3 text-sm text-ink-muted">All clips in this run have been posted.</p>}
-          {posted.length > 0 && <section className="mt-6 border-t border-white/[0.08] pt-4">
-            <Button variant="ghost" aria-expanded={postedExpanded} onClick={() => setPostedExpanded((value) => !value)}>{postedExpanded ? 'Hide' : 'Show'} posted · {posted.length}</Button>
-            {postedExpanded && renderGrid(posted)}
-          </section>}
+          <ClipGroup title={postingStatus ? 'Not Posted' : 'Clips'} count={unposted.length} expanded={unpostedExpanded} onToggle={() => setUnpostedExpanded((value) => !value)}>
+            {unposted.length ? renderGrid(unposted) : <p className="mt-3 text-sm text-ink-muted">All clips in this run have been posted.</p>}
+          </ClipGroup>
+          {postingStatus && <ClipGroup title="Posted" count={posted.length} expanded={postedExpanded} onToggle={() => setPostedExpanded((value) => !value)}>
+            {posted.length ? renderGrid(posted) : <p className="mt-3 text-sm text-ink-muted">No clips in this run have been posted yet.</p>}
+          </ClipGroup>}
         </>
       )}
 
@@ -376,6 +377,20 @@ export function ClipList({ output, outputDir: runDirectory, leading, onNewClip, 
       />}
     </Page>
   )
+}
+
+function ClipGroup({ title, count, expanded, onToggle, children }: { title: string; count: number; expanded: boolean; onToggle: () => void; children: ReactNode }): React.JSX.Element {
+  const id = useId()
+  return <section className="mt-4">
+    <h2>
+      <button type="button" id={`${id}-heading`} aria-expanded={expanded} aria-controls={`${id}-content`} onClick={onToggle}
+        className="glass-well flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left text-base font-semibold text-ink transition-colors hover:bg-white/[0.06]">
+        <ChevronDown aria-hidden className={cn('h-4 w-4 shrink-0 text-ink-muted transition-transform', !expanded && '-rotate-90')} />
+        <span>{title}</span><span className="ml-auto font-mono text-sm font-normal tabular text-ink-muted">{count}</span>
+      </button>
+    </h2>
+    <div id={`${id}-content`} role="region" aria-labelledby={`${id}-heading`} hidden={!expanded}>{expanded && children}</div>
+  </section>
 }
 
 /** Quiet link that returns from a run to the list it was opened from (ClipList's `leading`). */
