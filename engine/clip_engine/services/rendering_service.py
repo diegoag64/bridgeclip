@@ -95,6 +95,8 @@ class RenderRequest:
     transcript_segments: Optional[list[TranscriptSegment]] = None
     include_captions: bool = True
     caption_style: Optional[CaptionStyle] = None
+    # Hide only our caption layer in these source-time intervals.
+    caption_suppression_ranges_ms: list[tuple[int, int]] = field(default_factory=list)
 
     title_text: Optional[str] = None
     # Planner-chosen punch words highlighted in the captions.
@@ -506,7 +508,7 @@ class RenderingService:
         caption_path = await self._generate_captions(
             request, target_width, target_height, window_start_ms, time_map, out_plan, is_landscape, plan,
         )
-        graph += f";[base]{self._caption_filter(caption_path)}[captioned]"
+        graph += self._caption_graph(caption_path, request.caption_suppression_ranges_ms, window_start_ms, time_map)
         overlays = self._overlays(request, out_plan, target_width, target_height, is_landscape)
         # Burn captions and animate framing/overlays on the edited source clock,
         # then speed up the entire composited picture to match the tempo audio.
@@ -633,6 +635,41 @@ class RenderingService:
                     banner_y(s, src_w, src_h, target_width, target_height) for s in out_plan.shots
                 ])))
         return overlays
+
+    def _caption_graph(
+        self, caption_path: Optional[str], suppressed: list[tuple[int, int]],
+        window_start_ms: int, time_map: TimeMap,
+    ) -> str:
+        """Cover our captions with the clean frame during source-time exclusions.
+
+        Keeping ASS on its original clock preserves karaoke, animation and linger
+        across suppression boundaries. Speed is applied to this composite later.
+        """
+        intervals = []
+        if caption_path:
+            for a, b in suppressed:
+                a = time_map.to_output_clamped(a - window_start_ms)
+                b = time_map.to_output_clamped(b - window_start_ms)
+                if b > a:
+                    if intervals and a <= intervals[-1][1]:
+                        intervals[-1] = (intervals[-1][0], max(b, intervals[-1][1]))
+                    else:
+                        intervals.append((a, b))
+        caption_filter = self._caption_filter(caption_path)
+        if not intervals:
+            return f";[base]{caption_filter}[captioned]"
+        # FFmpeg's expression parser rejects long addition chains (100 terms
+        # on supported builds). Bound each enable expression independently while
+        # drawing ASS once, so animation and linger keep their original clock.
+        groups = [intervals[i:i + 32] for i in range(0, len(intervals), 32)]
+        clean = ''.join(f'[caption_clean_{i}]' for i in range(len(groups)))
+        graph = (f";[base]split={len(groups) + 1}[caption_input]{clean}"
+                 f";[caption_input]{caption_filter}[caption_drawn_0]")
+        for i, group in enumerate(groups):
+            enabled = '+'.join(f'gte(t,{a / 1000:.3f})*lt(t,{b / 1000:.3f})' for a, b in group)
+            output = 'captioned' if i == len(groups) - 1 else f'caption_drawn_{i + 1}'
+            graph += f";[caption_drawn_{i}][caption_clean_{i}]overlay=enable='{enabled}':format=auto[{output}]"
+        return graph
 
     def _caption_filter(self, caption_path: Optional[str]) -> str:
         """`ass=` filter for the caption file, or a no-op."""

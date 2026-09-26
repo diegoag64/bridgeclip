@@ -12,7 +12,7 @@ interface Action {
 }
 
 /** A keyboard-accessible actions menu that stays above scrolling panels. */
-export function ActionMenu({ label, actions, disabled }: { label: string; actions: Action[]; disabled?: boolean }): React.JSX.Element {
+export function ActionMenu({ label, actions, disabled, icon, triggerClassName }: { label: string; actions: Action[]; disabled?: boolean; icon?: ReactNode; triggerClassName?: string }): React.JSX.Element {
   const id = useId()
   const trigger = useRef<HTMLButtonElement>(null)
   const menu = useRef<HTMLDivElement>(null)
@@ -62,12 +62,12 @@ export function ActionMenu({ label, actions, disabled }: { label: string; action
   useEffect(() => { if (disabled) close() }, [disabled, close])
 
   return <>
-    <button ref={trigger} type="button" aria-label={label} title="Actions" aria-haspopup="menu" aria-expanded={open} aria-controls={open ? id : undefined}
-      disabled={disabled} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-ink-muted hover:bg-white/[0.08] hover:text-ink disabled:opacity-40"
+    <button ref={trigger} type="button" aria-label={label} title={label} aria-haspopup="menu" aria-expanded={open} aria-controls={open ? id : undefined}
+      disabled={disabled} className={cn('flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-ink-muted hover:bg-white/[0.08] hover:text-ink disabled:opacity-40', triggerClassName)}
       onClick={() => { last.current = false; setOpen(!open) }}
       onKeyDown={(event) => {
         if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); last.current = event.key === 'ArrowUp'; setOpen(true) }
-      }}><Ellipsis aria-hidden className="h-4 w-4" /></button>
+      }}>{icon ?? <Ellipsis aria-hidden className="h-4 w-4" />}</button>
     {open && <div ref={menu} id={id} role="menu" aria-label={label} popover="manual"
       className={cn(MENU_SURFACE, 'fixed inset-auto z-[120] m-0 min-w-40 border-0')} style={{ top: -9999, left: -9999 }}
       onKeyDown={(event) => {

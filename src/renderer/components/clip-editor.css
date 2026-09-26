@@ -100,3 +100,13 @@
 .editor-overview { height:14px; position:relative; margin-bottom:10px; background:#ffffff03; border-radius:2px; }
 .editor-overview button { height:4px; min-width:3px; position:absolute; background:rgb(var(--ink-subtle) / .27); border-radius:2px; }
 .editor-overview button.selected { background:rgb(var(--accent)); }
+
+.editor-caption-track { position:relative; height:10px; margin-top:5px; border-radius:3px; background:#ffffff08; }
+.editor-caption-track button { position:absolute; top:0; height:100%; min-width:2px; border-radius:2px; background:#f5b55d99; }
+.editor-caption-track button:hover, .editor-caption-track button:focus-visible { background:#f5b55d; }
+.editor-caption-range { padding:8px; border:1px solid #ffffff14; border-radius:6px; }
+.editor-caption-range .editor-time-input { display:block; margin-top:4px; }
+
+.editor-bake-actions { display:flex; align-items:center; flex-shrink:0; }
+.editor-bake-actions > button:first-child { border-radius:999px 0 0 999px; }
+.editor-bake-actions > .editor-bake-toggle { border-radius:0 999px 999px 0; border-left:1px solid #ffffff30; }

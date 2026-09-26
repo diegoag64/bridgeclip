@@ -21,12 +21,12 @@ import { ConfirmDialog, type ConfirmRequest } from '../components/ui/ConfirmDial
 import { HoverCard } from '../components/ui/HoverCard'
 import type { Page as AppPage } from '../components/Sidebar'
 
-export function LibraryPage({ onNavigate, initialRun }: { onNavigate: (page: AppPage) => void; initialRun?: string | null }): React.JSX.Element {
+export function LibraryPage({ onNavigate, initialRun, initialClipIndex }: { onNavigate: (page: AppPage) => void; initialRun?: string | null; initialClipIndex?: number }): React.JSX.Element {
   const initialRunOpened = useRef(false)
   const outputDirectory = useSettingsStore((s) => s.outputDirectory)
   const [entries, setEntries] = useState<HistoryEntry[] | null>(null)
   const [query, setQuery] = useState('')
-  const [open, setOpen] = useState<{ entry: HistoryEntry; output: JobOutput } | null>(null)
+  const [open, setOpen] = useState<{ entry: HistoryEntry; output: JobOutput; clipIndex?: number } | null>(null)
   const requestId = useRef(0)
   const openRequestId = useRef(0)
   const [error, setError] = useState<string | null>(null)
@@ -106,7 +106,7 @@ export function LibraryPage({ onNavigate, initialRun }: { onNavigate: (page: App
 
   const totalClips = entries?.reduce((sum, e) => sum + e.clipCount, 0) ?? 0
 
-  const openRun = useCallback(async (entry: HistoryEntry): Promise<void> => {
+  const openRun = useCallback(async (entry: HistoryEntry, clipIndex?: number): Promise<void> => {
     if (busyRef.current.has(entry.outputDir)) return
     const request = ++openRequestId.current
     setError(null)
@@ -122,7 +122,7 @@ export function LibraryPage({ onNavigate, initialRun }: { onNavigate: (page: App
         setError('This run has an unsupported or damaged result file.')
         return
       }
-      setOpen({ entry, output: parsed })
+      setOpen({ entry, output: parsed, clipIndex })
       document.getElementById('page-scroll')?.scrollTo({ top: 0 })
     } catch (err) {
       if (request === openRequestId.current) setError(errorMessage(err, 'Could not open this run.'))
@@ -133,9 +133,9 @@ export function LibraryPage({ onNavigate, initialRun }: { onNavigate: (page: App
     if (!initialRun || !entries || initialRunOpened.current) return
     initialRunOpened.current = true
     const entry = entries.find((item) => item.outputDir === initialRun)
-    if (entry) void openRun(entry)
+    if (entry) void openRun(entry, initialClipIndex)
     else setError('The source run is no longer in this Library. It may have been moved or deleted.')
-  }, [initialRun, entries, openRun])
+  }, [initialRun, initialClipIndex, entries, openRun])
 
   const changeRun = async (entry: HistoryEntry, action: 'favorite' | 'delete'): Promise<void> => {
     if (busyRef.current.has(entry.outputDir)) return
@@ -173,6 +173,7 @@ export function LibraryPage({ onNavigate, initialRun }: { onNavigate: (page: App
       <ClipList
         output={open.output}
         outputDir={open.entry.outputDir}
+        initialClipIndex={open.clipIndex}
         onNavigate={onNavigate}
         leading={<BackLink label="Library" onClick={() => {
           setOpen(null)

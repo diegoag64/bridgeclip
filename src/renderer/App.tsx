@@ -22,7 +22,7 @@ export default function App(): React.JSX.Element {
   const [retry, setRetry] = useState(0)
   const [page, setPage] = useState<Page>('clip')
   const [pageVisit, setPageVisit] = useState(0)
-  const [libraryRun, setLibraryRun] = useState<string | null>(null)
+  const [libraryRun, setLibraryRun] = useState<{ outputDir: string; clipIndex?: number } | null>(null)
   /** Set when Help → Check for Updates… asks for Settings → About. */
   const [showUpdates, setShowUpdates] = useState(0)
 
@@ -44,8 +44,8 @@ export default function App(): React.JSX.Element {
   }, [])
 
   useEffect(() => { if (page !== 'library') setLibraryRun(null) }, [page])
-  const viewLibraryRun = useCallback((outputDir: string): void => {
-    setLibraryRun(outputDir)
+  const viewLibraryRun = useCallback((outputDir: string, clipIndex?: number): void => {
+    setLibraryRun({ outputDir, clipIndex })
     setPage('library')
     setPageVisit((visit) => visit + 1)
   }, [])
@@ -109,7 +109,7 @@ export default function App(): React.JSX.Element {
         <Layout currentPage={page} onNavigate={navigateRoot}>
           <Fragment key={pageVisit}>
             {page === 'clip' && <ClipPage onNavigate={setPage} />}
-            {page === 'library' && <LibraryPage onNavigate={setPage} initialRun={libraryRun} />}
+            {page === 'library' && <LibraryPage onNavigate={setPage} initialRun={libraryRun?.outputDir} initialClipIndex={libraryRun?.clipIndex} />}
             {page === 'jobs' && <JobsPage onNavigate={setPage} onViewLibrary={viewLibraryRun} />}
             {page === 'accounts' && <AccountsPage onNavigate={setPage} />}
             {page === 'posts' && <PostsPage onNavigate={setPage} />}

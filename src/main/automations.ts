@@ -1,3 +1,4 @@
+import type { LibraryClipTarget } from '../shared/library-posting'
 import { app } from 'electron'
 import { createHash, randomUUID } from 'crypto'
 import { createWriteStream, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'fs'
@@ -17,7 +18,7 @@ import { workspaceId } from './zernio/workspace-cache'
 import { logger } from './logger'
 import { generateAutomationMetadata, transcribeAutomationClip, researchAutomationTopic, generateAutomationMetadataBatch, metadataFailureCode, type MetadataBatchClip } from './automation-metadata'
 
-import { completeSourceContext, findLibraryRunForClip, parseSourceContext, recoverSourceContext, sourceFromOutput, sourceResearchKey } from './automation-source'
+import { completeSourceContext, findLibraryClipForClip, parseSourceContext, recoverSourceContext, sourceFromOutput, sourceResearchKey } from './automation-source'
 import { reorderQueuedContent } from '../shared/automations'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -288,7 +289,7 @@ function checkProfileAccounts(overview: ZernioOverview, profileId: string, accou
 
 export function listAutomations(): Automation[] { return structuredClone(data().automations) }
 
-export async function automationLibraryRun(id: unknown, contentId: unknown): Promise<string | null> {
+export async function automationLibraryClip(id: unknown, contentId: unknown): Promise<LibraryClipTarget | null> {
   const { workspace, automation } = find(id)
   const item = automation.content.find((entry) => entry.id === contentId)
   if (!item) throw new Error('Clip not found.')
@@ -296,7 +297,7 @@ export async function automationLibraryRun(id: unknown, contentId: unknown): Pro
   const path = join(bankPath(workspace, automation.id), item.fileName)
   const validBank = isAutomationMedia(path)
   if (validBank) authorizeMedia(path)
-  const run = await findLibraryRunForClip(validBank ? path : null, library, item.sourceClipPath)
+  const run = await findLibraryClipForClip(validBank ? path : null, library, item.sourceClipPath)
   if (currentWorkspace() !== workspace || loadSettings().outputDirectory !== library || !cached.includes(automation) || !automation.content.includes(item)) throw new Error('The automation changed. Try again.')
   return run
 }
