@@ -1,3 +1,4 @@
+import { JsonViewer } from './ui/JsonViewer'
 import { defaultWeights, scoreNames, type EditorialTrace, type Judgment, type ScoreName } from '../../shared/editorial'
 import { formatTimecode } from '../lib/utils'
 
@@ -24,7 +25,7 @@ function JudgmentDetails({ value }: { value: Judgment }): React.JSX.Element {
         <td>{a.type === 'noul' ? '—' : `${(a.confidence * 100).toFixed(1)}%`}</td>
       </tr>)}</tbody></table>
     <p className="text-ink-subtle">Noul is probability of yes. Concentration describes the answer distribution, not correctness.</p>
-    <details><summary className="cursor-pointer text-ink-muted">Questions, distributions and cache provenance</summary><pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words text-2xs">{JSON.stringify(value, null, 2)}</pre></details>
+    <details><summary className="cursor-pointer text-ink-muted">Questions, distributions and cache provenance</summary><JsonViewer className="mt-3" value={value} /></details>
   </div>
 }
 
@@ -40,15 +41,15 @@ export function RecordedEditorialReview({ trace, seek }: { trace: EditorialTrace
     {trace.candidates.map((candidate, i) => <details key={i} className="rounded-lg border border-white/10 p-3">
       <summary className="cursor-pointer text-xs">{formatTimecode(candidate.interval[0])}–{formatTimecode(candidate.interval[1])} · {label(candidate.decision)} · {label(candidate.reason)}</summary>
       <div className="mt-3 space-y-3"><JudgmentDetails value={candidate.judgment} />
-        <details><summary className="cursor-pointer text-xs text-ink-muted">Observed facts, dialogue and visual inferences</summary><pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words text-2xs">{JSON.stringify({ evidence: candidate.evidence, overlappingLayouts: candidate.layout_segments, visual: candidate.visual, evaluations: candidate.judgment_history.map((judgment, i) => ({ judgment, evidence: candidate.evidence_history[i] })) }, null, 2)}</pre></details>
+        <details><summary className="cursor-pointer text-xs text-ink-muted">Observed facts, dialogue and visual inferences</summary><JsonViewer className="mt-3" value={{ evidence: candidate.evidence, overlappingLayouts: candidate.layout_segments, visual: candidate.visual, evaluations: candidate.judgment_history.map((judgment, i) => ({ judgment, evidence: candidate.evidence_history[i] })) }} /></details>
       </div>
     </details>)}
     {trace.qa && <details className="rounded-lg border border-white/10 p-3"><summary className="cursor-pointer text-xs">Final retained clip · context, title and editorial scores</summary>
       <div className="mt-3"><JudgmentDetails value={trace.qa.judgment} /></div>
-      <pre className="mt-3 max-h-64 overflow-auto whitespace-pre-wrap break-words text-2xs">{JSON.stringify(trace.qa.evidence, null, 2)}</pre>
+      <JsonViewer className="mt-3" value={trace.qa.evidence} />
     </details>}
     {trace.fillers.length > 0 && <details><summary className="cursor-pointer text-xs">Acknowledgments & hesitation</summary>
-      <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words text-2xs">{JSON.stringify(trace.fillers, null, 2)}</pre></details>}
-    {trace.duplicates.map((d, i) => <details key={i}><summary className="cursor-pointer text-xs">Takeaway comparison with clip {d.other_clip + 1} · review only</summary><JudgmentDetails value={d.judgment} /><pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words text-2xs">{JSON.stringify(d.evidence, null, 2)}</pre></details>)}
+      <JsonViewer className="mt-3" value={trace.fillers} /></details>}
+    {trace.duplicates.map((d, i) => <details key={i}><summary className="cursor-pointer text-xs">Takeaway comparison with clip {d.other_clip + 1} · review only</summary><JudgmentDetails value={d.judgment} /><JsonViewer className="mt-3" value={d.evidence} /></details>)}
   </section>
 }

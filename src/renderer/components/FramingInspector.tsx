@@ -1,3 +1,4 @@
+import { JsonViewer } from './ui/JsonViewer'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Pause, Play, X } from 'lucide-react'
 import type { ClipArtifact } from '../../shared/job-output'
@@ -37,7 +38,7 @@ export function FramingInspector({ outputDir, clip, onClose }: { outputDir: stri
     const handler = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') { event.preventDefault(); onClose() }
       if (event.key === 'Tab') {
-        const focusable = [...(panel.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input, select, summary, [tabindex="0"]') ?? [])]
+        const focusable = [...(panel.current?.querySelectorAll<HTMLElement>('button:not(:disabled):not([tabindex="-1"]), input, textarea, select, summary, [tabindex="0"]') ?? [])].filter(item => item.getClientRects().length > 0)
         const first = focusable[0], last = focusable.at(-1)
         if (event.shiftKey && (document.activeElement === first || document.activeElement === panel.current)) { event.preventDefault(); last?.focus() }
         else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
@@ -209,8 +210,8 @@ function TraceView({ trace, inspection, mediaUrl }: { trace: FramingTrace; inspe
           {!trace.boundaries.some((b) => Math.abs(b.t_ms - t) <= 1500) && <p className="text-ink-subtle">No recorded transition within 1.5 seconds.</p>}
           {trace.attempts.map((a, i) => <p key={i}>Attempt {i + 1}: {a.fallback ?? 'planned framing'} · <span className={a.status === 'failed' ? 'text-amber-300' : 'text-green-300'}>{a.status}</span>{a.failure ? ` (${a.failure})` : ''}</p>)}
         </div>
-        <details className="mt-4"><summary className="cursor-pointer text-ink-muted">Attempted vs rendered plans</summary><pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap text-2xs">{JSON.stringify({ attempted: trace.attempted_plan.map((s) => [s.start_ms, s.end_ms, s.layout]), rendered: trace.rendered_plan.map((s) => [s.start_ms, s.end_ms, s.layout]) }, null, 2)}</pre></details>
-        <details className="mt-3"><summary className="cursor-pointer text-ink-muted">Recorded thresholds & configuration</summary><pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap text-2xs">{JSON.stringify({ version: trace.version, ...trace.config, ...trace.thresholds }, null, 2)}</pre></details>
+        <details className="mt-4"><summary className="cursor-pointer text-ink-muted">Attempted vs rendered plans</summary><JsonViewer className="mt-3" value={{ attempted: trace.attempted_plan.map((s) => [s.start_ms, s.end_ms, s.layout]), rendered: trace.rendered_plan.map((s) => [s.start_ms, s.end_ms, s.layout]) }} /></details>
+        <details className="mt-3"><summary className="cursor-pointer text-ink-muted">Recorded thresholds & configuration</summary><JsonViewer className="mt-3" value={{ version: trace.version, ...trace.config, ...trace.thresholds }} /></details>
         <p className="mt-3 text-2xs text-ink-subtle">Crop paths come from renderer geometry. Detection boxes are sampled at {trace.sample_fps} fps and held briefly; no per-frame detection is implied. Playback and scrubbing make no AI calls.</p>
       </section>
     </div>

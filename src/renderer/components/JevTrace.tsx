@@ -1,3 +1,4 @@
+import { JsonViewer } from './ui/JsonViewer'
 import { useId, useMemo, useState } from 'react'
 import type { CoherenceTrace, EditorialRecord, EditorialTrace, Judgment, JudgmentAnswer } from '../../shared/editorial'
 import { formatTimecode } from '../lib/utils'
@@ -121,10 +122,10 @@ export function JevTrace({ trace }: { trace: EditorialTrace | null }): React.JSX
       <p className="mt-2">Yes percentages are Jev’s probability of “yes.” For choices and scores, confidence describes distribution concentration, not guaranteed correctness. The recorded decision also accounts for evidence and edit constraints.</p>
     </details>
     <details className="rounded-lg border border-white/10 p-3 text-xs"><summary className="cursor-pointer text-purple-300">Saved input evidence · transcript & context</summary>
-      <pre className="mt-3 max-h-96 overflow-auto whitespace-pre-wrap break-words">{entry.evidence ? JSON.stringify(entry.evidence, null, 2) : 'Input evidence was not saved for this evaluation.'}</pre>
+      <div className="mt-3">{entry.evidence ? <JsonViewer label="Saved input evidence" value={entry.evidence} /> : <p>Input evidence was not saved for this evaluation.</p>}</div>
     </details>
     {judgment && <details className="rounded-lg border border-white/10 p-3 text-xs"><summary className="cursor-pointer text-ink-muted">Full saved request / result · model, tokens, cost & cache</summary>
-      <pre className="mt-3 max-h-96 overflow-auto whitespace-pre-wrap break-words">{JSON.stringify({ state: entry.evidence, ...judgment }, null, 2)}</pre>
+      <JsonViewer className="mt-3" value={{ state: entry.evidence, ...judgment }} />
     </details>}
   </section>
 }
