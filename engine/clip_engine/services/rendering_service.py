@@ -658,9 +658,18 @@ class RenderingService:
         caption_filter = self._caption_filter(caption_path)
         if not intervals:
             return f";[base]{caption_filter}[captioned]"
-        enabled = '+'.join(f'gte(t,{a / 1000:.3f})*lt(t,{b / 1000:.3f})' for a, b in intervals)
-        return (f";[base]split=2[caption_input][caption_clean];[caption_input]{caption_filter}[caption_drawn]"
-                f";[caption_drawn][caption_clean]overlay=enable='{enabled}':format=auto[captioned]")
+        # FFmpeg's expression parser rejects long addition chains (100 terms
+        # on supported builds). Bound each enable expression independently while
+        # drawing ASS once, so animation and linger keep their original clock.
+        groups = [intervals[i:i + 32] for i in range(0, len(intervals), 32)]
+        clean = ''.join(f'[caption_clean_{i}]' for i in range(len(groups)))
+        graph = (f";[base]split={len(groups) + 1}[caption_input]{clean}"
+                 f";[caption_input]{caption_filter}[caption_drawn_0]")
+        for i, group in enumerate(groups):
+            enabled = '+'.join(f'gte(t,{a / 1000:.3f})*lt(t,{b / 1000:.3f})' for a, b in group)
+            output = 'captioned' if i == len(groups) - 1 else f'caption_drawn_{i + 1}'
+            graph += f";[caption_drawn_{i}][caption_clean_{i}]overlay=enable='{enabled}':format=auto[{output}]"
+        return graph
 
     def _caption_filter(self, caption_path: Optional[str]) -> str:
         """`ass=` filter for the caption file, or a no-op."""

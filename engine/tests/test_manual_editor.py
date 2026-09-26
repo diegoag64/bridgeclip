@@ -422,3 +422,51 @@ def test_caption_suppression_pixels_follow_source_cuts_and_speed(monkeypatch, tm
         assert frame[15, 20, 0] > 200 and frame[15, 20, 1] > 200 and frame[15, 20, 2] < 50
         caption_pixels = np.count_nonzero(frame[40:, :, :].max(axis=2) > 100)
         assert (caption_pixels == 0) if hidden else (caption_pixels > 5), (ms, hidden, caption_pixels)
+
+
+@pytest.mark.parametrize('count', [99, 100, 200])
+def test_caption_suppression_many_sections_render_with_ffmpeg(tmp_path, count):
+    """Exercise the parser limit and every accepted section using the actual graph."""
+    import shutil
+    import subprocess
+    import numpy as np
+    from clip_engine.services.clip_editor import TimeMap
+
+    if not shutil.which('ffmpeg'):
+        pytest.skip('FFmpeg is needed for the caption suppression render check')
+    duration_ms = count * 200
+    intervals = [[i * 200, i * 200 + 100] for i in range(count)]
+    c = {**candidate(), 'ranges': [[0, duration_ms]],
+        'scenes': [{'at_ms': 0, 'layout': 'fill', 'crops': [[0, 0, 1, 1]]}],
+        'caption_suppression_ranges': intervals}
+    validate_candidate(c, duration_ms)
+    captions = tmp_path / 'captions.ass'
+    captions.write_text('''[Script Info]
+ScriptType: v4.00+
+PlayResX: 160
+PlayResY: 240
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, Alignment
+Style: Default,Arial,24,&H00FFFFFF,2
+[Events]
+Format: Layer, Start, End, Style, Text
+Dialogue: 0,0:00:00.00,0:01:00.00,Default,CAPTIONS
+''')
+    renderer = RenderingService()
+    graph = '[0:v]null[base]' + renderer._caption_graph(
+        str(captions), intervals, 0, TimeMap([(0, duration_ms)]))
+    result = subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i',
+        f'color=c=black:s=160x240:r=20:d={duration_ms / 1000},drawbox=x=10:y=10:w=30:h=10:color=yellow:t=fill',
+        '-filter_complex', graph, '-map', '[captioned]', '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'],
+        capture_output=True, timeout=60)
+    assert result.returncode == 0, result.stderr.decode(errors='replace')
+    frames = np.frombuffer(result.stdout, dtype=np.uint8).reshape(-1, 240, 160, 3)
+    assert len(frames) == count * 4
+    for i in range(count):
+        # Sample halfway through each exclusion and the following visible gap,
+        # including across expression-group boundaries and the last section.
+        for offset, hidden in [(1, True), (3, False)]:
+            frame = frames[i * 4 + offset]
+            assert frame[15, 20, 0] > 200 and frame[15, 20, 1] > 200 and frame[15, 20, 2] < 50
+            caption_pixels = np.count_nonzero(frame[40:, :, :].max(axis=2) > 100)
+            assert (caption_pixels == 0) if hidden else (caption_pixels > 5), (i, hidden, caption_pixels)
