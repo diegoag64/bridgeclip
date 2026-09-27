@@ -85,7 +85,7 @@ export function JobTimeline({ job }: { job: Job }): React.JSX.Element {
       })}
     </ol>
     {total > 0 && <section className="studio-timing" aria-label="Time by stage">
-      <div className="mb-3 flex justify-between text-xs"><span className="text-ink-muted">Where the time went</span><span className="font-mono tabular text-ink-subtle">{formatTimecode(total)} tracked</span></div>
+      <div className="mb-3 flex justify-between text-xs"><span className="text-ink-muted">Job Breakdown</span><span className="font-mono tabular text-ink-subtle">{formatTimecode(total)} tracked</span></div>
       <div className="studio-time-strip" aria-hidden="true">{stages.filter(stage => elapsed(stage) > 0).map(stage => <div key={stage.id}
         data-state={stage.state} style={{ flexGrow: elapsed(stage) }} title={`${LABELS[stage.id]} · ${formatTimecode(elapsed(stage))}`} />)}</div>
       <div className="studio-time-legend">{stages.filter(stage => elapsed(stage) > 0).map(stage => <span key={stage.id} data-state={stage.state}>
