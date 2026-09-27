@@ -245,9 +245,15 @@ export function snapFrame(frames: number[], time: number): number {
   return i && time - frames[i - 1] < frames[i] - time ? frames[i - 1] : frames[i]
 }
 export function stepFrame(frames: number[], time: number, direction: -1 | 1): number {
+  // Scans cover only part of the source. Continue with the pre-scan 30 fps
+  // estimate outside that window, stopping at a known frame when re-entering.
+  const fallback = time + direction * 1000 / 30
+  if (!frames.length) return fallback
+  if (time < frames[0] - .01) return direction > 0 ? Math.min(frames[0], fallback) : fallback
+  if (time > frames[frames.length - 1] + .01) return direction < 0 ? Math.max(frames[frames.length - 1], fallback) : fallback
   const i = frameIndex(frames, time)
-  if (direction < 0) return frames[Math.max(0, i - 1)] ?? time
-  return frames[Math.min(frames.length - 1, i + (Math.abs((frames[i] ?? Infinity) - time) < .01 ? 1 : 0))] ?? time
+  if (direction < 0) return frames[i - 1] ?? fallback
+  return frames[i + (Math.abs((frames[i] ?? Infinity) - time) < .01 ? 1 : 0)] ?? fallback
 }
 export function cameraMarkers(c: EditorCandidate, threshold: number): CameraScan['markers'] {
   const dismissed = new Set(c.dismissed_camera_markers ?? [])

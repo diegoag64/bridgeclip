@@ -179,3 +179,88 @@ test('camera scanning, exact frame edits, dismissals and Space playback survive 
   await page.getByText('All changes saved', { exact: true }).waitFor()
   assert.deepEqual(errors, [])
 })
+
+// The frame list is intentionally narrower than the source. Reaching its end
+// (including normal playback stopping at the clip end) must never trap navigation.
+test('timeline seeking preserves playback and frame controls recover from edges', { timeout: 90000 }, async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bridgeclip-frame-edges-'))
+  const userDataDir = path.join(root, 'user-data'), run = path.join(userDataDir, 'BridgeClip', 'edge-run')
+  fs.mkdirSync(run, { recursive: true })
+  const ffmpeg = fs.existsSync(path.join(ROOT, 'engine-bin/ffmpeg')) ? path.join(ROOT, 'engine-bin/ffmpeg') : 'ffmpeg'
+  execFileSync(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=30:duration=5', '-c:v', process.platform === 'darwin' ? 'h264_videotoolbox' : 'libx264', '-pix_fmt', 'yuv420p', path.join(run, 'editor-source.mp4')])
+  fs.copyFileSync(path.join(run, 'editor-source.mp4'), path.join(run, 'editor-preview.mp4'))
+  const project = structuredClone(fixture)
+  Object.assign(project, { width: 320, height: 180, duration_ms: 5000, transcript: [], frame_preview: true })
+  project.candidates = project.candidates.slice(0, 1)
+  Object.assign(project.candidates[0], { ranges: [[2000, 3000]], scenes: [{ at_ms: 0, layout: 'fill', crops: [[0, 0, .3164, 1]] }], caption_edits: [], review: null, status: 'ready',
+    camera_scan: { start_ms: 1000, end_ms: 3000, frames: Array.from({ length: 60 }, (_, i) => Math.round((1000 + i * 1000 / 30) * 1000) / 1000), markers: [] } })
+  const saved = JSON.stringify(project)
+  fs.writeFileSync(path.join(run, 'editor-project.json'), saved)
+  fs.writeFileSync(path.join(run, 'job_output.json'), JSON.stringify({ job_id: 'edge-run', source_video_title: 'Frame edges', clips: [], editor_project: true }))
+  const session = await launchApp({ appDir: buildApp(path.join(root, 'app')), userDataDir })
+  t.after(async () => { await session.close(); fs.rmSync(root, { recursive: true, force: true }) })
+  const { page } = session
+  page.setDefaultTimeout(10000)
+  await page.getByRole('button', { name: 'Library', exact: true }).first().click()
+  await page.getByRole('button', { name: 'Open Frame edges', exact: true }).click()
+  await page.waitForFunction(() => document.querySelector('video')?.readyState >= 2)
+  const play = page.getByRole('button', { name: 'Play / pause', exact: true })
+  const previous = page.getByRole('button', { name: 'Previous frame', exact: true })
+  const next = page.getByRole('button', { name: 'Next frame', exact: true })
+  const time = () => page.locator('video').evaluate(v => v.currentTime * 1000)
+  const seek = async ms => {
+    await page.locator('.editor-source-scrub').evaluate((el, ms) => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, String(ms))
+      el.dispatchEvent(new Event('input', { bubbles: true }))
+    }, ms)
+    await page.waitForFunction(() => !document.querySelector('video').seeking)
+  }
+  for (const at of [0, 900, 1000, 2966.667, 3000, 4000, 4999]) {
+    const direction = at < 2000 ? 1 : -1
+    for (const target of ['.editor-source-scrub', '.editor-fine-scrub', '[aria-label="Play / pause"]']) {
+      await seek(at)
+      await page.locator(target).focus()
+      const before = await time()
+      await page.keyboard.press(direction > 0 ? 'ArrowRight' : 'ArrowLeft')
+      assert.ok(((await time()) - before) * direction > 1, `arrows must recover from ${at}ms with ${target} focused`)
+    }
+    await seek(at)
+    const before = await time()
+    await (direction > 0 ? next : previous).click()
+    assert.ok(((await time()) - before) * direction > 1, `frame button must recover from ${at}ms`)
+  }
+  // Overshooting either end with coarse arrows still permits fine recovery.
+  for (const [at, outward, inward] of [[0, 'Shift+ArrowLeft', 'ArrowRight'], [4999, 'Shift+ArrowRight', 'ArrowLeft']]) {
+    await seek(at); await play.focus(); await page.keyboard.press(outward)
+    const before = await time()
+    await page.keyboard.press(inward)
+    assert.ok(Math.abs((await time()) - before) > 1)
+  }
+  await seek(2900)
+  await play.click()
+  await page.waitForFunction(() => { const v = document.querySelector('video'); return v.paused && v.currentTime >= 2.999 })
+  await previous.click()
+  assert.ok(await time() < 2999, 'recover after playback stops at the clip end')
+  // Actual pointer clicks preserve playback on both sliders and retained cuts.
+  for (const selector of ['.editor-source-scrub', '.editor-fine-scrub', '.editor-piece-body']) {
+    const clickTimeline = async () => {
+      const box = await page.locator(selector).boundingBox()
+      const fraction = selector === '.editor-piece-body' ? .35 : .47
+      await page.mouse.click(box.x + box.width * fraction, box.y + box.height / 2)
+      await page.waitForFunction(() => !document.querySelector('video').seeking)
+    }
+    await seek(2000)
+    await play.click()
+    await clickTimeline()
+    assert.equal(await page.locator('video').evaluate(v => v.paused), false, `${selector} must keep playing`)
+    const clickedTime = await time()
+    assert.ok(clickedTime > 2150 && clickedTime < 2800, `${selector} seeks to the clicked position: ${clickedTime}`)
+    await page.waitForFunction(at => document.querySelector('video').currentTime * 1000 > at + 50, clickedTime)
+    await previous.click()
+    await seek(2000)
+    await clickTimeline()
+    assert.equal(await page.locator('video').evaluate(v => v.paused), true, `${selector} must stay paused`)
+    assert.ok(await time() > 2150 && await time() < 2800)
+  }
+  assert.equal(fs.readFileSync(path.join(run, 'editor-project.json'), 'utf8'), saved, 'navigation must not change edits')
+})

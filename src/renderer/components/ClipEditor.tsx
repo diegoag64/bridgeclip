@@ -157,15 +157,13 @@ export function ClipEditor({ outputDir, leading, onExports }: { outputDir: strin
   }
   const frameStep = (direction: -1 | 1, count = 1): void => {
     video.current?.pause()
-    if (frames.length && time >= frames[0] && time <= frames.at(-1)!) {
-      let next = time
-      for (let i = 0; i < count; i++) next = stepFrame(frames, next, direction)
-      seek(next)
-    } else if (!frames.length) seek(time + direction * count * 1000 / 30)
+    let next = timeRef.current
+    for (let i = 0; i < count; i++) next = stepFrame(frames, next, direction)
+    seek(next)
   }
   const scrub = (direction: -1 | 1, coarse: boolean): void => {
     video.current?.pause()
-    if (coarse) seek(time + direction * 1000)
+    if (coarse) seek(timeRef.current + direction * 1000)
     else frameStep(direction, Math.round(reviewSpeed))
   }
   const toggle = (): void => {
@@ -495,7 +493,7 @@ export function ClipEditor({ outputDir, leading, onExports }: { outputDir: strin
       </aside>
       <div className="editor-center">
         <div className="editor-monitors">
-          <div className="editor-source-monitor"><div className="editor-pane-heading">Source <span>{project.width} × {project.height}</span><Button size="sm" variant="ghost" disabled={!!busy || saving} onClick={() => { void chooseReplacement() }}>Replace source video</Button><span>{clock(time)}</span></div>
+          <div className="editor-source-monitor"><div className="editor-pane-heading">Source <span>{project.width} × {project.height}</span><Button size="sm" variant="ghost" disabled={!!busy || saving} onClick={() => { void chooseReplacement() }}>Replace source video</Button></div>
             <div className="editor-source-frame" style={{ aspectRatio: project.width / project.height }}>
               <video ref={video} src={localFileUrl(session.previewPath)} preload="auto" playsInline
                 onLoadedMetadata={() => { seek(start); if (video.current) video.current.playbackRate = candidate.video_speed * reviewSpeed }}
@@ -539,8 +537,8 @@ export function ClipEditor({ outputDir, leading, onExports }: { outputDir: strin
           </div>
         </div>
         <div className="editor-transport">
-          <Button size="sm" variant="ghost" iconOnly icon={<ChevronLeft size={14} />} aria-label="Previous frame" title="Previous frame (←). Scan camera changes to enable precise stepping." disabled={!frames.length || !!busy || time <= frames[0] || time > frames.at(-1)!} onClick={() => frameStep(-1)} />
-          <Button size="sm" variant="ghost" iconOnly icon={<ChevronRight size={14} />} aria-label="Next frame" title="Next frame (→). Scan camera changes to enable precise stepping." disabled={!frames.length || !!busy || time < frames[0] || time >= frames.at(-1)!} onClick={() => frameStep(1)} /><Button title="Back to start" aria-label="Back to start" iconOnly variant="ghost" icon={<SkipBack size={15} />} onClick={() => seek(start)} /><Button title="Play / pause (Space)" aria-label="Play / pause" iconOnly icon={playing ? <Pause size={16} /> : <Play size={16} />} onClick={toggle} /><span className="font-mono text-xs">{clock(time)}</span><span className="text-ink-subtle text-2xs">/ {(editDuration(candidate) / 1000).toFixed(1)}s selected</span><label className="editor-review-speed" title="Preview only. Press 1/2/3 for speed; arrow keys step 1/2/3 source frames (1.5× rounds to two). Shift+arrows jump one second. Multiplies the clip’s export speed without changing the export.">Review speed<select aria-label="Review speed" value={reviewSpeed} onChange={(e) => {
+          <Button size="sm" variant="ghost" iconOnly icon={<ChevronLeft size={14} />} aria-label="Previous frame" title="Previous frame (←). Exact in scanned footage; approximate outside it." disabled={!!busy || time <= .01} onClick={() => frameStep(-1)} />
+          <Button size="sm" variant="ghost" iconOnly icon={<ChevronRight size={14} />} aria-label="Next frame" title="Next frame (→). Exact in scanned footage; approximate outside it." disabled={!!busy || time >= project.duration_ms - 1 - .01} onClick={() => frameStep(1)} /><Button title="Back to start" aria-label="Back to start" iconOnly variant="ghost" icon={<SkipBack size={15} />} onClick={() => seek(start)} /><Button title="Play / pause (Space)" aria-label="Play / pause" iconOnly icon={playing ? <Pause size={16} /> : <Play size={16} />} onClick={toggle} /><span className="font-mono text-xs">{clock(time)}</span><span className="text-ink-subtle text-2xs">/ {(editDuration(candidate) / 1000).toFixed(1)}s selected</span><label className="editor-review-speed" title="Preview only. Press 1/2/3 for speed; arrow keys step 1/2/3 source frames (1.5× rounds to two). Shift+arrows jump one second. Multiplies the clip’s export speed without changing the export.">Review speed<select aria-label="Review speed" value={reviewSpeed} onChange={(e) => {
             setReviewSpeed(Number(e.target.value))
             // Return Space to playback after choosing a speed.
             e.currentTarget.blur()
@@ -548,7 +546,7 @@ export function ClipEditor({ outputDir, leading, onExports }: { outputDir: strin
         <div className="editor-timeline">
           <div className="editor-timeline-tools">
             <Button size="sm" variant="ghost" onClick={() => setZoomWindow(zoomWindow ? null : [Math.max(0, time - 1000), Math.min(project.duration_ms, time + 1000)])}>{zoomWindow ? 'Show clip timeline' : 'Zoom to playhead'}</Button><Button variant="ghost" size="sm" title="Undo (⌘Z)" aria-label="Undo" iconOnly icon={<Undo2 size={14} />} disabled={!undo.length || !!busy} onClick={() => history('undo')} /><Button variant="ghost" size="sm" title="Redo (⌘⇧Z)" aria-label="Redo" iconOnly icon={<Redo2 size={14} />} disabled={!redo.length || !!busy} onClick={() => history('redo')} /><Button variant="ghost" size="sm" icon={<Scissors size={14} />} onClick={split} disabled={editingDisabled || candidate.ranges.length >= 24}>Split</Button><Button variant="ghost" size="sm" disabled={editingDisabled || (time >= start && time <= end)} title="Extend the first or last cut to the playhead. Turn off Play cuts only to watch beyond the current cut." onClick={() => { const t = (video.current?.currentTime ?? time / 1000) * 1000; if (t < start) trim('in', t); else if (t > end) trim('out', t) }}>Extend to playhead</Button><Button variant="ghost" size="sm" aria-pressed={fullTimeline} title={fullTimeline ? 'Zoom to the selected clip' : 'Show the full source to extend a cut farther'} onClick={() => { setZoomWindow(null); setFullTimeline((v) => !v) }}>{fullTimeline ? 'Zoom to clip' : 'Full source'}</Button><span className="ml-auto text-2xs text-ink-subtle">{clock(viewStart)} — {clock(viewEnd)}</span></div>
-          <input aria-label="Source timeline" className="editor-source-scrub" type="range" min={0} max={project.duration_ms} step="any" value={time} onChange={(e) => { video.current?.pause(); seek(snapFrame(frames, Number(e.target.value))) }} />
+          <input aria-label="Source timeline" className="editor-source-scrub" type="range" min={0} max={project.duration_ms} step="any" value={time} onChange={(e) => seek(snapFrame(frames, Number(e.target.value)))} />
           <CameraChanges candidate={candidate} threshold={cameraThreshold} setThreshold={setCameraThreshold} selected={selectedCamera}
             select={(t) => { video.current?.pause(); setSelectedCamera(t); seek(t); setTab('framing'); if (zoomWindow) setZoomWindow([Math.max(0, t - 1000), Math.min(project.duration_ms, t + 1000)]) }}
             scan={() => { void run('scan-cameras') }} insert={newLayout} align={moveScene}
@@ -561,7 +559,6 @@ export function ClipEditor({ outputDir, leading, onExports }: { outputDir: strin
               // up with the playhead even when the timeline is zoomed or clipped.
               const rect = e.currentTarget.parentElement!.getBoundingClientRect()
               const target = e.detail === 0 ? a : a + Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)) * (b - a)
-              video.current?.pause()
               seek(Math.max(a, Math.min(b - .001, snapFrame(frames, target))))
             }}><Film size={12} /><span>{i + 1}</span></button><button className="editor-trim-handle" aria-label={`Trim end of cut ${i + 1}`} disabled={editingDisabled} title="Drag to trim or extend; arrow keys adjust by 0.1s (Shift: 1s)" onKeyDown={(e) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); e.stopPropagation(); change({ ranges: trimRange(candidate.ranges, i, 1, b + (e.key === 'ArrowLeft' ? -1 : 1) * (e.shiftKey ? 1000 : 100), project.duration_ms) }) } }} onPointerDown={(e) => { video.current?.pause(); dragging.current = true; setDragWindow([viewStart, viewEnd]); trimDrag(e, i, 1, viewStart, viewEnd, project.duration_ms, candidate, edits, selected, setEdits, setUndo, setRedo, () => { dragging.current = false; setDragWindow(null) }) }} /></div>)}
             {candidate.scenes.map((s, i) => i > 0 && s.at_ms >= viewStart && s.at_ms <= viewEnd && <button key={i}
@@ -583,7 +580,7 @@ export function ClipEditor({ outputDir, leading, onExports }: { outputDir: strin
               style={{ left: `${(Math.max(a, viewStart) - viewStart) / (viewEnd - viewStart) * 100}%`, width: `${(Math.min(b, viewEnd) - Math.max(a, viewStart)) / (viewEnd - viewStart) * 100}%` }}
               onClick={() => { seek(a); setTab('captions') }} />)}
           </div>}
-          <input aria-label="Fine timeline position" type="range" min={viewStart} max={viewEnd} step="any" value={Math.max(viewStart, Math.min(viewEnd, time))} onChange={(e) => { video.current?.pause(); seek(snapFrame(frames, Number(e.target.value))) }} className="editor-fine-scrub" />
+          <input aria-label="Fine timeline position" type="range" min={viewStart} max={viewEnd} step="any" value={Math.max(viewStart, Math.min(viewEnd, time))} onChange={(e) => seek(snapFrame(frames, Number(e.target.value)))} className="editor-fine-scrub" />
           <div className="editor-cut-list">{candidate.ranges.map(([a, b], i) => <div key={i} className="flex items-center gap-2"><span className="text-2xs text-ink-subtle">{i + 1}</span><TimeInput label={`Cut ${i + 1} start`} value={a} disabled={editingDisabled} onChange={(t) => { const ranges = candidate.ranges.map((r) => [...r] as [number, number]); ranges[i][0] = Math.max(i ? ranges[i - 1][1] : 0, Math.min(b - 100, t)); change({ ranges }) }} /><span className="text-ink-subtle">–</span><TimeInput label={`Cut ${i + 1} end`} value={b} disabled={editingDisabled} onChange={(t) => { const ranges = candidate.ranges.map((r) => [...r] as [number, number]); ranges[i][1] = Math.min(i + 1 < ranges.length ? ranges[i + 1][0] : project.duration_ms, Math.max(a + 100, t)); change({ ranges }) }} /><Button variant="ghost" size="sm" aria-label={`Remove cut ${i + 1}`} title="Remove this section" iconOnly icon={<X size={12} />} disabled={candidate.ranges.length === 1 || editingDisabled} onClick={() => change({ ranges: candidate.ranges.filter((_, j) => j !== i) })} /></div>)}</div>
         </div>
       </div>

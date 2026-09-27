@@ -554,6 +554,19 @@ test('frame stepping and layout snapping use presentation timestamps including v
   assert.equal(schema.retimeScene(scenes, 1, 0, 1000, frames), scenes)
 })
 
+test('frame navigation can cross scan edges and recover in either direction', () => {
+  const frames = [1000, 1041.708, 1083.417, 1125.125]
+  const step = 1000 / 30
+  assert.equal(schema.stepFrame(frames, 1000, -1), 1000 - step)
+  assert.equal(schema.stepFrame(frames, 1125.125, 1), 1125.125 + step)
+  assert.equal(schema.stepFrame(frames, 900, 1), 900 + step)
+  assert.equal(schema.stepFrame(frames, 1200, -1), 1200 - step)
+  assert.equal(schema.stepFrame(frames, 990, 1), 1000, 're-enter at the first known frame')
+  assert.equal(schema.stepFrame(frames, 1140, -1), 1125.125, 're-enter at the last known frame')
+  assert.equal(schema.stepFrame(frames, 1125.126, -1), 1083.417, 'browser timestamp noise must not trap the playhead')
+  assert.equal(schema.stepFrame([], 3000, -1), 3000 - step)
+})
+
 test('saved camera dismissals persist while scan results and preview paths stay main-owned', async () => {
   const f = setup()
   try {
