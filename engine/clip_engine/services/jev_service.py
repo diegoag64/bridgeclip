@@ -90,8 +90,8 @@ class JevService:
         self.request_seconds = 0.0
 
     @classmethod
-    def from_settings(cls, settings):
-        key = getattr(settings, 'openrouter_api_key', None) if getattr(settings, 'jev_enabled', True) else None
+    def from_settings(cls, settings, *, required=False):
+        key = getattr(settings, 'openrouter_api_key', None) if required or getattr(settings, 'jev_enabled', True) else None
         return cls(key)
 
     @property

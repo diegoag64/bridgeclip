@@ -59,10 +59,10 @@ export function JevSettings(): React.JSX.Element {
     </header>
     <div className="jev-body">
       <div className="jev-enable-row">
-        <div><h3 id="jev-enable-label">Jev editorial review</h3><p id="jev-enable-description">Optional checks for automatic clips and edits. Uses your OpenRouter key.</p></div>
+        <div><h3 id="jev-enable-label">Jev for automatic clips</h3><p id="jev-enable-description">Review &amp; edit always uses Jev. Both workflows use your OpenRouter key.</p></div>
         <button className="jev-switch" role="switch" aria-labelledby="jev-enable-label" aria-describedby="jev-enable-description" aria-checked={enabled} aria-controls="jev-fields" disabled={busy} onClick={() => { void save({ jevEnabled: enabled ? 'off' : 'on' }) }}><span /></button>
       </div>
-      {!enabled && <p className="jev-off" role="status">Jev is off. Automatic clipping uses the planner’s proposed clips and cuts without Jev checks or repairs.</p>}
+      {!enabled && <p className="jev-off" role="status">Jev is off for automatic clipping, which uses the planner’s proposed clips and cuts without Jev checks or repairs. Review &amp; edit still uses Jev with your saved thresholds.</p>}
       <div id="jev-fields" className="jev-accordion" data-open={enabled} aria-hidden={!enabled} inert={!enabled}>
         <div className="jev-accordion-content">
       <div className="jev-controls-heading"><div><span className="jev-kicker">Approval thresholds</span><h3>Set the bar for every decision.</h3></div><span className="jev-customized">{customized ? `${customized} customized` : 'BridgeClip defaults'}</span></div>

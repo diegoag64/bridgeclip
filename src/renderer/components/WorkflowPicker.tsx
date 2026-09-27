@@ -13,7 +13,7 @@ const WORKFLOWS = [
   },
   {
     id: 'review', title: 'Review & edit', level: 'For advanced users', outcome: 'Make the final cut yourself',
-    description: 'AI finds the moments. You choose clips, adjust cuts and framing, then export when ready.',
+    description: 'Jev review is required to evaluate the candidates. You choose clips, adjust cuts and framing, then export when ready.',
     steps: 'Find → You edit → Export'
   }
 ] as const

@@ -259,12 +259,13 @@ test('editor rejects external roots and symlinked source/project files', async (
   } finally { f.cleanup() }
 })
 
-test('enabled Jev reaches the worker and locks the project until review finishes', async () => {
+test('editor review requires Jev even with automatic review off and locks the project', async () => {
   const { EventEmitter } = require('node:events')
   const { PassThrough } = require('node:stream')
-  let release, entered, config
+  let release, entered, config, workerEnv
   const started = new Promise((r) => { entered = r })
-  const f = setup({ child_process: { ...require('node:child_process'), spawn: () => {
+  const f = setup({ child_process: { ...require('node:child_process'), spawn: (_cmd, _args, options) => {
+    workerEnv = options.env
     const child = new EventEmitter()
     child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.stdin = new PassThrough()
     child.stdin.end = (data) => {
@@ -275,10 +276,12 @@ test('enabled Jev reaches the worker and locks the project until review finishes
   } } })
   try {
     f.main.settings.replaceApiKey('openrouterApiKey', 'fixture-key')
-    f.main.settings.savePublicSettings({ outputDirectory: f.library, pythonPath: 'python3', jevEnabled: 'on' })
+    f.main.settings.savePublicSettings({ outputDirectory: f.library, pythonPath: 'python3', jevEnabled: 'off' })
     const pending = f.main.runEditor(f.run, 0, 'candidate-1', 'review')
     await started
     assert.equal(config.action, 'review')
+    assert.equal(workerEnv.JEV_ENABLED, 'true')
+    assert.equal(f.main.settings.loadSettings().jevEnabled, 'off')
     assert.equal(config.library, fs.realpathSync(f.library))
     assert.equal((await f.main.openEditor(f.run)).operation, 'review')
     await assert.rejects(f.main.saveEditor(f.run, 0, fixture.candidates), /Wait/)
@@ -286,7 +289,8 @@ test('enabled Jev reaches the worker and locks the project until review finishes
     release(); await pending
     assert.equal((await f.main.openEditor(f.run)).operation, null)
     f.main.settings.savePublicSettings({ outputDirectory: f.library, pythonPath: 'python3', jevEnabled: 'off' })
-    await assert.rejects(f.main.runEditor(f.run, 0, 'candidate-1', 'review'), /Enable Jev/)
+    f.main.settings.replaceApiKey('openrouterApiKey', '')
+    await assert.rejects(f.main.runEditor(f.run, 0, 'candidate-1', 'review'), /OpenRouter key/)
   } finally { f.cleanup() }
 })
 

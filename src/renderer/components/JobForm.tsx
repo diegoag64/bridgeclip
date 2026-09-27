@@ -162,7 +162,7 @@ export function JobForm({ onSubmit, onViewJob, blockedReason, submitting, classN
       <Panel className="p-4 xl:p-5">
         {step !== 'video' && <div className="mb-3">
           <h2 className="text-sm font-semibold text-ink">{step === 'review' && draft.workflow === 'review' ? 'Ready to find candidates' : meta.title}</h2>
-          <p className="mt-0.5 text-xs text-ink-muted">{step === 'review' && draft.workflow === 'review' ? 'The editor opens with proposed candidates for your final cut.' : meta.description}</p>
+          <p className="mt-0.5 text-xs text-ink-muted">{step === 'review' && draft.workflow === 'review' ? 'Jev reviews each candidate before the editor opens for your final cut.' : meta.description}</p>
         </div>}
         {sourceError && <p role="alert" className="text-sm text-danger">{sourceError}</p>}
         {step === 'video' && <VideoStep draft={draft} update={update} trimError={trim.error} disabled={submitting} />}
@@ -416,7 +416,7 @@ export function ClipsStep({ draft, update }: { draft: ClipDraft; update: Update 
       <Group label="Clipping mode">
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-3" role="radiogroup" aria-label="Clipping mode">
           {([
-            { id: 'quality', label: 'Quality', hint: `GPT-6 Sol planning · Jev review & repairs ${jevEnabled ? 'enabled' : 'off'} · MAI Transcribe 2` },
+            { id: 'quality', label: 'Quality', hint: `GPT-6 Sol planning · ${draft.workflow === 'review' ? 'Jev review required' : `Jev review & repairs ${jevEnabled ? 'enabled' : 'off'}`} · MAI Transcribe 2` },
             { id: 'economy', label: 'Economy', hint: 'GLM 5.3 Flash planning · Whisper Turbo' },
             { id: 'advanced', label: 'Advanced', hint: 'Choose your OpenRouter models' }
           ] as const).map((mode) => {

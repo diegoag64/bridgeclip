@@ -214,3 +214,22 @@ test('Twitch VOD links canonicalize while other Twitch pages are rejected', () =
   assert.match(html, /Public, completed videos only/)
   assert.doesNotMatch(html, /<img/)
 })
+
+
+test('Review & edit shows required Jev review even when automatic review is off', () => {
+  const { ClipsStep, useDraftStore, useSettingsStore } = form.exports
+  const original = useSettingsStore.getState()
+  const initialState = useSettingsStore.getInitialState()
+  const initialJev = initialState.jevEnabled
+  try {
+    useSettingsStore.setState({ jevEnabled: 'off' })
+    initialState.jevEnabled = 'off'
+    const draft = useDraftStore.getState()
+    const review = renderToStaticMarkup(React.createElement(ClipsStep, { draft: { ...draft, workflow: 'review' }, update() {} }))
+    const automatic = renderToStaticMarkup(React.createElement(ClipsStep, { draft: { ...draft, workflow: 'automatic' }, update() {} }))
+    assert.match(review, /Jev review required/)
+    assert.doesNotMatch(review, /Jev review &amp; repairs off/)
+    assert.match(automatic, /Jev review &amp; repairs off/)
+    assert.equal(useSettingsStore.getState().jevEnabled, 'off')
+  } finally { initialState.jevEnabled = initialJev; useSettingsStore.setState(original) }
+})

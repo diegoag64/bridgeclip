@@ -404,7 +404,7 @@ export function startClipJob(
     } catch { logger.warn('job.history.writeFailed', { jobId }) }
     send('job:error', payload)
   }
-  const envVars = getSettingsForBridge(settings)
+  const envVars = getSettingsForBridge({ ...settings, jevEnabled: config.workflow === 'review' ? 'on' : settings.jevEnabled })
   const enginePath = getEnginePath()
   const bridgePath = getBridgeRunnerPath()
   const pythonPath = resolvePythonPath(enginePath, settings.pythonPath)

@@ -209,7 +209,13 @@ test('the native picker authorizes media and shell opening rejects aliased appli
     assert.equal((await storage({ sender: contents, senderFrame: frame }, root)).outputDirectory, library)
     const sourceUrl = 'https://www.youtube.com/watch?v=hqP9fivmBqI'
     assert.equal(await handlers.get('shell:openPath')({ sender: contents, senderFrame: frame }, sourceUrl), true)
-    assert.deepEqual(openedLinks, [sourceUrl])
+    const docs = ['https://docs.typesafe.ai/introduction', 'https://docs.typesafe.ai/confidence']
+    for (const url of docs) assert.equal(await handlers.get('shell:openPath')({ sender: contents, senderFrame: frame }, url), true)
+    assert.deepEqual(openedLinks, [sourceUrl, ...docs])
+    for (const url of ['https://docs.typesafe.ai/other', 'https://docs.typesafe.ai/confidence?redirect=https://example.com', 'https://docs.typesafe.ai.evil.test/confidence', 'http://docs.typesafe.ai/confidence', 'https://user@docs.typesafe.ai/confidence']) {
+      assert.equal(security.isTrustedExternalUrl(url), false)
+      await assert.rejects(handlers.get('shell:openPath')({ sender: contents, senderFrame: frame }, url), /not supported|absolute path/)
+    }
     await assert.rejects(handlers.get('shell:openPath')({ sender: contents, senderFrame: frame }, 'https://www.youtube.com/redirect?q=https://example.com'), /not supported/)
     assert.equal(handlers.has('files:registerMedia'), false)
     assert.throws(() => security.assertMediaPath(video, library))
@@ -864,8 +870,16 @@ test('Jev thresholds migrate, validate atomically, persist, and reach the worker
     const saved = store.savePublicSettings({ ...initial, ...Object.fromEntries(keys.map((key, i) => [key, values[i]])) })
     const worker = store.getSettingsForBridge(store.loadSettings())
     keys.forEach((key, i) => { assert.equal(saved[key], values[i]); assert.equal(worker[env[i]], values[i]) })
+    for (const value of ['0.0000001', '1e-7', '5e-324', '1e-4']) {
+      const tiny = store.savePublicSettings({ ...saved, jevThreshold: value })
+      assert.equal(Number(tiny.jevThreshold), Number(value))
+      assert.equal(store.loadSettings().jevThreshold, tiny.jevThreshold)
+      store.savePublicSettings({ ...tiny, customVocabulary: 'round trip' })
+      assert.equal(store.loadSettings().jevThreshold, tiny.jevThreshold)
+    }
+    store.savePublicSettings(saved)
     const before = fs.readFileSync(file, 'utf8')
-    for (const key of keys) for (const value of ['', 'NaN', 'Infinity', '-0.01', '1.01', '75%', 0.75]) {
+    for (const key of keys) for (const value of ['', 'NaN', 'Infinity', '-0.01', '1.01', '75%', '1e2', '1e999', '-1e-7', 0.75]) {
       assert.throws(() => store.savePublicSettings({ ...saved, [key]: value }), /Invalid/)
       assert.equal(fs.readFileSync(file, 'utf8'), before)
     }

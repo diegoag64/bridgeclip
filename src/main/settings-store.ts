@@ -97,7 +97,7 @@ function normalizeSettings(settings: Partial<AppSettings>): AppSettings {
   }
   for (const key of Object.keys(JEV_DEFAULTS) as (keyof JevThresholdSettings)[]) {
     const value = normalized[key].trim()
-    if (!/^(?:0(?:\.\d+)?|1(?:\.0+)?)$/.test(value)) throw new Error(`Invalid Jev threshold: ${key}. Use a probability from 0 to 1.`)
+    if (!/^\d+(?:\.\d+)?(?:e[+-]?\d+)?$/i.test(value) || !Number.isFinite(Number(value)) || Number(value) > 1) throw new Error(`Invalid Jev threshold: ${key}. Use a probability from 0 to 1.`)
     normalized[key] = String(Number(value))
   }
   normalized.outputDirectory ||= DEFAULT_SETTINGS.outputDirectory

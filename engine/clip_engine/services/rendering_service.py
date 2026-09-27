@@ -439,9 +439,10 @@ class RenderingService:
         removed_ms = time_map.removed_ms
         chapters = self._output_chapters(request, window_start_ms, time_map)
         subtitle_path = await self._write_subtitles(request, window_start_ms, time_map)
-        if request.editorial_context is not None and request.editorial_service is not None:
-            retained = remap_segments(request.transcript_segments or [], window_start_ms, time_map)
-            await review_retained_clip(request.editorial_service, request.title_text, retained, request.editorial_context)
+        if request.editorial_context is not None:
+            if request.editorial_service is not None:
+                retained = remap_segments(request.transcript_segments or [], window_start_ms, time_map)
+                await review_retained_clip(request.editorial_service, request.title_text, retained, request.editorial_context)
             request.editorial_context['retained_source'] = [[window_start_ms + a, window_start_ms + b] for a, b in time_map.keeps]
         trace_path = None
         if request.debug_capture or (request.editorial_context and request.editorial_service and request.editorial_service.enabled):

@@ -119,8 +119,8 @@ async function executeEditor(path: unknown, revision: unknown, candidateId: unkn
     if (!candidates.length) throw new Error('Mark at least one clip ready before baking.')
     if (action === 'export-all') operation.batch = { completed: 0, total: candidates.length }
     const settings = loadSettings(), engine = getEnginePath()
-    if (action === 'review' && (!settings.openrouterApiKey || settings.jevEnabled !== 'on')) throw new Error('Enable Jev and add your OpenRouter key in Settings to run this review.')
-    const env: Record<string, string | undefined> = { ...runtimeEnvironment(), ...getSettingsForBridge(settings), PYTHONPATH: engine, PYTHONUNBUFFERED: '1' }
+    if (action === 'review' && !settings.openrouterApiKey) throw new Error('Add your OpenRouter key in Settings to run this review.')
+    const env: Record<string, string | undefined> = { ...runtimeEnvironment(), ...getSettingsForBridge({ ...settings, jevEnabled: 'on' }), PYTHONPATH: engine, PYTHONUNBUFFERED: '1' }
     const ffmpeg = resolveBinary('ffmpeg')
     if (ffmpeg !== 'ffmpeg') env.PATH = `${dirname(ffmpeg)}${delimiter}${env.PATH ?? ''}`
     for (const candidate of candidates) {

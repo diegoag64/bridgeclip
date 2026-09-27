@@ -286,3 +286,32 @@ def test_editorial_protection_survives_every_render_path(service, monkeypatch, t
     # QA reads the actual edited timestamps, including the final fallback's map.
     assert retained[-1].start_time_ms == calls[-1].to_output(6500)
     assert result.duration_ms == calls[-1].output_ms
+
+
+@pytest.mark.parametrize("failures", [0, 1, 2])
+def test_jev_off_preserves_final_source_timeline(service, monkeypatch, tmp_path, failures):
+    from unittest.mock import AsyncMock
+    from clip_engine.services import rendering_service as module
+    review = AsyncMock(side_effect=AssertionError("Jev must stay off"))
+    monkeypatch.setattr(module, 'review_retained_clip', review)
+    calls = []
+    stub_render(monkeypatch, service, failures, calls)
+    report = {'candidates': [], 'protected_intervals': [], 'coherence': {'status': 'skipped', 'reason': 'disabled_by_user'}}
+    request = request_for(tmp_path, editorial_context=report, debug_capture=False,
+                          editorial_service=None, coherence_reviewer=None)
+    request.start_time_ms, request.end_time_ms = 2000, 12000
+    request.transcript_segments = [TranscriptSegment(s.start_time_ms + 2000, s.end_time_ms + 2000, s.text,
+        words=[TranscriptWord(w.word, w.start_time_ms + 2000, w.end_time_ms + 2000) for w in s.words]) for s in transcript()]
+    final_keeps = []
+    original = service._render_edit
+    async def capture(req, plan, time_map, window_start, *args):
+        await original(req, plan, time_map, window_start, *args)
+        final_keeps.extend([[window_start + a, window_start + b] for a, b in time_map.keeps])
+    monkeypatch.setattr(service, '_render_edit', capture)
+    result = render(service, request)
+    assert report['retained_source'] == final_keeps
+    assert sum(b - a for a, b in final_keeps) == result.duration_ms
+    assert (result.removed_ms == 0) is (failures == 2)
+    assert report['coherence']['status'] == 'skipped'
+    assert not list(tmp_path.glob('*.framing.json'))
+    review.assert_not_awaited()

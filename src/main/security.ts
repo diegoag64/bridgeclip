@@ -1,3 +1,4 @@
+import { JEV_DOCS_URL, JEV_CONFIDENCE_URL } from '../shared/jev-settings'
 import { BrowserWindow, type IpcMainInvokeEvent } from 'electron'
 import { constants, realpathSync, statSync } from 'fs'
 import { open, type FileHandle } from 'fs/promises'
@@ -19,7 +20,7 @@ export function isWebUrl(value: unknown): value is string {
   } catch { return false }
 }
 
-const externalLinks = new Set([BRIDGEMIND_URL, DISCORD_URL, ISSUES_URL, REPO_URL, ...Object.values(PROVIDER_LINKS), ...Object.values(ZERNIO_LINKS)])
+const externalLinks = new Set([JEV_DOCS_URL, JEV_CONFIDENCE_URL, BRIDGEMIND_URL, DISCORD_URL, ISSUES_URL, REPO_URL, ...Object.values(PROVIDER_LINKS), ...Object.values(ZERNIO_LINKS)])
 export function isTrustedExternalUrl(value: unknown): value is string {
   return isWebUrl(value) && (externalLinks.has(value) || /^https:\/\/www\.youtube\.com\/watch\?v=[\w-]{11}$/.test(value))
 }

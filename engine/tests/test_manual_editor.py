@@ -353,19 +353,32 @@ def test_unready_or_failed_export_never_marks_baked(monkeypatch, tmp_path, statu
     assert not list(tmp_path.glob('clip_*.mp4'))
 
 
-def test_pipeline_review_stops_before_automatic_repairs_and_render(monkeypatch, tmp_path):
+@pytest.mark.parametrize('jev_enabled', [True, False])
+@pytest.mark.parametrize('available', [True, False])
+def test_pipeline_review_stops_before_automatic_repairs_and_render(monkeypatch, tmp_path, jev_enabled, available):
     from clip_engine.services import ai_clipping_pipeline as module
     from clip_engine.services.ai_clipping_pipeline import AIClippingPipeline, ClippingJobRequest, JobStatus
     from clip_engine.services.intelligence_planner import ClipPlanResponse
     from clip_engine.services.transcription_service import TranscriptionResult
     settings = module.get_settings()
     monkeypatch.setattr(settings, 'local_mode', True)
-    monkeypatch.setattr(settings, 'openrouter_api_key', '')
+    monkeypatch.setattr(settings, 'openrouter_api_key', 'fixture')
+    monkeypatch.setattr(settings, 'jev_enabled', jev_enabled)
+    from clip_engine.services.jev_service import JevService
+    from tests.test_editorial_context import response
+    calls = []
+    async def evaluate(self, state, questions):
+        assert self.enabled
+        calls.append(questions)
+        return {'status': 'success' if available else 'unavailable', 'questions': questions,
+                'answers': response(questions)['answers'] if available else {}}
+    monkeypatch.setattr(JevService, 'evaluate', evaluate)
     monkeypatch.setattr(settings, 'local_output_dir', str(tmp_path / 'out'))
     monkeypatch.setattr(settings.__class__, 'temp_directory', property(lambda self: str(tmp_path / 'work')))
     monkeypatch.setattr(RenderingService, '_verify_ffmpeg', lambda _: None)
     pipeline = AIClippingPipeline()
     source = tmp_path / 'original.mp4'; source.write_bytes(b'source')
+    pipeline.source_context_service.build = AsyncMock(return_value={'status': 'metadata_only', 'source': {}, 'brief': None, 'research_status': 'not_applicable', 'citations': [], 'cost_usd': 0, 'cost_incomplete': False, 'requests': []})
     pipeline.video_downloader.download_video = AsyncMock(return_value=SimpleNamespace(video_path=str(source), file_size_bytes=6,
         metadata=SimpleNamespace(title='A manual source', duration_seconds=12, width=1920, height=1080)))
     pipeline.transcription_service.transcribe = AsyncMock(return_value=TranscriptionResult(segments=transcript(), full_text='Original source'))
@@ -381,7 +394,11 @@ def test_pipeline_review_stops_before_automatic_repairs_and_render(monkeypatch, 
     project = json.loads((tmp_path / 'out/review-run/editor-project.json').read_text())
     assert len(project['candidates']) == 2
     assert all(len(c['review']['questions']) == 8 for c in project['candidates'])
-    assert all(c['review']['decision'] == 'needs_attention' for c in project['candidates'])
+    assert calls
+    assert settings.jev_enabled is jev_enabled
+    assert all(c['review']['decision'] == ('passes' if available else 'needs_attention') for c in project['candidates'])
+    audit = json.loads((tmp_path / 'out/review-run/edit_audit.json').read_text())
+    assert audit['jev_enabled'] is True
     assert source.exists() and not (tmp_path / 'work/review-run').exists()
     pipeline.rendering_service.render_clip.assert_not_called()
 

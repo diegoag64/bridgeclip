@@ -417,7 +417,7 @@ async def run_editor(config, progress=None):
     transcript = [TranscriptSegment(**{**timing(s), 'words': [TranscriptWord(**timing(w)) for w in s.get('words', [])]}) for s in rows]
     action = config['action']
     if action == 'review':
-        reviewer = CoherenceReviewer(JevService.from_settings(settings), settings, transcript, project['duration_ms'])
+        reviewer = CoherenceReviewer(JevService.from_settings(settings, required=True), settings, transcript, project['duration_ms'])
         context = run / 'source_context.json'
         if context.exists():
             from clip_engine.services.source_context import context_for_prompt

@@ -197,8 +197,8 @@ class AIClippingPipeline:
         loop = asyncio.get_running_loop()
         start_time = time.time()
         job_id = request.job_id
-        jev_enabled = getattr(self.settings, 'jev_enabled', True)
-        editorial_service = JevService.from_settings(self.settings)
+        jev_enabled = request.workflow == 'review' or getattr(self.settings, 'jev_enabled', True)
+        editorial_service = JevService.from_settings(self.settings, required=request.workflow == 'review')
         coherence_service = JevService(self.settings.openrouter_api_key if jev_enabled else '', max_requests=256, token_budget=1536000)
         work_dir = os.path.join(self.settings.temp_directory, job_id)
         stage_timings: dict[str, float] = {}
