@@ -10,7 +10,8 @@ PHASES = ('sampling', 'camera_scan', 'face_tracking', 'vision', 'jev')
 
 
 def number(value):
-    return value if type(value) in (int, float) and math.isfinite(value) and 0 <= value <= 1e12 else None
+    # Reject huge JSON integers before math.isfinite coerces them to float.
+    return value if type(value) in (int, float) and 0 <= value <= 1e12 and math.isfinite(value) else None
 
 
 class RunDiagnostics:

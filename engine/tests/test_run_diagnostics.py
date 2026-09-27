@@ -3,6 +3,36 @@ import pytest
 from clip_engine.services.run_diagnostics import CURRENT, RunDiagnostics, model_request
 
 
+@pytest.mark.parametrize('field', ['prompt_tokens', 'completion_tokens', 'cost'])
+@pytest.mark.parametrize('invalid', [10**400, -(10**400), float('inf'), float('-inf'), float('nan'), True, 'bad'])
+def test_invalid_provider_usage_does_not_abort_successful_transcription(field, invalid, monkeypatch):
+    from unittest.mock import AsyncMock
+    from clip_engine.services.transcription_service import TranscriptionService
+    service = object.__new__(TranscriptionService)
+    response = {'text': 'Hello.', 'words': [{'word': 'Hello.', 'start': 0, 'end': 1}],
+                'usage': {'prompt_tokens': 10, 'completion_tokens': 2, 'cost': .01, field: invalid}}
+    monkeypatch.setattr(service, '_request_transcript_body', AsyncMock(return_value=response))
+    async def run():
+        # Tracking must not change the result of an otherwise valid request.
+        baseline = await service._request_transcript('unused.wav', None, None)
+        tracker = RunDiagnostics()
+        token = CURRENT.set(tracker)
+        try:
+            result = await service._request_transcript('unused.wav', None, None)
+            assert result is baseline
+            assert result['text'] == 'Hello.'
+            row = tracker.snapshot()['models'][0]
+            assert row['active'] == 0 and row['failed'] == 0
+            assert row['unknown_cost'] == int(field == 'cost')
+            assert row['unknown_usage'] == int(field != 'cost')
+            assert row['cost_usd'] == (0 if field == 'cost' else .01)
+            assert row['input_tokens'] == (0 if field == 'prompt_tokens' else 10)
+            assert row['output_tokens'] == (0 if field == 'completion_tokens' else 2)
+        finally:
+            CURRENT.reset(token)
+    asyncio.run(run())
+
+
 def test_usage_reports_live_calls_failures_unknown_fields_and_no_prompt_data():
     now = [0.0]
     tracker = RunDiagnostics(clock=lambda: now[0])
