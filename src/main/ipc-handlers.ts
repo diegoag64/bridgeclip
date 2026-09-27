@@ -223,7 +223,7 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
     }
     // Starts now when a slot is free; otherwise waits its turn in the queue.
     const job = enqueueJob(jobId, config, settings.outputDirectory)
-    return { jobId, queued: job.status === 'queued' }
+    return { jobId, queued: job.status === 'queued', job }
   })
 
   handle('job:cancel', (_event, jobId: unknown) => {

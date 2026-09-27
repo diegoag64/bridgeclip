@@ -118,7 +118,7 @@ test('sample labels never invent detections between observations or across missi
   const html = renderToStaticMarkup(React.createElement(RecordedFramingView, {
     inspection: { status: 'limited', trace, sourcePath: null, clipPath: null, message: 'Missing preview' }
   }))
-  assert.match(html, /4 fps sampling/)
+  assert.match(html, /4 fps base sampling/)
   assert.match(html, /Missing preview/)
   assert.match(html, /disabled/)
   assert.match(html, /Source preview unavailable/)

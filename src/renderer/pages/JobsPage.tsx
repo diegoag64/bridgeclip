@@ -60,14 +60,24 @@ export function JobsPage({ onNavigate, onViewLibrary }: {
   const [query, setQuery] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+  const [jobsLoaded, setJobsLoaded] = useState(false)
   const requestId = useRef(0)
 
   const load = useCallback(async (manual = false) => {
     const request = ++requestId.current
     if (manual) setRefreshing(true)
     try {
-      const result = await getApi().history.list()
-      if (request === requestId.current) { setEntries(result); setError(null) }
+      const [live, history] = await Promise.allSettled([getApi().job.list(), getApi().history.list()])
+      if (request === requestId.current) {
+        if (live.status === 'fulfilled') {
+          useJobStore.getState().hydrate(live.value)
+          setJobsLoaded(true)
+        }
+        if (history.status === 'fulfilled') setEntries(history.value)
+        else setEntries((previous) => previous ?? [])
+        setError(live.status === 'rejected' ? 'Could not refresh active jobs. Try Refresh jobs.'
+          : history.status === 'rejected' ? errorMessage(history.reason, 'Could not load previous jobs.') : null)
+      }
     } catch (err) {
       if (request === requestId.current) {
         setEntries((previous) => previous ?? [])
@@ -90,8 +100,8 @@ export function JobsPage({ onNavigate, onViewLibrary }: {
 
   // A focused job that was dismissed elsewhere falls back to the list.
   useEffect(() => {
-    if (focusedJobId && !focused) focusJob(null)
-  }, [focusedJobId, focused, focusJob])
+    if (jobsLoaded && focusedJobId && !focused) focusJob(null)
+  }, [jobsLoaded, focusedJobId, focused, focusJob])
 
   // A watched job finishing, or a completed job opened from Create, has the
   // same destination as opening that run in Library.
@@ -115,7 +125,11 @@ export function JobsPage({ onNavigate, onViewLibrary }: {
     try {
       const result = await getApi().job.start(job.request)
       if (result.error) setError(result.error)
-      else if (result.jobId) focusJob(result.jobId)
+      else if (result.jobId) {
+        if (result.job) useJobStore.getState().upsert(result.job)
+        else await getApi().job.list().then(useJobStore.getState().hydrate)
+        focusJob(result.jobId)
+      }
     } catch (err) {
       setError(errorMessage(err, 'Could not start this job again.'))
     }

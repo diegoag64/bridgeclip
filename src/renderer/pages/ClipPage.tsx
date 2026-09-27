@@ -32,6 +32,9 @@ export function ClipPage({ onNavigate }: { onNavigate: (page: PageId) => void })
       const result = await getApi().job.start(config)
       if (result.error) setStartError(result.error)
       else if (result.jobId) {
+        // Starting must not depend on an event arriving before navigation.
+        if (result.job) useJobStore.getState().upsert(result.job)
+        else await getApi().job.list().then(useJobStore.getState().hydrate).catch(() => {})
         useDraftStore.getState().markStarted({ jobId: result.jobId, source: config.videoUrl, queued: Boolean(result.queued) })
         if (config.workflow === 'review') { useJobStore.getState().focusJob(result.jobId); onNavigate('jobs') }
       }

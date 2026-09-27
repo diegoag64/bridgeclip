@@ -210,3 +210,37 @@ test('Jobs marks review runs as Editing until every candidate is baked or discar
   await row(runs[0].title).locator('[aria-label^="Editing:"]').waitFor({ state: 'detached' })
   assert.deepEqual(errors, [])
 })
+
+test('Jobs recovers live runs after missed events and refreshes them even when history fails', { timeout: 90000 }, async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bridgeclip-jobs-recovery-'))
+  const session = await launchApp({ appDir: buildApp(path.join(root, 'app')), userDataDir: path.join(root, 'user-data') })
+  t.after(async () => { await session.close(); fs.rmSync(root, { recursive: true, force: true }) })
+  const { app, page } = session
+  page.setDefaultTimeout(10000)
+  const errors = []; page.on('pageerror', error => errors.push(error.message))
+  // The initial list was empty. The job is created afterward, with all push
+  // events deliberately omitted. Only the authoritative jobs:list can find it.
+  await app.evaluate(({ ipcMain }, root) => {
+    const now = new Date().toISOString()
+    globalThis.recoveryJob = { id: 'missed-run', revision: 1, request: { videoUrl: 'missed-event.mp4' },
+      status: 'downloading', percent: 25, step: 'Downloading video', clipsDone: 0, clipsTotal: 0,
+      error: null, errorHint: null, output: null, outputDir: root, queuedAt: now, startedAt: now, finishedAt: null }
+    ipcMain.removeHandler('jobs:list')
+    ipcMain.handle('jobs:list', () => [globalThis.recoveryJob])
+  }, root)
+  await page.getByRole('button', { name: /^Jobs(?:,|$)/ }).click()
+  const active = page.getByRole('region', { name: 'Active jobs' })
+  await active.getByText('missed-event.mp4', { exact: true }).waitFor()
+  await active.getByRole('button').first().click()
+  await page.getByRole('button', { name: 'Cancel', exact: true }).waitFor()
+  await page.getByRole('button', { name: 'All jobs', exact: true }).click()
+  await app.evaluate(({ ipcMain }) => {
+    globalThis.recoveryJob = { ...globalThis.recoveryJob, revision: 2, status: 'failed', error: 'Test download failure', finishedAt: new Date().toISOString() }
+    ipcMain.removeHandler('history:list')
+    ipcMain.handle('history:list', () => { throw new Error('History unavailable') })
+  })
+  await page.getByRole('button', { name: 'Refresh jobs', exact: true }).click()
+  await active.waitFor({ state: 'detached' })
+  await page.getByRole('alert').filter({ hasText: 'History unavailable' }).waitFor()
+  assert.deepEqual(errors, [])
+})
