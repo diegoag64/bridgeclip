@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type CSSProperties } from 'react'
 import { ArrowRight, Check, Clapperboard, Download, FileCheck2, ScanLine, Sparkles, Text, Wand2 } from 'lucide-react'
 import { STAGE_NAMES, type PipelineStage } from '../../shared/job-progress'
 import type { Job } from '../store/use-job-store'
@@ -18,6 +18,8 @@ const HINTS: Record<PipelineStage['id'], string> = {
   rendering: 'Following the action and building each clip.', saving: 'Keeping the results in your output folder.',
   preview: 'Preparing smooth playback for your review.'
 }
+const COLORS: Record<PipelineStage['id'], string> = { download: '#60a5fa', source_context: '#c084fc', transcription: '#2dd4bf', planning: '#fbbf24', preparing: '#fb923c', reviewing: '#f472b6', rendering: '#fb7185', saving: '#a3e635', preview: '#818cf8' }
+const stageColor = (id: PipelineStage['id']): CSSProperties => ({ '--stage-color': COLORS[id] } as CSSProperties)
 const bytes = (n: number): string => n >= 1e9 ? `${(n / 1e9).toFixed(2)} GB` : `${(n / 1e6).toFixed(1)} MB`
 
 /** Older workers report only coarse status; never invent completed stages or timings. */
@@ -66,7 +68,7 @@ export function JobTimeline({ job }: { job: Job }): React.JSX.Element {
           : `${stage.completed}${stage.total ? ` of ${stage.total}` : ''} ${stage.unit ?? ''}`.trim()
         const stateLabel = active ? 'Working' : done ? 'Done' : stage.state === 'skipped' ? 'Not needed'
           : stage.state === 'failed' ? 'Failed' : stage.state === 'cancelled' ? 'Cancelled' : measured || queued ? 'Queued' : 'Not reported'
-        return <li key={stage.id} className="studio-stage" data-state={active ? 'running' : stage.state} aria-current={active ? 'step' : undefined}>
+        return <li key={stage.id} className="studio-stage" style={stageColor(stage.id)} data-state={active ? 'running' : stage.state} aria-current={active ? 'step' : undefined}>
           <span className="studio-node" aria-hidden="true">{done ? <Check size={13} /> : active ? <span /> : index + 1}</span>
           <span className="studio-stage-name">{LABELS[stage.id]}</span>
           <div className="studio-stage-meter"><div className="studio-meter-track"><progress className="studio-progress" aria-label={`${STAGE_NAMES[stage.id]} progress`} max={100}
@@ -87,8 +89,8 @@ export function JobTimeline({ job }: { job: Job }): React.JSX.Element {
     {total > 0 && <section className="studio-timing" aria-label="Time by stage">
       <div className="mb-3 flex justify-between text-xs"><span className="text-ink-muted">Job Breakdown</span><span className="font-mono tabular text-ink-subtle">{formatTimecode(total)} tracked</span></div>
       <div className="studio-time-strip" aria-hidden="true">{stages.filter(stage => elapsed(stage) > 0).map(stage => <div key={stage.id}
-        data-state={stage.state} style={{ flexGrow: elapsed(stage) }} title={`${LABELS[stage.id]} · ${formatTimecode(elapsed(stage))}`} />)}</div>
-      <div className="studio-time-legend">{stages.filter(stage => elapsed(stage) > 0).map(stage => <span key={stage.id} data-state={stage.state}>
+        data-state={stage.state} style={{ ...stageColor(stage.id), flexGrow: elapsed(stage) }} title={`${LABELS[stage.id]} · ${formatTimecode(elapsed(stage))}`} />)}</div>
+      <div className="studio-time-legend">{stages.filter(stage => elapsed(stage) > 0).map(stage => <span key={stage.id} style={stageColor(stage.id)} data-state={stage.state}>
         <i aria-hidden="true" /><span>{LABELS[stage.id]}</span><span className="font-mono tabular">{formatTimecode(elapsed(stage))}</span>
       </span>)}</div>
     </section>}

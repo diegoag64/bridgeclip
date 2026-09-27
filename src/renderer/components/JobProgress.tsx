@@ -1,3 +1,5 @@
+import { SourcePreview } from './SourcePicker'
+import { JobDiagnostics } from './JobDiagnostics'
 import { StageBreakdown } from './StageBreakdown'
 import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, Clapperboard, Clock3, Gauge, Github, RotateCcw, ScrollText } from 'lucide-react'
@@ -62,20 +64,18 @@ export function JobProgress({ job, onCancel, leading }: JobProgressProps): React
     <Page width="narrow">
       {leading && <div className="mb-3">{leading}</div>}
       <section className="glass overflow-hidden rounded-3xl p-5 sm:p-6">
-        <header className="mb-6 flex flex-wrap items-center gap-4">
-          <div className="glass-tile hidden h-16 w-20 shrink-0 items-center justify-center rounded-xl sm:flex"><Clapperboard className="h-7 w-7 text-ink-muted" /></div>
-          <div className="min-w-0 flex-1">
-            <p className="eyebrow text-accent">{queued ? 'Waiting in the queue' : 'Generating clips'}</p>
-            <h1 className="mt-1 truncate text-xl font-semibold tracking-[-0.025em] text-ink" title={source}>{sourceLabel(source)}</h1>
-            <p className="mt-1 text-xs text-ink-muted">{job.request.workflow === 'review' ? 'Review & edit' : 'Automatic clips'}</p>
-          </div>
-          <div className="w-full lg:w-auto"><InfoChip icon={<Clock3 />}>{formatTimecode(elapsed)} {queued ? 'waiting' : 'elapsed'}</InfoChip></div>
+        <header className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div><p className="eyebrow text-accent">{queued ? 'Waiting in the queue' : 'In progress'}</p>
+            <h1 className="mt-1 text-xl font-semibold tracking-tight text-ink">{job.request.workflow === 'review' ? 'Preparing your editor' : 'Creating your clips'}</h1></div>
+          <InfoChip icon={<Clock3 />}>{formatTimecode(elapsed)} {queued ? 'waiting' : 'elapsed'}</InfoChip>
         </header>
+        <div className="mb-6"><SourcePreview key={source} source={source} readOnly /></div>
         {((job.request.videoSpeed ?? 1) > 1 || job.clipsTotal > 0) && <div className="mb-5 flex flex-wrap items-center gap-2">
           {(job.request.videoSpeed ?? 1) > 1 && <InfoChip icon={<Gauge />}>{job.request.videoSpeed}× export speed</InfoChip>}
           {job.clipsTotal > 0 && <InfoChip icon={<Clapperboard />}>{job.clipsDone} of {job.clipsTotal} clips rendered</InfoChip>}
         </div>}
         <JobTimeline job={job} />
+        <JobDiagnostics diagnostics={job.diagnostics} />
       </section>
 
       <div className="mt-4 flex items-center justify-between gap-4 px-1">

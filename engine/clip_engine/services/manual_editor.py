@@ -138,20 +138,36 @@ async def prepare_project(request, segments, transcript, download, renderer, rev
         'duration_ms': duration, 'aspect_ratio': request.aspect_ratio, 'candidates': [],
         'transcript': [{'start_ms': max(0, min(duration, s.start_time_ms)), 'end_ms': max(0, min(duration, s.end_time_ms)), 'text': s.text} for s in transcript]}
     loop = asyncio.get_running_loop()
+    from .run_diagnostics import CURRENT
+    diagnostics = CURRENT.get()
+    import threading
+    progress_thread = threading.get_ident()
     total = min(100, len(segments))
     for i, segment in enumerate(segments[:100]):
         progress(f'Analyzing framing for candidate {i + 1} of {total}…', 100 * i / total)
         a, b = max(0, segment.start_time_ms), min(duration, segment.end_time_ms)
         if b - a < 100:
             continue
+        if diagnostics:
+            diagnostics.candidate(i + 1, total, b - a)
+        def layout_progress(detail, percent):
+            if diagnostics:
+                phase = {'Sampling faces': 'sampling', 'Scanning camera changes': 'camera_scan',
+                         'Refining face tracking': 'face_tracking', 'Checking shot layouts': 'vision'}.get(detail, 'sampling')
+                diagnostics.phase(phase, percent)
+            progress(f'Candidate {i + 1} of {total}: {detail}', 100 * i / total)
+        def report_layout(detail, percent):
+            if threading.get_ident() == progress_thread:
+                layout_progress(detail, percent)
+            else:
+                loop.call_soon_threadsafe(layout_progress, detail, percent)
         plan = None
         scenes = [{'at_ms': 0, 'layout': 'fit' if request.layout_style == 'fit' else 'fill', 'crops': [default_crop(w, h, aspect)]}]
         # Suggested shot layouts stay editable; no pacing cuts or captions are baked.
         if request.aspect_ratio == '9:16' and request.layout_style != 'fit':
             try:
                 plan = await renderer.layout_analyzer.analyze(download.video_path, a, b - a, w, h, request.layout_style,
-                    progress=lambda detail, percent: loop.call_soon_threadsafe(progress,
-                        f'Candidate {i + 1} of {total}: {detail} {percent}%', 100 * i / total))
+                    progress=report_layout)
                 scenes = []
                 for j, shot in enumerate(plan.shots[:60]):
                     views = shot_views(shot, (shot.start_ms + shot.end_ms) // 2, w, h, 1080, 1920)
@@ -179,9 +195,13 @@ async def prepare_project(request, segments, transcript, download, renderer, rev
         if plan is not None and getattr(plan, 'camera_scan', None):
             c['camera_scan'] = plan.camera_scan
             c['dismissed_camera_markers'] = []
+        if diagnostics:
+            diagnostics.phase('jev')
         progress(f'Reviewing candidate {i + 1} of {total} with Jev…', 100 * i / total)
         await review_candidate(c, reviewer)
         project['candidates'].append(c)
+        if diagnostics:
+            diagnostics.phase(None)
     if not project['candidates']:
         raise NoClipCandidatesError()
     progress('Saving source video…', 0, 'saving')

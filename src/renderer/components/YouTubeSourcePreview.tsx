@@ -6,12 +6,13 @@ import { formatTimecode } from '../lib/utils'
 import { Button } from './ui/Button'
 import { Skeleton } from './ui/Skeleton'
 
-export function YouTubeSourcePreview({ url, onClear, onReplace, disabled }: {
+export function YouTubeSourcePreview({ url, onClear, onReplace, disabled, readOnly = false }: {
   /** Canonical YouTube watch URL. */
   url: string
-  onClear: () => void
-  onReplace: () => void
+  onClear?: () => void
+  onReplace?: () => void
   disabled?: boolean
+  readOnly?: boolean
 }): React.JSX.Element {
   const [summary, setSummary] = useState<YouTubePreview | null>(null)
   const [details, setDetails] = useState<YouTubePreview | null>(null)
@@ -78,17 +79,17 @@ export function YouTubeSourcePreview({ url, onClear, onReplace, disabled }: {
               {views && uploaded && <span aria-hidden="true">·</span>}
               {uploaded && <time dateTime={preview?.uploadedOn ?? undefined}>{uploaded}</time>}
             </p>}
-            {!preview && <p role="status" className="mt-2 text-xs text-ink-muted">Details couldn’t load. You can still continue.</p>}
+            {!preview && <p role="status" className="mt-2 text-xs text-ink-muted">{readOnly ? "Video details are unavailable. Processing can continue." : "Details couldn’t load. You can still continue."}</p>}
           </>}
         </div>
       </div>
       <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/[0.06] px-3 py-2">
-        <span className="inline-flex items-center gap-1.5 text-2xs text-ink-muted"><Check className="h-3 w-3" aria-hidden="true" /> Video added</span>
+        <span className="inline-flex items-center gap-1.5 text-2xs text-ink-muted"><Check className="h-3 w-3" aria-hidden="true" /> {readOnly ? 'Source video' : 'Video added'}</span>
         <div className="flex flex-wrap items-center gap-1">
           {!preview && !loading && <Button size="sm" variant="ghost" icon={<RefreshCw className="h-3 w-3" />} onClick={() => setAttempt((value) => value + 1)} disabled={disabled}>Retry details</Button>}
           <Button size="sm" variant="ghost" trailingIcon={<ExternalLink className="h-3 w-3" />} onClick={() => void openVideo()}>View on YouTube</Button>
-          <Button size="sm" variant="secondary" onClick={onReplace} disabled={disabled}>Replace</Button>
-          <Button size="sm" variant="ghost" iconOnly aria-label="Remove video" icon={<X className="h-3.5 w-3.5" />} onClick={onClear} disabled={disabled} />
+          {!readOnly && <Button size="sm" variant="secondary" onClick={onReplace} disabled={disabled}>Replace</Button>}
+          {!readOnly && <Button size="sm" variant="ghost" iconOnly aria-label="Remove video" icon={<X className="h-3.5 w-3.5" />} onClick={onClear} disabled={disabled} />}
         </div>
       </div>
       {openError && <p role="alert" className="px-3 pb-2 text-xs text-danger">Could not open YouTube. Please try again.</p>}

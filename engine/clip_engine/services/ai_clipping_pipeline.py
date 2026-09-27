@@ -139,6 +139,7 @@ class ClippingJobProgress:
     total_clips: int = 0
     error: Optional[str] = None
     stages: Optional[list[dict]] = None
+    diagnostics: Optional[dict] = None
 
 
 @dataclass
@@ -194,6 +195,9 @@ class AIClippingPipeline:
         """
         from .job_progress import StageProgress
         self._stage_progress = StageProgress(request.workflow == 'review')
+        from .run_diagnostics import CURRENT, RunDiagnostics
+        self._diagnostics = RunDiagnostics()
+        self._last_live_progress = None
         loop = asyncio.get_running_loop()
         start_time = time.time()
         job_id = request.job_id
@@ -230,6 +234,8 @@ class AIClippingPipeline:
         self._current_external_job_id = request.external_job_id
         self._current_owner_user_id = request.owner_user_id
 
+        diagnostics_token = CURRENT.set(self._diagnostics)
+        heartbeat = asyncio.create_task(self._diagnostic_heartbeat())
         try:
             os.makedirs(work_dir, mode=0o700, exist_ok=True)
             logger.info(f"Starting AI clipping job: {job_id}")
@@ -421,6 +427,7 @@ class AIClippingPipeline:
                     processing_time_seconds=time.time() - start_time,
                     metrics={'planned_clip_count': len(project['candidates']),
                         'api_costs': {'total_estimated_cost_usd': costs, 'cost_incomplete': True},
+                        'diagnostics': self._diagnostics.snapshot(),
                         'pipeline_stages': self._stage_progress.update('completed')})
                 self._save_local_json(job_id, 'job_output', asdict(output))
                 self._update_progress(job_id, JobStatus.COMPLETED, 100, 'Ready to edit')
@@ -909,6 +916,7 @@ class AIClippingPipeline:
             logger.info(f"Job {job_id} total API cost: ${total_cost:.6f}")
 
             metrics = {
+                'diagnostics': self._diagnostics.snapshot(),
                 'pipeline_stages': self._stage_progress.update('completed'),
                 "analysis_duration_seconds": video_duration,
                 "requested_settings": {
@@ -1064,6 +1072,9 @@ class AIClippingPipeline:
             )
 
         finally:
+            heartbeat.cancel()
+            await asyncio.gather(heartbeat, return_exceptions=True)
+            CURRENT.reset(diagnostics_token)
             # Completed local clips and JSON have already been copied to the
             # output directory. The work directory can contain a downloaded
             # source and intermediate audio/video, so remove it in both modes.
@@ -1088,6 +1099,8 @@ class AIClippingPipeline:
     def _save_local_json(self, job_id: str, name: str, data: dict, compact: bool = False) -> str:
         """Save a JSON artifact to the local output directory."""
         output_dir = self._get_local_output_dir(job_id)
+        if name == 'job_output' and getattr(self, '_diagnostics', None):
+            data.setdefault('metrics', {})['diagnostics'] = self._diagnostics.snapshot()
         path = os.path.join(output_dir, f"{name}.json")
         temporary_path = None
         try:
@@ -1209,6 +1222,18 @@ class AIClippingPipeline:
             filtered.append(seg)
         return filtered
 
+    async def _diagnostic_heartbeat(self):
+        from dataclasses import replace
+        while True:
+            await asyncio.sleep(1)
+            previous = self._last_live_progress
+            if previous and self.progress_callback:
+                try:
+                    self.progress_callback(replace(previous, stages=self._stage_progress.snapshot(),
+                        diagnostics=self._diagnostics.snapshot()))
+                except Exception:
+                    logger.debug('Live diagnostic update unavailable')
+
     def _update_progress(
         self,
         job_id: str,
@@ -1224,6 +1249,9 @@ class AIClippingPipeline:
         """Update job progress via callback and webhook."""
         tracker = getattr(self, '_stage_progress', None)
         stages = tracker.update(status.value, stage_id, stage_percent, completed, total, unit) if tracker else None
+        diagnostics = getattr(self, '_diagnostics', None)
+        if diagnostics and tracker and tracker.active:
+            diagnostics.stage = tracker.active
         # Scans may decode hundreds of frames in a second. Keep the bridge
         # responsive and below its message-rate limit, while retaining state.
         key = (job_id, status.value, stage_id)
@@ -1238,15 +1266,16 @@ class AIClippingPipeline:
         progress = self._overall_progress
         if self.progress_callback:
             try:
-                self.progress_callback(ClippingJobProgress(
+                self._last_live_progress = ClippingJobProgress(
                     job_id=job_id,
                     status=status,
                     progress_percent=progress,
                     current_step=step,
                     clips_completed=clips_completed,
                     total_clips=total_clips,
-                    error=error, stages=stages,
-                ))
+                    error=error, stages=stages, diagnostics=diagnostics.snapshot() if diagnostics else None,
+                )
+                self.progress_callback(self._last_live_progress)
             except Exception as e:
                 logger.warning(f"Progress callback failed: {e}")
 

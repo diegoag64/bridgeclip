@@ -17,8 +17,9 @@ function loadModule(file, mocks = {}) {
 }
 
 const progress = loadModule('shared/job-progress.ts')
+const diagnostics = loadModule('shared/run-diagnostics.ts', { './job-progress': progress })
 const jobs = loadModule('shared/jobs.ts')
-const jobOutput = loadModule('shared/job-output.ts', { './editorial': loadModule('shared/editorial.ts'), './job-progress': progress })
+const jobOutput = loadModule('shared/job-output.ts', { './editorial': loadModule('shared/editorial.ts'), './job-progress': progress, './run-diagnostics': diagnostics })
 
 /** A job manager wired to a fake runner that records each start and lets the test drive it. */
 function setup() {
@@ -35,7 +36,8 @@ function setup() {
     './logger': { logger: { info() {}, warn() {}, error() {} } },
     '../shared/job-output': jobOutput,
     '../shared/jobs': jobs,
-    '../shared/job-progress': progress
+    '../shared/job-progress': progress,
+    '../shared/run-diagnostics': diagnostics
   })
   const sent = []
   let window = { isDestroyed: () => false, webContents: { isDestroyed: () => false, send: (channel, data) => sent.push({ channel, data }) } }
@@ -112,6 +114,24 @@ test('cancelling a queued job removes it from the queue and records the cancella
   starts[1].onExit()
   assert.deepEqual(starts.map((s) => s.jobId), ['a', 'b'], 'the cancelled job never starts')
   assert.equal(manager.cancelTrackedJob('c'), false, 'a finished job cannot be cancelled again')
+})
+
+test('live usage survives window reloads and saved results without private fields', () => {
+  const f = setup(); f.enqueue('usage')
+  const usage = { models: [{ stage: 'planning', model: 'test/model', requests: 1, active: 0, failed: 0,
+    input_tokens: 120, output_tokens: 30, cost_usd: .02, elapsed_ms: 3000, unknown_usage: 0, unknown_cost: 0,
+    prompt: 'private source text' }] }
+  const sink = f.starts[0].sink
+  sink.webContents.send('job:progress', { status: 'planning', diagnostics: usage })
+  const snapshot = f.manager.listJobs()[0]
+  assert.equal(snapshot.diagnostics.models[0].input_tokens, 120)
+  assert.equal(snapshot.diagnostics.models[0].prompt, undefined)
+  sink.webContents.send('job:progress', { diagnostics: { models: 'invalid' } })
+  assert.equal(f.manager.listJobs()[0].diagnostics.models[0].cost_usd, .02)
+  sink.webContents.send('job:complete', { output: { job_id: 'usage', clips: [], metrics: { diagnostics: usage } } })
+  const saved = f.manager.listJobs()[0].output.metrics.diagnostics
+  assert.equal(saved.models[0].output_tokens, 30)
+  assert.equal(saved.models[0].prompt, undefined)
 })
 
 test('cancelling a running job ignores its late events and frees the slot only when it exits', () => {

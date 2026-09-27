@@ -1,3 +1,4 @@
+import { parseRunDiagnostics } from '../shared/run-diagnostics'
 import { parseStages } from '../shared/job-progress'
 import { ChildProcess, spawn, execFile, execFileSync } from 'child_process'
 import { app } from 'electron'
@@ -30,6 +31,7 @@ export interface JobEventSink {
 export interface ProgressUpdate {
   type: 'progress'
   stages?: unknown
+  diagnostics?: unknown
   status: string
   percent: number
   step: string
@@ -575,7 +577,7 @@ export function startClipJob(
           if (now - progressWindowStart >= 1000) { progressWindowStart = now; progressInWindow = 0 }
           if (++progressInWindow > 50) { failBridgeLimit(); return }
           send('job:progress', { type: 'progress', jobId, status: safeBridgeText(msg.status), step: safeBridgeText(msg.step),
-            stages: parseStages(msg.stages),
+            stages: parseStages(msg.stages), diagnostics: parseRunDiagnostics(msg.diagnostics),
             percent: Number.isFinite(msg.percent) ? msg.percent : 0,
             clips_done: Number.isFinite(msg.clips_done) ? msg.clips_done : 0,
             clips_total: Number.isFinite(msg.clips_total) ? msg.clips_total : 0 })

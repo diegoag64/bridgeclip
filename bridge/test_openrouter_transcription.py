@@ -13,10 +13,14 @@ from unittest.mock import AsyncMock, patch
 
 
 SOURCE = Path(__file__).resolve().parents[1] / "engine/clip_engine/services/transcription_service.py"
+diagnostics_spec = importlib.util.spec_from_file_location("transcription_diagnostics_under_test", SOURCE.with_name("run_diagnostics.py"))
+diagnostics = importlib.util.module_from_spec(diagnostics_spec)
+diagnostics_spec.loader.exec_module(diagnostics)
 spec = importlib.util.spec_from_file_location("mai_transcription_under_test", SOURCE)
 stt = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = stt
 with patch.dict(sys.modules, {
+    "clip_engine.services.run_diagnostics": diagnostics,
     "clip_engine.config": types.SimpleNamespace(get_settings=lambda: types.SimpleNamespace(
         openrouter_api_key="test-openrouter", transcription_diarize=True,
         transcription_model="microsoft/mai-transcribe-2")),

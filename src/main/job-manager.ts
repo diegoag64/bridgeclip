@@ -1,3 +1,4 @@
+import { parseRunDiagnostics } from '../shared/run-diagnostics'
 import { parseStages } from '../shared/job-progress'
 import { join } from 'path'
 import { cancelJob as cancelRunningJob, startClipJob, type ClipJobConfig, type JobEventSink } from './pipeline-runner'
@@ -123,9 +124,11 @@ function onRunnerEvent(jobId: string, channel: string, payload: unknown): void {
   if (channel === 'job:progress') {
     const status = typeof data.status === 'string' && isActiveJobStatus(data.status) && data.status !== 'queued' ? data.status : job.snapshot.status
     const stages = parseStages(data.stages)
+    const diagnostics = parseRunDiagnostics(data.diagnostics)
     update(jobId, {
       status,
       ...(stages ? { stages, progressAt: Date.now() } : {}),
+      ...(diagnostics ? { diagnostics } : {}),
       percent: Math.max(0, Math.min(100, number(data.percent, job.snapshot.percent))),
       step: typeof data.step === 'string' ? data.step : job.snapshot.step,
       clipsDone: number(data.clips_done, job.snapshot.clipsDone),

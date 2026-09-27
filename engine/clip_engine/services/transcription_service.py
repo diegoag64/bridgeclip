@@ -19,6 +19,7 @@ from typing import Callable, Optional
 
 from clip_engine.config import get_settings
 from clip_engine.services.media_process import MEDIA_INPUT_OPTIONS, run_media
+from clip_engine.services.run_diagnostics import model_request
 
 logger = logging.getLogger(__name__)
 
@@ -715,6 +716,15 @@ class TranscriptionService:
             raise TranscriptionError("Could not prepare audio for transcription", reason="audio_chunk_failed") from None
 
     async def _request_transcript(self, audio_path: str, language: Optional[str], keyterms: Optional[list[str]], model: Optional[str] = None) -> dict:
+        model = model or getattr(getattr(self, "settings", None), "transcription_model", TRANSCRIPTION_MODEL)
+        with model_request(model) as call:
+            result = await self._request_transcript_body(audio_path, language, keyterms, model)
+            usage = result.get('usage') if isinstance(result.get('usage'), dict) else {}
+            call.update(success=True, input_tokens=usage.get('prompt_tokens'),
+                        output_tokens=usage.get('completion_tokens'), cost_usd=usage.get('cost'))
+            return result
+
+    async def _request_transcript_body(self, audio_path: str, language: Optional[str], keyterms: Optional[list[str]], model: Optional[str] = None) -> dict:
         import httpx
         if os.path.getsize(audio_path) > MAX_TRANSCRIPTION_AUDIO_BYTES:
             raise TranscriptionError("Transcription audio chunk is too large", reason="audio_chunk_too_large")

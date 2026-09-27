@@ -15,7 +15,7 @@
 .studio-state { font-size: 11px; color: rgb(var(--ink-subtle)); text-align: right; }
 .studio-duration { font: 11px 'Geist Mono', monospace; font-variant-numeric: tabular-nums; text-align: right; color: rgb(var(--ink-muted)); }
 .studio-stage[data-state=completed] .studio-node { background: rgb(var(--success)); color: rgb(var(--canvas)); border-color: transparent; animation: studio-check .3s ease-out; }
-.studio-stage[data-state=completed] .studio-progress::-webkit-progress-value { background: rgb(var(--success) / .75); }
+.studio-stage[data-state=completed] .studio-progress::-webkit-progress-value { background: var(--stage-color); }
 .studio-stage[data-state=completed] .studio-state { color: rgb(var(--success)); }
 .studio-stage[data-state=running] { background: rgb(var(--accent) / .08); border-color: rgb(var(--accent) / .3); margin: 3px 0; }
 .studio-stage[data-state=running] .studio-stage-name { color: rgb(var(--ink)); }
@@ -48,3 +48,11 @@
   .studio-progress::-webkit-progress-value { transition: none; }
   .studio-indeterminate { transform: translateX(115%); }
 }
+
+/* Stage identity is stable; checks and labels communicate completion separately. */
+.studio-time-strip > div, .studio-time-strip > div[data-state=running] { background: var(--stage-color); }
+.studio-time-legend i, .studio-time-legend [data-state=running] i { background: var(--stage-color); }
+.studio-stage .studio-progress::-webkit-progress-value { background: var(--stage-color); }
+.studio-stage .studio-progress::-moz-progress-bar { background: var(--stage-color); }
+.studio-stage .studio-indeterminate { background: var(--stage-color); }
+.studio-stage[data-state=completed] .studio-node { color: var(--stage-color); border-color: var(--stage-color); background: rgb(var(--surface)); }

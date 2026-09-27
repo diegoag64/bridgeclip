@@ -123,46 +123,53 @@ class JevService:
             self.requests += 1
             self.reserved_tokens += reserve
             record['status'] = 'unavailable'
-            try:
-                async with asyncio.timeout(self.timeout):
-                    async with httpx.AsyncClient(transport=self._transport, timeout=self.timeout, follow_redirects=False) as client:
-                        async with client.stream('POST', ENDPOINT, headers={'Authorization': f'Bearer {self._api_key}',
-                                                  'Content-Type': 'application/json', 'Accept-Encoding': 'identity'}, content=encoded) as response:
-                            response.raise_for_status()
-                            if response.headers.get('content-encoding', 'identity').lower() != 'identity':
-                                raise ValueError('Unsupported response encoding')
-                            body = bytearray()
-                            async for chunk in response.aiter_bytes():
-                                body.extend(chunk)
-                                if len(body) > 128_000:
-                                    raise ValueError('Oversized response')
-                data = json.loads(body)
-                actual_model = data.get('model')
-                if not isinstance(actual_model, str) or not re.fullmatch(re.escape(MODEL) + r'(?:-\d{8})?', actual_model):
-                    raise ValueError('Unexpected model version')
-                record['model'] = actual_model
-                usage = data.get('usage', {})
-                input_tokens = _number(usage.get('input_tokens'), 0, 1_000_000)
-                output_tokens = _number(usage.get('output_tokens'), 0, 1_000_000)
-                if not isinstance(input_tokens, int) or not isinstance(output_tokens, int):
-                    raise ValueError('Invalid token usage')
-                self.input_tokens += input_tokens
-                self.output_tokens += output_tokens
-                self.reserved_tokens += max(0, input_tokens + output_tokens - reserve)
-                estimate = input_tokens * INPUT_USD_PER_TOKEN
-                billed = usage.get('cost')
-                if billed is not None:
-                    billed = _number(billed, 0, 1000)
-                self.estimated_cost_usd += billed if billed is not None else estimate
-                record.update(input_tokens=input_tokens, output_tokens=output_tokens, cost_usd=billed, estimated_cost_usd=estimate)
-                record.update(answers=validate_answers(data.get('answers'), questions), status='success')
-            except asyncio.CancelledError:
-                raise
-            except (httpx.HTTPError, TimeoutError, ValueError, TypeError, AttributeError):
-                pass  # Never retain response text, request headers or exception strings.
-            elapsed = time.monotonic() - now
-            self.request_seconds += elapsed
-            record['latency_ms'] = round(elapsed * 1000)
-            if record['status'] == 'success':
-                self._cache[cache_id] = copy.deepcopy(record)
-            return record
+            from .run_diagnostics import model_request
+            with model_request(MODEL) as usage_call:
+                return await self._evaluate_request(encoded, record, questions, reserve, now, usage_call)
+
+    async def _evaluate_request(self, encoded, record, questions, reserve, now, usage_call):
+        try:
+            async with asyncio.timeout(self.timeout):
+                async with httpx.AsyncClient(transport=self._transport, timeout=self.timeout, follow_redirects=False) as client:
+                    async with client.stream('POST', ENDPOINT, headers={'Authorization': f'Bearer {self._api_key}',
+                                              'Content-Type': 'application/json', 'Accept-Encoding': 'identity'}, content=encoded) as response:
+                        response.raise_for_status()
+                        if response.headers.get('content-encoding', 'identity').lower() != 'identity':
+                            raise ValueError('Unsupported response encoding')
+                        body = bytearray()
+                        async for chunk in response.aiter_bytes():
+                            body.extend(chunk)
+                            if len(body) > 128_000:
+                                raise ValueError('Oversized response')
+            data = json.loads(body)
+            actual_model = data.get('model')
+            if not isinstance(actual_model, str) or not re.fullmatch(re.escape(MODEL) + r'(?:-\d{8})?', actual_model):
+                raise ValueError('Unexpected model version')
+            record['model'] = actual_model
+            usage = data.get('usage', {})
+            input_tokens = _number(usage.get('input_tokens'), 0, 1_000_000)
+            output_tokens = _number(usage.get('output_tokens'), 0, 1_000_000)
+            if not isinstance(input_tokens, int) or not isinstance(output_tokens, int):
+                raise ValueError('Invalid token usage')
+            self.input_tokens += input_tokens
+            self.output_tokens += output_tokens
+            self.reserved_tokens += max(0, input_tokens + output_tokens - reserve)
+            estimate = input_tokens * INPUT_USD_PER_TOKEN
+            billed = usage.get('cost')
+            if billed is not None:
+                billed = _number(billed, 0, 1000)
+            self.estimated_cost_usd += billed if billed is not None else estimate
+            usage_call.update(input_tokens=input_tokens, output_tokens=output_tokens, cost_usd=billed)
+            record.update(input_tokens=input_tokens, output_tokens=output_tokens, cost_usd=billed, estimated_cost_usd=estimate)
+            record.update(answers=validate_answers(data.get('answers'), questions), status='success')
+        except asyncio.CancelledError:
+            raise
+        except (httpx.HTTPError, TimeoutError, ValueError, TypeError, AttributeError):
+            pass  # Never retain response text, request headers or exception strings.
+        elapsed = time.monotonic() - now
+        self.request_seconds += elapsed
+        record['latency_ms'] = round(elapsed * 1000)
+        usage_call['success'] = record['status'] == 'success'
+        if record['status'] == 'success':
+            self._cache[record['cache_id']] = copy.deepcopy(record)
+        return record

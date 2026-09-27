@@ -1,3 +1,5 @@
+import { JobDiagnostics } from './JobDiagnostics'
+import { parseRunDiagnostics, type RunDiagnostics } from '../../shared/run-diagnostics'
 import { useEffect, useState } from 'react'
 import { Check, Circle, Loader2 } from 'lucide-react'
 import { parseStages, STAGE_NAMES, type PipelineStage } from '../../shared/job-progress'
@@ -35,19 +37,25 @@ export function StageBreakdown({ stages, updatedAt, running = false }: { stages:
   </ol>
 }
 
-export function SavedStageTimings({ outputDir, stages: provided }: { outputDir?: string; stages?: unknown }): React.JSX.Element | null {
+export function SavedStageTimings({ outputDir, stages: provided, diagnostics: providedDiagnostics }: { outputDir?: string; stages?: unknown; diagnostics?: unknown }): React.JSX.Element | null {
   const [loaded, setLoaded] = useState<PipelineStage[]>()
+  const [diagnostics, setDiagnostics] = useState<RunDiagnostics>()
   useEffect(() => {
     let active = true
     setLoaded(undefined)
+    setDiagnostics(undefined)
     if (provided === undefined && outputDir) void getApi().history.getJob(outputDir).then(output => {
-      if (active) setLoaded(parseStages(parseJobOutput(output)?.metrics?.pipeline_stages))
+      if (active) {
+        const metrics = parseJobOutput(output)?.metrics
+        setLoaded(parseStages(metrics?.pipeline_stages))
+        setDiagnostics(parseRunDiagnostics(metrics?.diagnostics))
+      }
     }).catch(() => {})
     return () => { active = false }
   }, [outputDir, provided])
   const stages = provided === undefined ? loaded : parseStages(provided)
   if (!stages?.length) return null
   return <details className="glass-well my-3 rounded-xl px-4 py-3"><summary className="cursor-pointer text-xs text-ink-muted">Processing time by stage</summary>
-    <div className="mt-3"><StageBreakdown stages={stages} /></div>
+    <div className="mt-3"><StageBreakdown stages={stages} />{Boolean(diagnostics || providedDiagnostics) && <JobDiagnostics diagnostics={parseRunDiagnostics(providedDiagnostics) ?? diagnostics} saved />}</div>
   </details>
 }

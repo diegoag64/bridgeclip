@@ -1,3 +1,4 @@
+import type { RunDiagnostics } from './run-diagnostics'
 import type { PipelineStage } from './job-progress'
 import type { JobOutput } from './job-output'
 
@@ -54,6 +55,7 @@ export interface JobSnapshot {
   status: JobStatus
   percent: number
   stages?: PipelineStage[]
+  diagnostics?: RunDiagnostics
   progressAt?: number
   step: string
   clipsDone: number

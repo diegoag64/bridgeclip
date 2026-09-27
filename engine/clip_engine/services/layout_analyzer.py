@@ -1081,6 +1081,8 @@ class LayoutAnalyzer:
             return None
 
         loop = asyncio.get_running_loop()
+        if progress:
+            progress('Sampling faces', None)
         frames, keyframes = await loop.run_in_executor(
             None, self._decode_and_detect, video_path, start_ms, duration_ms, src_w, src_h,
         )
@@ -1145,7 +1147,11 @@ class LayoutAnalyzer:
         if scan:
             boundaries = align_boundaries([a for a, _ in segments], markers, duration_ms)
             segments = list(zip(boundaries, boundaries[1:]))
-        for shot_start, shot_end in segments:
+        if progress:
+            progress('Checking shot layouts', 0)
+        for shot_index, (shot_start, shot_end) in enumerate(segments):
+            if progress:
+                progress('Checking shot layouts', round(100 * shot_index / max(1, len(segments))))
             shot_frames = []
             for frame in frames:
                 if shot_start <= frame.t_ms < shot_end and (not shot_frames or frame.t_ms - shot_frames[-1].t_ms >= 200):
@@ -1409,9 +1415,11 @@ class LayoutAnalyzer:
         if not indices:
             return scan, frames, keyframes
         width, height = analysis_dimensions(src_w, src_h)
+        # Bound decoding at the input. An output-only -t cannot stop when
+        # select emits no frame at the endpoint, so it may scan the whole source.
         cmd = ['ffmpeg', '-nostdin', '-v', 'error', '-ss', f"{scan['start_ms']/1000:.6f}",
-               '-protocol_whitelist', 'file,pipe,fd', '-format_whitelist', 'mov,matroska,webm,avi,flv,mpegts', '-i', video_path,
                '-t', f"{(scan['end_ms']-scan['start_ms'])/1000:.6f}",
+               '-protocol_whitelist', 'file,pipe,fd', '-format_whitelist', 'mov,matroska,webm,avi,flv,mpegts', '-i', video_path,
                '-map', '0:v:0', '-an', '-sn', '-dn',
                '-vf', f"select='{select_expression(indices)}',scale={width}:{height}",
                '-fps_mode', 'passthrough', '-f', 'rawvideo', '-pix_fmt', 'bgr24', '-']

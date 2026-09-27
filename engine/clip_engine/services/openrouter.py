@@ -55,7 +55,17 @@ def message_text(body: dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
     return content, choice.get("finish_reason")
 
 
-async def chat_completion(
+async def chat_completion(client: httpx.AsyncClient, payload: dict[str, Any]) -> tuple[dict, dict]:
+    from .run_diagnostics import model_request
+    with model_request(payload.get('model', '')) as call:
+        body, usage = await _chat_completion(client, payload)
+        raw = body.get('usage') or {}
+        call.update(success=True, input_tokens=raw.get('prompt_tokens'),
+                    output_tokens=raw.get('completion_tokens'), cost_usd=raw.get('cost'))
+        return body, usage
+
+
+async def _chat_completion(
     client: httpx.AsyncClient,
     payload: dict[str, Any],
 ) -> tuple[dict, dict]:

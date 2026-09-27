@@ -200,16 +200,18 @@ function DropZone({
   )
 }
 
-function SourcePreview({
+export function SourcePreview({
   source,
   onClear,
   onReplace,
-  disabled
+  disabled,
+  readOnly = false
 }: {
   source: string
-  onClear: () => void
-  onReplace: () => void
+  onClear?: () => void
+  onReplace?: () => void
   disabled?: boolean
+  readOnly?: boolean
 }): React.JSX.Element {
   const link = isUrl(source)
   const ytId = link ? youtubeId(source) : null
@@ -219,11 +221,11 @@ function SourcePreview({
   const [mediaFailed, setMediaFailed] = useState(false)
   const youtubeUrl = youtubeSourceUrl(source)
 
-  if (youtubeUrl) return <YouTubeSourcePreview url={youtubeUrl} onClear={onClear} onReplace={onReplace} disabled={disabled} />
+  if (youtubeUrl) return <YouTubeSourcePreview readOnly={readOnly} url={youtubeUrl} onClear={onClear} onReplace={onReplace} disabled={disabled} />
 
   return (
-    <div className="glass flex items-center gap-3 rounded-2xl p-2.5 pr-3 animate-fade-in">
-      <div className="relative aspect-video h-[72px] shrink-0 overflow-hidden rounded-xl bg-black/40 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]">
+    <div className="glass flex flex-col gap-3 rounded-2xl p-3 sm:flex-row sm:items-center sm:gap-4 animate-fade-in">
+      <div className="relative aspect-video w-full sm:w-44 xl:w-52 shrink-0 overflow-hidden rounded-xl bg-black/40 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]">
         {!mediaFailed && ytId && (
           <img
             src={`https://i.ytimg.com/vi/${ytId}/hqdefault.jpg`}
@@ -273,11 +275,11 @@ function SourcePreview({
           >
             {twitchId ? 'Twitch VOD' : ytId ? 'YouTube' : link ? 'Link' : 'Local file'}
           </Badge>
-          <span className="truncate text-2xs text-ink-subtle">{twitchId ? 'Public, completed videos only' : 'Ready to clip'}</span>
+          <span className="truncate text-2xs text-ink-subtle">{readOnly ? 'Source video' : twitchId ? 'Public, completed videos only' : 'Ready to clip'}</span>
         </div>
       </div>
 
-      <div className="flex shrink-0 items-center gap-1.5">
+      {!readOnly && <div className="flex shrink-0 items-center gap-1.5">
         <Button variant="secondary" size="sm" onClick={onReplace} disabled={disabled}>
           Replace
         </Button>
@@ -290,7 +292,7 @@ function SourcePreview({
           disabled={disabled}
           icon={<X className="h-3.5 w-3.5" />}
         />
-      </div>
+      </div>}
     </div>
   )
 }

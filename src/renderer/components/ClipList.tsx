@@ -352,7 +352,7 @@ function GeneratedClipList({ output, outputDir: runDirectory, leading, onNewClip
         <RunStats key={output.job_id} output={output} costs={costs} videoSpeed={typeof videoSpeed === 'number' && videoSpeed > 1 ? videoSpeed : null} />
       </div>
 
-      <SavedStageTimings stages={output.metrics?.pipeline_stages} />
+      <SavedStageTimings stages={output.metrics?.pipeline_stages} diagnostics={output.metrics?.diagnostics} />
       {framingNotice && (
         <Callout tone="warning" className="mt-3">
           <span className="text-ink-muted">{framingNotice}</span>

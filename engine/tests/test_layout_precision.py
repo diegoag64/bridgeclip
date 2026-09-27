@@ -137,3 +137,31 @@ def test_analysis_bounds_optional_paid_decisions_for_many_short_shots(monkeypatc
     asyncio.run(analyzer.analyze('fixture.mp4', 0, 8000, 160, 90))
     assert len(modes) == 16
     assert modes == [False] * 12 + [True] * 4
+
+
+def test_sparse_detail_selection_bounds_input_and_preserves_selected_frames(tmp_path, monkeypatch):
+    """No selected frame reaches the requested end; output -t alone cannot stop decoding."""
+    from contextlib import contextmanager
+    from clip_engine.services import layout_analyzer as module, layout_precision
+    from clip_engine.services.camera_scan import scan_camera_changes
+    source = source_video(tmp_path)
+    analyzer = LayoutAnalyzer()
+    scan = scan_camera_changes(source, 0, 2200)
+    monkeypatch.setattr(layout_precision, 'detail_indices', lambda *_: [2, 3, 4])
+    class NoFaces:
+        def detect(self, image): return None, None
+    monkeypatch.setattr(analyzer, '_get_detector', lambda *_: NoFaces())
+    original = module.media_process
+    commands = []
+    @contextmanager
+    def bounded(cmd, **kwargs):
+        commands.append(cmd)
+        assert cmd.index('-t') < cmd.index('-i')
+        assert float(cmd[cmd.index('-t') + 1]) == pytest.approx(2.2)
+        with original(cmd, **kwargs) as process:
+            yield process
+    monkeypatch.setattr(module, 'media_process', bounded)
+    result_scan, frames, _ = analyzer._precise_frames(str(source), 0, 2200, 160, 90, [], [])
+    assert len(commands) == 1
+    assert [f.t_ms for f in frames] == pytest.approx([scan['frames'][i] for i in [2, 3, 4]])
+    assert result_scan['frames'] == scan['frames']
