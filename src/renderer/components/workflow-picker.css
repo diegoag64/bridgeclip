@@ -1,0 +1,73 @@
+/* Selection is a short story, played once; the resting illustration stays still. */
+.workflow-illustration :is(.workflow-spark, .workflow-twinkles, .workflow-clips, .workflow-done) {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .workflow-illustration-selected .workflow-source {
+    animation: workflow-feed 550ms cubic-bezier(.16, 1, .3, 1) backwards;
+  }
+  .workflow-illustration-selected .workflow-spark {
+    animation: workflow-spark 650ms 80ms cubic-bezier(.16, 1, .3, 1) backwards;
+  }
+  .workflow-illustration-selected .workflow-twinkles {
+    animation: workflow-pop 500ms 160ms ease-out backwards;
+  }
+  .workflow-illustration-selected .workflow-clips {
+    animation: workflow-clips 650ms 140ms cubic-bezier(.16, 1, .3, 1) backwards;
+  }
+  .workflow-illustration-selected .workflow-done {
+    animation: workflow-pop 450ms 340ms ease-out backwards;
+  }
+  .workflow-illustration-selected .workflow-cursor {
+    animation: workflow-cursor 850ms ease-in-out backwards;
+  }
+  .workflow-illustration-selected .workflow-click {
+    animation: workflow-click 850ms ease-out backwards;
+  }
+  .workflow-illustration-selected .workflow-trim {
+    animation: workflow-trim 850ms ease-in-out backwards;
+  }
+  .workflow-illustration-selected .workflow-playhead {
+    animation: workflow-scrub 850ms ease-in-out backwards;
+  }
+}
+
+@keyframes workflow-feed {
+  0% { transform: translateX(-7px); }
+  45% { transform: translateX(4px); }
+  100% { transform: translateX(0); }
+}
+@keyframes workflow-spark {
+  0% { transform: scale(.75) rotate(-25deg); }
+  50% { transform: scale(1.18) rotate(12deg); }
+  100% { transform: scale(1) rotate(0); }
+}
+@keyframes workflow-pop {
+  0% { transform: scale(.6); opacity: .3; }
+  60% { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+@keyframes workflow-clips {
+  0% { transform: translate(-8px, 3px) rotate(-6deg); }
+  55% { transform: translate(2px, -3px) rotate(3deg); }
+  100% { transform: translate(0, 0) rotate(0); }
+}
+@keyframes workflow-cursor {
+  0%, 100% { transform: translate(0, 0); }
+  35%, 50% { transform: translate(-17px, 16px); }
+  70% { transform: translate(-9px, 16px); }
+}
+@keyframes workflow-click {
+  0%, 25%, 70% { opacity: 0; }
+  40%, 50%, 100% { opacity: 1; }
+}
+@keyframes workflow-trim {
+  0%, 35%, 100% { transform: translateX(0); }
+  70% { transform: translateX(8px); }
+}
+@keyframes workflow-scrub {
+  0%, 25%, 100% { transform: translateX(0); }
+  65% { transform: translateX(20px); }
+}

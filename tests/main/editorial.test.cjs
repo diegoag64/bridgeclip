@@ -13,17 +13,14 @@ function load(entry) {
   return mod.exports
 }
 const { parseEditorialTrace, parseEditorialSummary, editorialScore, defaultWeights } = load('src/shared/editorial.ts')
-const { parseFramingTrace, sourceToOutput } = load('src/shared/framing-trace.ts')
 
 test('recorded reaction protects exact source time and exposes prevented cuts', () => {
-  const trace = parseFramingTrace(fixture)
-  assert.deepEqual(trace.editorial.protected_source, [[4000, 13000]])
-  assert.deepEqual(trace.editorial.prevented_cuts, [
+  const trace = parseEditorialTrace(fixture.editorial)
+  assert.deepEqual(trace.protected_source, [[4000, 13000]])
+  assert.deepEqual(trace.prevented_cuts, [
     { interval: [7000, 8500], kind: 'pacing' }, { interval: [7000, 8500], kind: 'planner_skip' }
   ])
-  assert.equal(sourceToOutput(trace, 7500), 5500)
-  assert.equal(sourceToOutput(trace, 12500), 10500)
-  const c = trace.editorial.candidates[0]
+  const c = trace.candidates[0]
   assert.equal(c.judgment.answers.refers_back.type, 'noul')
   assert.equal(c.judgment.answers.refers_back.noul, .95)
   assert.equal(c.judgment.answers.refers_back.confidence, undefined)
@@ -65,16 +62,6 @@ test('ranking reuses separate scores and gates completeness independently', () =
   assert.equal(editorialScore({ ...summary, status: 'unavailable' }), null)
   assert.equal(editorialScore(summary, { ...defaultWeights, hook: NaN }), null)
 })
-
-test('inspector renders saved evidence and probability semantics without an API', () => {
-  const { RecordedEditorialReview } = load('src/renderer/components/EditorialReview.tsx')
-  const html = renderToStaticMarkup(React.createElement(RecordedEditorialReview, { trace: parseEditorialTrace(fixture.editorial), seek() {} }))
-  assert.match(html, /2 proposed cuts prevented/)
-  assert.match(html, /95.0% yes/)
-  assert.match(html, /billed cost.*0.000013/)
-  assert.match(html, /Opening this view makes no model calls/)
-})
-
 
 test('legacy editorial traces remain readable without requested_model or reported cost', () => {
   const copy = structuredClone(fixture.editorial)

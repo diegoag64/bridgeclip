@@ -13,7 +13,6 @@ export function validateJobConfig(value: unknown): ClipJobConfig {
   if (sourceError) throw new Error(sourceError)
   if (typeof v.autoClipCount !== 'boolean' || typeof v.includeCaptions !== 'boolean') throw new Error('Invalid job options')
   if (typeof v.layoutVision !== 'boolean') throw new Error('Invalid vision option')
-  if (v.debugCapture !== undefined && typeof v.debugCapture !== 'boolean') throw new Error('Invalid debug capture option')
   if (v.videoSpeed !== undefined && !isVideoSpeed(v.videoSpeed)) throw new Error('Video speed must be between 1× and 2×')
   if (v.workflow !== undefined && !['automatic', 'review'].includes(v.workflow)) throw new Error('Invalid workflow')
   if (v.clippingMode !== undefined && !['quality', 'economy', 'advanced'].includes(v.clippingMode)) throw new Error('Invalid clipping mode')

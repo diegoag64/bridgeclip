@@ -19,6 +19,7 @@ test('caption styles preview word progression, support transport controls and re
   await page.emulateMedia({ reducedMotion: 'no-preference' })
   await page.getByPlaceholder('YouTube, Twitch VOD or direct video link').fill('https://example.com/video.mp4')
   await page.getByRole('button', { name: 'Use link', exact: true }).click()
+  await page.getByRole('radio', { name: 'Automatic', exact: true }).click()
   const steps = page.getByRole('navigation', { name: 'Create steps' })
   await steps.getByRole('button', { name: /Captions/ }).click()
   const preview = page.getByRole('region', { name: 'Caption preview' })

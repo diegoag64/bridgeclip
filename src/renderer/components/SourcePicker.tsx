@@ -1,4 +1,4 @@
-import { normalizeVideoSource, twitchSourceError, twitchVodId } from '../../shared/video-source'
+import { normalizeVideoSource, twitchSourceError, twitchVodId, youtubeSourceUrl } from '../../shared/video-source'
 import { useCallback, useRef, useState } from 'react'
 import { FileVideo, FolderOpen, Link2, UploadCloud, X, Youtube, Twitch } from 'lucide-react'
 import { basename, cn, formatTimecode, isUrl, localFileUrl, youtubeId } from '../lib/utils'
@@ -7,6 +7,7 @@ import { Button } from './ui/Button'
 import { TextInput } from './ui/Field'
 import { Badge } from './ui/Badge'
 import { IconTile } from './ui/IconTile'
+import { YouTubeSourcePreview } from './YouTubeSourcePreview'
 
 interface SourcePickerProps {
   value: string
@@ -216,6 +217,9 @@ function SourcePreview({
   const displaySource = link ? displaySourceLink(source) : basename(source)
   const [durationMs, setDurationMs] = useState<number | null>(null)
   const [mediaFailed, setMediaFailed] = useState(false)
+  const youtubeUrl = youtubeSourceUrl(source)
+
+  if (youtubeUrl) return <YouTubeSourcePreview url={youtubeUrl} onClear={onClear} onReplace={onReplace} disabled={disabled} />
 
   return (
     <div className="glass flex items-center gap-3 rounded-2xl p-2.5 pr-3 animate-fade-in">

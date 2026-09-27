@@ -184,7 +184,6 @@ test('the native picker authorizes media and shell opening rejects aliased appli
       './output-storage': { measureOutputStorage: async (directory) => ({ outputDirectory: directory, bytes: 0 }) },
       './clip-editor': {},
       './edit-inspector': { inspectEdits: async () => ({}) },
-    './framing-inspector': {},
       './run-history': runHistory,
       './pipeline-runner': {},
       './job-manager': { initJobManager() {} },
@@ -193,6 +192,7 @@ test('the native picker authorizes media and shell opening rejects aliased appli
       './network-policy': {},
       './validation': {},
       './openrouter-models': {},
+      './youtube-preview': { getYouTubePreview: async () => ({ title: 'A video' }) },
       './tools': {},
       './zernio/service': {},
       './zernio/posts': {},
@@ -201,7 +201,10 @@ test('the native picker authorizes media and shell opening rejects aliased appli
       './library-management': {}
     })
     ipc.registerIpcHandlers(() => window)
+    assert.equal(handlers.has('framing:inspect'), false)
+    assert.equal(handlers.has('framing:available'), false)
     const storage = handlers.get('settings:storageUsage')
+    assert.throws(() => handlers.get('source:youtubePreview')({ sender: contents, senderFrame: {} }, 'https://youtu.be/aqz-KE-bpKQ'), /Unauthorized application request/)
     assert.throws(() => storage({ sender: contents, senderFrame: {} }), /Unauthorized application request/)
     assert.equal((await storage({ sender: contents, senderFrame: frame }, root)).outputDirectory, library)
     const sourceUrl = 'https://www.youtube.com/watch?v=hqP9fivmBqI'
@@ -617,11 +620,12 @@ test('pipeline preserves split JSON messages and protects the job identity', asy
   })
   const window = { isDestroyed: () => false, webContents: { isDestroyed: () => false, send: (channel, data) => sent.push({ channel, data }) } }
   runner.startClipJob('trusted-job', {
-    videoUrl: '/tmp/video.mp4', videoSpeed: 1.5, clippingMode: 'advanced', plannerModel: 'custom/planner', transcriptionModel: 'custom/speech',
+    videoUrl: '/tmp/video.mp4', debugCapture: true, videoSpeed: 1.5, clippingMode: 'advanced', plannerModel: 'custom/planner', transcriptionModel: 'custom/speech',
     plannerCapabilities: { maxOutputTokens: 8192, supportsImages: false, inputPrice: .000001, outputPrice: .000005 }
   }, window, undefined, '/tmp/queued-output')
   const forwarded = JSON.parse(workerInput)
   assert.equal(forwarded.video_speed, 1.5)
+  assert.equal(forwarded.debug_capture, undefined)
   assert.equal(forwarded.contract_version, 3)
   assert.equal(forwarded.output_dir, '/tmp/queued-output')
   assert.equal(forwarded.clipping_mode, 'advanced')

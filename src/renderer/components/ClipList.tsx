@@ -10,8 +10,7 @@ import { clipFilePath } from '../lib/thumbnails'
 import type { ApiCosts, ClipArtifact, JobOutput } from '../store/use-job-store'
 import { ClipCard } from './ClipCard'
 import { EditInspector } from './EditInspector'
-import { FramingInspector } from './FramingInspector'
-import { EditorialWeights } from './EditorialReview'
+import { EditorialWeights } from './EditorialWeights'
 import { defaultWeights, editorialScore } from '../../shared/editorial'
 import { youtubeSourceUrl } from '../../shared/video-source'
 import { RunStats } from './RunStats'
@@ -114,8 +113,6 @@ function GeneratedClipList({ output, outputDir: runDirectory, leading, onNewClip
   const [sort, setSort] = useState<Sort>('score')
   const [weights, setWeights] = useState({ ...defaultWeights })
   const hasEditorial = output.clips.some((c) => c.editorial?.status === 'success')
-  const [inspecting, setInspecting] = useState<ClipArtifact | null>(null)
-  const [framingAvailable, setFramingAvailable] = useState<Set<number>>(new Set())
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [exporting, setExporting] = useState(false)
   const [deleting, setDeleting] = useState(false)
@@ -146,7 +143,6 @@ function GeneratedClipList({ output, outputDir: runDirectory, leading, onNewClip
   useEffect(() => {
     if (noticeTimer.current) clearTimeout(noticeTimer.current)
     setSelected(new Set())
-    setInspecting(null)
     setInspectEdits(false)
     setAspect(null)
     setPosting(null)
@@ -159,18 +155,6 @@ function GeneratedClipList({ output, outputDir: runDirectory, leading, onNewClip
   const [inspectEdits, setInspectEdits] = useState(false)
   const firstClip = output.clips[0]
   const outputDir = runDirectory ?? (firstClip ? clipFilePath(firstClip.s3_url).replace(/[\\/][^\\/]+$/, '') : '')
-
-  useEffect(() => {
-    let active = true
-    setFramingAvailable(new Set())
-    // A renderer hot reload can precede the new preload in development.
-    if (outputDir && getApi().framing.available) {
-      void getApi().framing.available(outputDir).then((indices) => {
-        if (active) setFramingAvailable(new Set(indices))
-      }).catch(() => {})
-    }
-    return () => { active = false }
-  }, [outputDir, output])
 
   const asPostable = (clip: ClipArtifact): PostableClip => ({ ...toPostable(clip), library: { outputDir, clipIndex: clip.clip_index } })
 
@@ -310,7 +294,6 @@ function GeneratedClipList({ output, outputDir: runDirectory, leading, onNewClip
               onToggleSelect={() => toggle(clip.clip_index)}
               onAspect={aspect == null ? setAspect : undefined}
               onPost={() => setPosting([asPostable(clip)])}
-              onInspectFraming={framingAvailable.has(clip.clip_index) ? () => setInspecting(clip) : undefined}
               onAddToAutomation={outputDir ? () => setBankClips([clip.clip_index]) : undefined}
               onSetPosted={outputDir ? async (posted) => {
                 if (!getApi().history.setPosted) throw new Error('Restart BridgeClip to enable manual posted marks.')
@@ -502,7 +485,6 @@ function GeneratedClipList({ output, outputDir: runDirectory, leading, onNewClip
       {confirm && <ConfirmDialog request={confirm} onClose={closeConfirm} />}
       {posting && <PostDialog clips={posting} onClose={() => setPosting(null)} onNavigate={onNavigate} />}
       {inspectEdits && <EditInspector outputDir={outputDir} onClose={() => setInspectEdits(false)} />}
-      {inspecting && <FramingInspector outputDir={outputDir} clip={inspecting} onClose={() => setInspecting(null)} />}
       {bankClips && outputDir && <AddToAutomationDialog
         outputDir={outputDir}
         clipIndices={bankClips}

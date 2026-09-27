@@ -19,6 +19,7 @@ import { DURATION_OPTIONS, VIDEO_SPEED_OPTIONS } from '../../shared/job-contract
 import { isModelId } from '../../shared/openrouter-models'
 import { useModelStore } from '../store/use-model-store'
 import { ModelPicker } from './ModelPicker'
+import { WorkflowPicker } from './WorkflowPicker'
 
 const DURATIONS = DURATION_OPTIONS
 
@@ -58,6 +59,7 @@ export function parseTrimRange(enabled: boolean, startText: string, endText: str
 
 /** The run request for the current draft. */
 export function buildJobRequest(draft: ClipDraft, trim: { start: number | null; end: number | null }): ClipJobRequest {
+  if (!draft.workflow) throw new Error('Choose a workflow before creating clips.')
   return {
     videoUrl: normalizeVideoSource(draft.source),
     workflow: draft.workflow,
@@ -68,7 +70,6 @@ export function buildJobRequest(draft: ClipDraft, trim: { start: number | null; 
     durationRanges: draft.durations.length > 0 ? draft.durations : null,
     aspectRatio: draft.aspectRatio,
     layoutStyle: draft.layoutStyle,
-    debugCapture: draft.debugCapture ?? false,
     layoutVision: draft.clippingMode !== 'economy' && draft.aspectRatio === '9:16' && draft.layoutStyle === 'auto' && draft.layoutVision,
     pacing: draft.pacing,
     videoSpeed: draft.videoSpeed ?? 1,
@@ -111,15 +112,16 @@ export function JobForm({ onSubmit, onViewJob, blockedReason, submitting, classN
   const meta = WIZARD_STEPS[index]
   const sourceError = twitchSourceError(draft.source)
   const hasSource = Boolean(draft.source.trim()) && !sourceError
+  const videoValid = hasSource && draft.workflow !== null && !trim.error
   const modelsValid = draft.clippingMode !== 'advanced' || (isModelId(draft.plannerModel) && isModelId(draft.transcriptionModel))
-  const stepValid = step === 'video' ? hasSource && !trim.error : step !== 'clips' || modelsValid
-  const canSubmit = hasSource && modelsValid && !blockedReason && !trim.error && !submitting && !draft.started
+  const stepValid = videoValid && (step !== 'clips' || modelsValid)
+  const canSubmit = videoValid && modelsValid && !blockedReason && !submitting && !draft.started
 
   const submit = (): void => {
     if (canSubmit) onSubmit(buildJobRequest(draft, trim))
   }
 
-  // ⌘↵ / Ctrl+↵ generates from any step once a video is chosen.
+  // ⌘↵ / Ctrl+↵ generates only once a video and workflow are chosen.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent): void => {
       if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
@@ -144,13 +146,13 @@ export function JobForm({ onSubmit, onViewJob, blockedReason, submitting, classN
 
   return (
     <div className={cn('space-y-3', className)}>
-      <Stepper current={step} reachable={hasSource ? WIZARD_STEPS.length - 1 : 0} onSelect={goTo} />
+      <Stepper current={step} reachable={videoValid ? WIZARD_STEPS.length - 1 : 0} onSelect={goTo} />
 
       <Panel className="p-4 xl:p-5">
-        <div className="mb-3">
+        {step !== 'video' && <div className="mb-3">
           <h2 className="text-sm font-semibold text-ink">{step === 'review' && draft.workflow === 'review' ? 'Ready to find candidates' : meta.title}</h2>
           <p className="mt-0.5 text-xs text-ink-muted">{step === 'review' && draft.workflow === 'review' ? 'Jev will review each candidate, then the editor opens for your final cut.' : meta.description}</p>
-        </div>
+        </div>}
         {sourceError && <p role="alert" className="text-sm text-danger">{sourceError}</p>}
         {step === 'video' && <VideoStep draft={draft} update={update} trimError={trim.error} disabled={submitting} />}
         {step === 'format' && <FormatStep draft={draft} update={update} />}
@@ -167,7 +169,7 @@ export function JobForm({ onSubmit, onViewJob, blockedReason, submitting, classN
           </Button>
         ) : <span />}
         <p className="min-w-0 flex-1 truncate text-center text-2xs text-ink-subtle">
-          {blockedReason ?? (!modelsValid ? 'Choose both models in Advanced mode.' : step === 'video' && !hasSource ? 'Add a video to continue.' : `${MOD_KEY}↵ generates from any step`)}
+          {blockedReason ?? (!draft.workflow ? 'Choose a workflow to continue.' : !modelsValid ? 'Choose both models in Advanced mode.' : step === 'video' && !hasSource ? 'Add a video to continue.' : `${MOD_KEY}↵ generates from any step`)}
         </p>
         {next && step !== 'review' ? (
           <div className="flex items-center gap-2">
@@ -235,10 +237,14 @@ function Stepper({ current, reachable, onSelect }: { current: WizardStep; reacha
 function VideoStep({ draft, update, trimError, disabled }: { draft: ClipDraft; update: Update; trimError: string | null; disabled?: boolean }): React.JSX.Element {
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Workflow">
-        {([{ id: 'automatic', title: 'Automatic', hint: 'Find, check and render clips.' }, { id: 'review', title: 'Review & edit', hint: 'Find candidates. You make the final cut.' }] as const).map((option) => <button key={option.id} type="button" role="radio" aria-checked={draft.workflow === option.id} tabIndex={draft.workflow === option.id ? 0 : -1} onKeyDown={onRadioKeyDown} disabled={disabled} onClick={() => update({ workflow: option.id })} className={cn('glass-tile glass-tile-hover rounded-xl px-3 py-3 text-left', draft.workflow === option.id && 'glass-selected')}><span className="block text-sm font-medium">{option.title}</span><span className="block mt-1 text-2xs text-ink-subtle">{option.hint}</span></button>)}
-      </div>
-      <SourcePicker value={draft.source} onChange={(source) => update({ source })} disabled={disabled} />
+      <WorkflowPicker value={draft.workflow} onChange={(workflow) => update({ workflow })} disabled={disabled} />
+      <section aria-labelledby="video-source-heading" className="space-y-3 border-t border-white/[0.06] pt-4">
+        <div>
+          <h2 id="video-source-heading" className="text-sm font-semibold text-ink">{WIZARD_STEPS[0].title}</h2>
+          <p className="mt-0.5 text-xs text-ink-muted">{WIZARD_STEPS[0].description}</p>
+        </div>
+        <SourcePicker value={draft.source} onChange={(source) => update({ source })} disabled={disabled} />
+      </section>
       <SettingRow
         title="Preferred part of the video"
         description="Suggest where to find clips. The full source is transcribed; boundaries may expand to preserve complete ideas."
@@ -366,11 +372,6 @@ export function FormatStep({ draft, update }: { draft: ClipDraft; update: Update
           }
         />
       </Group>
-      <SettingRow
-        title="Capture framing diagnostics"
-        description="Keeps a lower-resolution copy of the full source video and framing decisions in this run’s output folder. Adds processing time and disk usage. Shared across clips; delete the run folder to remove it. Inspecting a saved run makes no AI calls."
-        control={<Switch label="Capture framing diagnostics" checked={draft.debugCapture ?? false} onChange={(debugCapture) => update({ debugCapture })} />}
-      />
 
       <Group label="Video speed" aside="All clips in this job">
         <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-6" role="radiogroup" aria-label="Video speed" aria-describedby="video-speed-help">

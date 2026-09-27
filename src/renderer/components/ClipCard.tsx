@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Check, FolderOpen, Scan, ImageOff, ListPlus, Play, Send, TrendingUp, TriangleAlert, Undo2 } from 'lucide-react'
+import { Check, FolderOpen, ImageOff, ListPlus, Play, Send, TrendingUp, TriangleAlert, Undo2 } from 'lucide-react'
 import { cn, formatTimecode, isMac, localFileUrl } from '../lib/utils'
 import { getApi } from '../lib/ipc'
 import { clipFilePath, loadThumbnail } from '../lib/thumbnails'
@@ -33,7 +33,6 @@ interface ClipCardProps {
   /** Opens the post dialog for this clip. */
   onPost?: () => void
   onAddToAutomation?: () => void
-  onInspectFraming?: () => void
   onSetPosted?: (posted: boolean) => Promise<void>
 }
 
@@ -48,7 +47,6 @@ export function ClipCard({
   onAspect,
   onPost,
   onAddToAutomation,
-  onInspectFraming,
   onSetPosted
 }: ClipCardProps): React.JSX.Element {
   const filePath = clipFilePath(clip.s3_url)
@@ -212,7 +210,6 @@ export function ClipCard({
               ...(onSetPosted && postingStatus && (postingStatus.state !== 'posted' || postingStatus.manuallyPosted) ? [postingStatus.manuallyPosted
                 ? { label: 'Undo manual posted mark', icon: <Undo2 className="h-3.5 w-3.5" />, onSelect: () => { void setPosted(false) } }
                 : { label: 'Mark as posted', icon: <Check className="h-3.5 w-3.5" />, onSelect: () => { void setPosted(true) } }] : []),
-              ...(onInspectFraming ? [{ label: 'Inspect framing', icon: <Scan className="h-3.5 w-3.5" />, onSelect: onInspectFraming }] : []),
               { label: isMac ? 'Show in Finder' : 'Show in folder', icon: <FolderOpen className="h-3.5 w-3.5" />, onSelect: () => { void showInFolder() } }
             ]} />
           </div>}

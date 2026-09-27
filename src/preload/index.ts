@@ -4,7 +4,6 @@ import type { CandidateEdit, EditorSession } from '../shared/clip-editor'
 import type { JobOutput } from '../shared/job-output'
 import type { EditAudit } from '../shared/editorial'
 import { contextBridge, ipcRenderer } from 'electron'
-import type { FramingInspection } from '../shared/framing-trace'
 import type {
   ZernioConnectOptions,
   ZernioConnectResult,
@@ -23,6 +22,7 @@ import type { LibraryClipPostingStatus, LibraryEnhancementOptions } from '../sha
 import type { OpenRouterCatalog } from '../shared/openrouter-models'
 import type { UpdateState } from '../shared/updates'
 import type { OutputStorageUsage } from '../shared/output-storage'
+import type { YouTubePreview } from '../shared/youtube-preview'
 
 export interface ClipSettings {
   openrouterConfigured: boolean
@@ -71,6 +71,7 @@ export interface ToolStatus {
 }
 
 export interface BridgeClipAPI {
+  source: { youtubePreview: (url: string, details?: boolean) => Promise<YouTubePreview> }
   editor: {
     open: (path: string) => Promise<EditorSession>
     save: (path: string, revision: number, edits: CandidateEdit[]) => Promise<EditorSession>
@@ -79,7 +80,6 @@ export interface BridgeClipAPI {
     replaceSource: (path: string, revision: number, replacement: string) => Promise<EditorSession>
   }
   edits: { inspect: (outputDir: string) => Promise<EditAudit> }
-  framing: { inspect: (outputDir: string, clipIndex: number) => Promise<FramingInspection>; available: (outputDir: string) => Promise<number[]> }
   models: { list: (refresh?: boolean) => Promise<OpenRouterCatalog> }
   automations: {
     reviewContent: (id: string, contentId: string, returnToQueue: boolean) => Promise<AutomationReviewResult>
@@ -218,6 +218,7 @@ function subscribe<T>(channel: string, callback: (data: T) => void): () => void 
 }
 
 const api: BridgeClipAPI = {
+  source: { youtubePreview: (url, details = false) => ipcRenderer.invoke('source:youtubePreview', url, details) },
   editor: {
     open: (path) => ipcRenderer.invoke('editor:open', path),
     save: (path, revision, edits) => ipcRenderer.invoke('editor:save', path, revision, edits),
@@ -226,10 +227,6 @@ const api: BridgeClipAPI = {
     replaceSource: (path, revision, replacement) => ipcRenderer.invoke('editor:replaceSource', path, revision, replacement)
   },
   edits: { inspect: (outputDir) => ipcRenderer.invoke('edits:inspect', outputDir) },
-  framing: {
-    inspect: (outputDir, clipIndex) => ipcRenderer.invoke('framing:inspect', outputDir, clipIndex),
-    available: (outputDir) => ipcRenderer.invoke('framing:available', outputDir)
-  },
   models: { list: (refresh = false) => ipcRenderer.invoke('models:list', refresh) },
   automations: {
     reviewContent: (id, contentId, returnToQueue) => ipcRenderer.invoke('automations:reviewContent', id, contentId, returnToQueue),

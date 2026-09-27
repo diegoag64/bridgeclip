@@ -5,7 +5,6 @@ import { loadSettings, publicSettings, replaceApiKey, savePublicSettings, type A
 import { ensureOutputDir, getJobHistory, getJobOutput, generateThumbnail } from './file-manager'
 import { measureOutputStorage } from './output-storage'
 import { inspectEdits } from './edit-inspector'
-import { availableFraming, inspectFraming } from './framing-inspector'
 import {
   getEnginePath,
   getBridgeRunnerPath,
@@ -21,6 +20,7 @@ import { assertAbsolutePath, assertMediaPath, assertTrustedSender, authorizeMedi
 import { assertPublicWebUrl } from './network-policy'
 import { validateJobConfig } from './validation'
 import { getModelCatalog, resolveAdvancedModels } from './openrouter-models'
+import { getYouTubePreview } from './youtube-preview'
 import { randomUUID } from 'crypto'
 import { resolveBinary, supportsCaptionFilter } from './tools'
 import { automationEnhancementGroups, enhanceAutomationBatch, automationContentSource, enhanceAutomationContent, resolveAutomationMetadataDraft, addAutomationContent, addLibraryClipsToAutomation, createAutomation, deleteAutomation, isAutomationMedia, listAutomations, removeAutomationContent, runAutomation, updateAutomation, updateAutomationContent, approveAutomationTikTokReview, prepareAutomationTikTokReview } from './automations'
@@ -70,6 +70,7 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
   })
   handle('settings:storageUsage', () => measureOutputStorage(loadSettings().outputDirectory))
   handle('models:list', (_event, refresh: unknown = false) => getModelCatalog(refresh))
+  handle('source:youtubePreview', (_event, source: unknown, details: unknown = false) => getYouTubePreview(source, details))
 
   handle('settings:save', (_event, settings: PublicSettings) => {
     const current = loadSettings()
@@ -278,11 +279,6 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
   handle('editor:replaceSource', (_event, path: unknown, revision: unknown, replacement: unknown) => replaceEditorSource(path, revision, replacement))
 
   handle('edits:inspect', (_event, outputDir: string) => inspectEdits(outputDir, loadSettings().outputDirectory))
-
-  handle('framing:inspect', (_event, outputDir: string, clipIndex: number) =>
-    inspectFraming(outputDir, clipIndex, loadSettings().outputDirectory))
-  handle('framing:available', (_event, outputDir: string) =>
-    availableFraming(outputDir, loadSettings().outputDirectory))
 
   handle('thumbnails:generate', async (_event, videoPath: string, seekSeconds?: number) => {
     if (isAutomationMedia(videoPath)) authorizeMedia(videoPath)
