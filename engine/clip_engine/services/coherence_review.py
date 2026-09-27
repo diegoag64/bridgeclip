@@ -117,18 +117,30 @@ def removed_intervals(keeps, duration):
     return result
 
 
-def check_threshold(name, default=PASS):
+def policy_thresholds(settings=None):
+    return {name: getattr(settings, 'jev_' + name, value) for name, value in {
+        'threshold': PASS, 'self_contained_threshold': SELF_CONTAINED_PASS,
+        'faithful_to_source_threshold': FAITHFUL_TO_SOURCE_PASS,
+        'title_supported_threshold': TITLE_SUPPORTED_PASS, 'sponsor_threshold': SPONSOR_PASS,
+        'evidence_threshold': EVIDENCE_PASS, 'cut_threshold': CUT_PASS}.items()}
+
+
+def check_threshold(name, default=PASS, policy=None):
+    if policy is not None:
+        key = {'not_sponsored': 'sponsor_threshold'}.get(name, name + '_threshold')
+        return policy.get(key, default)
+
     return {'self_contained': SELF_CONTAINED_PASS, 'faithful_to_source': FAITHFUL_TO_SOURCE_PASS,
             'title_supported': TITLE_SUPPORTED_PASS, 'not_sponsored': SPONSOR_PASS,
             'evidence': EVIDENCE_PASS}.get(name, default)
 
 
-def approved(judgment, names, threshold=PASS):
+def approved(judgment, names, threshold=PASS, policy=None):
     if judgment['status'] != 'success':
         return False
     answers = judgment['answers']
-    return (all(answers[n]['noul'] >= check_threshold(n, threshold) for n in names)
-            and answers['evidence']['probabilities']['sufficient'] >= EVIDENCE_PASS)
+    return (all(answers[n]['noul'] >= check_threshold(n, threshold, policy) for n in names)
+            and answers['evidence']['probabilities']['sufficient'] >= (policy['evidence_threshold'] if policy else EVIDENCE_PASS))
 
 
 class CoherenceReviewer:
@@ -136,15 +148,15 @@ class CoherenceReviewer:
         self.service, self.settings = service, settings
         self.segments = sorted(segments, key=lambda s: s.start_time_ms)
         self.duration_ms = duration_ms
+        self.policy = policy_thresholds(settings)
         self.visual_observer = None
         self.source_context = None
         self.repair_requests = 0
         self.repair_cost = 0.0
 
     def trace(self, report):
-        trace = report.setdefault('coherence', {'status': 'pending', 'policy': 'coherence-v8',
-            'threshold': PASS, 'self_contained_threshold': SELF_CONTAINED_PASS,
-            'faithful_to_source_threshold': FAITHFUL_TO_SOURCE_PASS, 'title_supported_threshold': TITLE_SUPPORTED_PASS, 'sponsor_threshold': SPONSOR_PASS, 'evidence_threshold': EVIDENCE_PASS, 'cut_threshold': CUT_PASS, 'attempts': [], 'repairs': [], 'visual_reviews': []})
+        trace = report.setdefault('coherence', {'status': 'pending', 'policy': 'coherence-v9',
+            **self.policy, 'attempts': [], 'repairs': [], 'visual_reviews': []})
         trace.setdefault('visual_reviews', [])
         return trace
 
@@ -165,7 +177,7 @@ class CoherenceReviewer:
         bounded = len(state['retained_dialogue'].encode()) <= 12000
         requires_visual = bool((report.get('moment') or {}).get('requires_visual_context'))
         judgment, policy = await asyncio.gather(self.service.evaluate(state, CORE_QUESTIONS), self.service.evaluate(state, POLICY_QUESTIONS)) if bounded and has_speech else (None, None)
-        if stage == 'candidate' and judgment and judgment['status'] == 'success' and (judgment['answers']['evidence']['probabilities']['sufficient'] < EVIDENCE_PASS or requires_visual) and self.visual_observer:
+        if stage == 'candidate' and judgment and judgment['status'] == 'success' and (judgment['answers']['evidence']['probabilities']['sufficient'] < self.policy['evidence_threshold'] or requires_visual) and self.visual_observer:
             # Review the excerpt itself, even when there are no silent-gap candidates.
             interval = [keeps[0][0], keeps[-1][1]]
             visuals = self.trace(report)['visual_reviews']
@@ -179,7 +191,7 @@ class CoherenceReviewer:
                 judgment, policy = await asyncio.gather(self.service.evaluate(state, CORE_QUESTIONS), self.service.evaluate(state, POLICY_QUESTIONS))
         visual_missing = requires_visual and not state['visual_observations']
         accepted = bool(not visual_missing and judgment and policy and policy['status'] == 'success'
-                        and approved({'status': judgment['status'], 'answers': {**judgment.get('answers', {}), **policy['answers']}}, [k for k in CLIP_QUESTIONS if k != 'evidence']))
+                        and approved({'status': judgment['status'], 'answers': {**judgment.get('answers', {}), **policy['answers']}}, [k for k in CLIP_QUESTIONS if k != 'evidence'], self.policy['threshold'], self.policy))
         self.trace(report)['attempts'].append({'stage': stage, 'keeps': [list(p) for p in keeps],
             'decision': 'accept' if accepted else 'reject', 'evidence': state if bounded else {'title': title or '', 'retained_dialogue': '[Evidence exceeds review limit]'},
             'judgment': judgment, 'policy_judgment': policy, 'reason': 'approved' if accepted else 'missing_transcript' if not has_speech else 'evidence_limit' if not bounded else 'needs_visual_evidence' if visual_missing else 'insufficient_or_failed_judgment'})
@@ -205,14 +217,14 @@ class CoherenceReviewer:
             answers = {**last['answers'], **policy['answers']}
             # Do not disguise an ad by trimming its disclosure or rewriting its
             # title. Uncertain sponsorship also cannot qualify for publishing.
-            if answers['not_sponsored']['noul'] < SPONSOR_PASS:
+            if answers['not_sponsored']['noul'] < self.policy['sponsor_threshold']:
                 trace['reason'] = 'sponsored_or_uncertain_promotion'
                 break
             if trace['attempts'][-1]['reason'] == 'needs_visual_evidence':
                 trace['reason'] = 'needs_visual_evidence'
                 break
-            if (answers['evidence']['probabilities']['sufficient'] < EVIDENCE_PASS
-                    and all(answers[k]['noul'] >= check_threshold(k) for k in CLIP_QUESTIONS if k != 'evidence')):
+            if (answers['evidence']['probabilities']['sufficient'] < self.policy['evidence_threshold']
+                    and all(answers[k]['noul'] >= check_threshold(k, self.policy['threshold'], self.policy) for k in CLIP_QUESTIONS if k != 'evidence')):
                 trace['reason'] = 'needs_visual_evidence'
                 break
             proposal = await self.repair(segment, report, attempt)
@@ -257,7 +269,7 @@ class CoherenceReviewer:
         failed_checks = []
         for name, question in CLIP_QUESTIONS.items():
             probability = judgments[name]['probabilities']['sufficient'] if name == 'evidence' else judgments[name]['noul']
-            threshold = check_threshold(name)
+            threshold = check_threshold(name, self.policy['threshold'], self.policy)
             if probability < threshold:
                 failed_checks.append({'name': name, 'question': question['instructions'], 'criteria': question['criteria'],
                                       'probability': probability, 'required_probability': threshold})
@@ -370,7 +382,7 @@ class CoherenceReviewer:
             split_word = any(w.start_time_ms < t < w.end_time_ms for s in self.segments for w in s.words for t in (start, end))
             bounded = len(state['removed_text'].encode()) <= 6000
             judgment = await self.service.evaluate(state, CUT_QUESTIONS) if index < MAX_CUTS and bounded and not split_word else None
-            safe = bool(judgment and approved(judgment, ['removal_safe', 'join_logical'], CUT_PASS))
+            safe = bool(judgment and approved(judgment, ['removal_safe', 'join_logical'], self.policy['cut_threshold'], self.policy))
             if index < MAX_CUTS:
                 self.trace(report)['attempts'].append({'stage': 'cut', 'keeps': [[start, end]], 'decision': 'allow_cut' if safe else 'restore',
                     'evidence': state if bounded else {'retained_dialogue': '[Omission exceeds review limit]'}, 'judgment': judgment,

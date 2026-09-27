@@ -18,6 +18,7 @@ import { onRadioKeyDown } from './ui/Segmented'
 import { DURATION_OPTIONS, VIDEO_SPEED_OPTIONS } from '../../shared/job-contract'
 import { isModelId } from '../../shared/openrouter-models'
 import { useModelStore } from '../store/use-model-store'
+import { useSettingsStore } from '../store/use-settings-store'
 import { ModelPicker } from './ModelPicker'
 import { WorkflowPicker } from './WorkflowPicker'
 
@@ -148,10 +149,20 @@ export function JobForm({ onSubmit, onViewJob, blockedReason, submitting, classN
     <div className={cn('space-y-3', className)}>
       <Stepper current={step} reachable={videoValid ? WIZARD_STEPS.length - 1 : 0} onSelect={goTo} />
 
+      {step === 'captions' && draft.workflow === 'review' && (
+        <aside aria-labelledby="caption-editor-note" className="rounded-2xl border border-accent/20 bg-accent/5 p-4 xl:p-5">
+          <span className="eyebrow text-accent">Review &amp; edit</span>
+          <h2 id="caption-editor-note" className="mt-1.5 text-sm font-semibold text-ink">Adjust captions in the editor</h2>
+          <p className="mt-1 text-xs leading-relaxed text-ink-muted">
+            Choose a starting style below. Before exporting, you can change how captions look, reposition them, or hide them from selected parts of each clip.
+          </p>
+        </aside>
+      )}
+
       <Panel className="p-4 xl:p-5">
         {step !== 'video' && <div className="mb-3">
           <h2 className="text-sm font-semibold text-ink">{step === 'review' && draft.workflow === 'review' ? 'Ready to find candidates' : meta.title}</h2>
-          <p className="mt-0.5 text-xs text-ink-muted">{step === 'review' && draft.workflow === 'review' ? 'Jev will review each candidate, then the editor opens for your final cut.' : meta.description}</p>
+          <p className="mt-0.5 text-xs text-ink-muted">{step === 'review' && draft.workflow === 'review' ? 'The editor opens with proposed candidates for your final cut.' : meta.description}</p>
         </div>}
         {sourceError && <p role="alert" className="text-sm text-danger">{sourceError}</p>}
         {step === 'video' && <VideoStep draft={draft} update={update} trimError={trim.error} disabled={submitting} />}
@@ -366,7 +377,7 @@ export function FormatStep({ draft, update }: { draft: ClipDraft; update: Update
       <Group label="Pacing">
         <SettingRow
           title="Cut dead air"
-          description="Proposes pause and filler cuts; Jev must approve each removal."
+          description="Proposes pause and filler cuts. When enabled, Jev checks each removal."
           control={
             <Switch label="Cut dead air and filler words" checked={draft.pacing === 'tight'} onChange={(on) => update({ pacing: on ? 'tight' : 'natural' })} />
           }
@@ -396,6 +407,7 @@ export function FormatStep({ draft, update }: { draft: ClipDraft; update: Update
 }
 
 export function ClipsStep({ draft, update }: { draft: ClipDraft; update: Update }): React.JSX.Element {
+  const jevEnabled = useSettingsStore((s) => s.jevEnabled === 'on')
   const toggleDuration = (id: string): void => {
     update({ durations: draft.durations.includes(id) ? draft.durations.filter((d) => d !== id) : [...draft.durations, id] })
   }
@@ -404,7 +416,7 @@ export function ClipsStep({ draft, update }: { draft: ClipDraft; update: Update 
       <Group label="Clipping mode">
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-3" role="radiogroup" aria-label="Clipping mode">
           {([
-            { id: 'quality', label: 'Quality', hint: 'GPT-6 Sol planning & repairs · Jev review · MAI Transcribe 2' },
+            { id: 'quality', label: 'Quality', hint: `GPT-6 Sol planning · Jev review & repairs ${jevEnabled ? 'enabled' : 'off'} · MAI Transcribe 2` },
             { id: 'economy', label: 'Economy', hint: 'GLM 5.3 Flash planning · Whisper Turbo' },
             { id: 'advanced', label: 'Advanced', hint: 'Choose your OpenRouter models' }
           ] as const).map((mode) => {

@@ -1,3 +1,4 @@
+import type { JevThresholdSettings } from '../shared/jev-settings'
 import type { LibraryClipTarget } from '../shared/library-posting'
 import type { AutomationReviewResult } from '../shared/automations'
 import type { CandidateEdit, EditorSession } from '../shared/clip-editor'
@@ -24,7 +25,7 @@ import type { UpdateState } from '../shared/updates'
 import type { OutputStorageUsage } from '../shared/output-storage'
 import type { YouTubePreview } from '../shared/youtube-preview'
 
-export interface ClipSettings {
+export interface ClipSettings extends JevThresholdSettings {
   openrouterConfigured: boolean
   zernioConfigured: boolean
   jevEnabled: string

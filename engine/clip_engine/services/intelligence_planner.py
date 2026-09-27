@@ -781,7 +781,7 @@ Return at most {clip_count} clips as JSON; return fewer or none if no complete m
 - Return times in SECONDS, taken from complete transcript boundaries.
 - Include the necessary setup, qualifications, and payoff in each excerpt.
 - Prefer coherent ideas over hook scores. Return an empty clips array when necessary.
-- Order candidates best first. Every candidate will undergo independent Jev review."""
+- Order candidates best first. {'Every candidate will undergo independent Jev review.' if getattr(self.settings, 'jev_enabled', True) else 'Propose only complete, supported edits; independent Jev review is disabled.'}"""
 
     def _build_longform_system_prompt(
         self,
@@ -840,7 +840,7 @@ Score each episode 0-10 on these keys (be calibrated; reserve 8-10 for exception
 
 ## OUTPUT
 
-Return JSON with "insights" and "clips" (up to {clip_count}, best first). Times are in SECONDS taken from the transcript timestamps. Start each clip at the beginning of a transcript line and end it at the end of one. Duration is a preference. Independent Jev review will reject incomplete or misleading edits."""
+Return JSON with "insights" and "clips" (up to {clip_count}, best first). Times are in SECONDS taken from the transcript timestamps. Start each clip at the beginning of a transcript line and end it at the end of one. Duration is a preference. {'Independent Jev review will reject incomplete or misleading edits.' if getattr(self.settings, 'jev_enabled', True) else 'Propose only complete, supported edits; independent Jev review is disabled.'}"""
 
     def _build_visual_only_system_prompt(
         self,

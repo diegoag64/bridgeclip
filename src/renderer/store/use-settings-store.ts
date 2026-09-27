@@ -1,3 +1,4 @@
+import { JEV_DEFAULTS } from '../../shared/jev-settings'
 import { create } from 'zustand'
 import { errorMessage } from '../lib/utils'
 import { getApi } from '../lib/ipc'
@@ -23,6 +24,7 @@ let latestToolCheck = 0
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   openrouterConfigured: false,
   zernioConfigured: false,
+  ...JEV_DEFAULTS,
   jevEnabled: 'on',
   jevVisualContext: 'off',
   sourceContextWebResearch: 'on',
@@ -88,6 +90,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
 function pickSettings(s: ClipSettings): ClipSettings {
   return {
+    jevThreshold: s.jevThreshold ?? JEV_DEFAULTS.jevThreshold,
+    jevSelfContainedThreshold: s.jevSelfContainedThreshold ?? JEV_DEFAULTS.jevSelfContainedThreshold,
+    jevFaithfulToSourceThreshold: s.jevFaithfulToSourceThreshold ?? JEV_DEFAULTS.jevFaithfulToSourceThreshold,
+    jevTitleSupportedThreshold: s.jevTitleSupportedThreshold ?? JEV_DEFAULTS.jevTitleSupportedThreshold,
+    jevSponsorThreshold: s.jevSponsorThreshold ?? JEV_DEFAULTS.jevSponsorThreshold,
+    jevEvidenceThreshold: s.jevEvidenceThreshold ?? JEV_DEFAULTS.jevEvidenceThreshold,
+    jevCutThreshold: s.jevCutThreshold ?? JEV_DEFAULTS.jevCutThreshold,
     openrouterConfigured: s.openrouterConfigured,
     jevEnabled: s.jevEnabled ?? 'on',
     jevVisualContext: s.jevVisualContext ?? 'off',

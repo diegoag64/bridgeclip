@@ -121,3 +121,93 @@ def test_discovery_excludes_repaired_approved_footage():
         'report': {'coherence': {'accepted_interval': [0, 90000]}}}], 150000)
     assert feedback['search_intervals'] == [[90000, 150000]]
     assert feedback['previous_candidates'][0]['interval'] == [0, 90000]
+
+
+@pytest.mark.parametrize('mode', ['off', 'unavailable', 'on'])
+def test_automatic_jev_opt_out_skips_review_but_enabled_failures_do_not(monkeypatch, tmp_path, mode):
+    from clip_engine.services import ai_clipping_pipeline as module
+    from clip_engine.services.ai_clipping_pipeline import AIClippingPipeline, ClippingJobRequest, JobStatus
+    from clip_engine.services.rendering_service import RenderingService, RenderResult
+    from clip_engine.services.transcription_service import TranscriptionResult, TranscriptSegment
+    from clip_engine.services.coherence_review import CoherenceReviewer
+    from clip_engine.services.jev_service import JevService
+    from tests.test_editorial_context import response
+    settings = module.get_settings()
+    monkeypatch.setattr(settings, 'local_mode', True)
+    monkeypatch.setattr(settings, 'jev_enabled', mode != 'off')
+    monkeypatch.setattr(settings, 'jev_visual_context', True)
+    monkeypatch.setattr(settings, 'openrouter_api_key', 'fixture')
+    monkeypatch.setattr(settings, 'local_output_dir', str(tmp_path / 'out'))
+    monkeypatch.setattr(settings.__class__, 'temp_directory', property(lambda self: str(tmp_path / 'work')))
+    monkeypatch.setattr(RenderingService, '_verify_ffmpeg', lambda self: None)
+    # No live model requests. Detect every attempted Jev call with an active key.
+    live_calls = []
+    async def evaluate(self, state, questions):
+        if not self.enabled:
+            return {'status': 'disabled', 'questions': questions, 'answers': {}}
+        live_calls.append(questions)
+        if mode == 'unavailable':
+            return {'status': 'unavailable', 'questions': questions, 'answers': {}}
+        return {'status': 'success', 'questions': questions, 'answers': response(questions)['answers']}
+    monkeypatch.setattr(JevService, 'evaluate', evaluate)
+    repair = AsyncMock(side_effect=AssertionError('Unexpected repair request'))
+    monkeypatch.setattr(CoherenceReviewer, 'repair', repair)
+    observed = []
+    monkeypatch.setattr(module.EditorialVision, 'observe', AsyncMock(side_effect=AssertionError('Unexpected editorial vision request')))
+    pipeline = AIClippingPipeline()
+    source = SimpleNamespace(video_path=str(tmp_path / 'source.mp4'), file_size_bytes=1,
+        metadata=SimpleNamespace(title='Synthetic source', duration_seconds=360, width=1920, height=1080))
+    monkeypatch.setattr(pipeline.video_downloader, 'download_video', AsyncMock(return_value=source))
+    transcript = TranscriptionResult(segments=[TranscriptSegment(0, 20000, 'A complete first idea.'),
+        TranscriptSegment(40000, 60000, 'A complete second idea.'), TranscriptSegment(80000, 100000, 'A third idea.')], full_text='Source')
+    monkeypatch.setattr(pipeline.transcription_service, 'transcribe', AsyncMock(return_value=transcript))
+    monkeypatch.setattr(pipeline.source_context_service, 'build', AsyncMock(return_value={
+        'status': 'metadata_only', 'source': {}, 'brief': None, 'research_status': 'not_applicable',
+        'citations': [], 'cost_usd': 0, 'cost_incomplete': False, 'requests': []}))
+    plan = AsyncMock(return_value=ClipPlanResponse(segments=[
+        ClipPlanSegment(0, 11000, .9, skip_ranges_ms=[(4000, 5000)]),
+        ClipPlanSegment(2000, 13000, .8),  # Overlapping alternative must still be excluded.
+        ClipPlanSegment(40000, 51000, .7),
+        ClipPlanSegment(80000, 91000, .6)], total_clips=4))
+    monkeypatch.setattr(pipeline.intelligence_planner, 'plan_clips', plan)
+    async def render(request):
+        observed.append(request)
+        if mode == 'off':
+            assert request.coherence_reviewer is None
+            assert request.editorial_service is None
+            assert request.editorial_context['coherence']['status'] == 'skipped'
+        else:
+            assert request.coherence_reviewer is not None
+            assert request.editorial_service.enabled
+        Path(request.output_path).write_bytes(b'fixture')
+        return RenderResult(output_path=request.output_path, file_size_bytes=7, duration_ms=11000)
+    monkeypatch.setattr(pipeline.rendering_service, 'render_clip', AsyncMock(side_effect=render))
+    result = asyncio.run(pipeline.process_video(ClippingJobRequest(video_url='fixture.mp4', job_id='fixture', max_clips=2, auto_clip_count=False)))
+    audit = json.loads((tmp_path / 'out/fixture/edit_audit.json').read_text())
+    assert audit['jev_enabled'] is (mode != 'off')
+    assert plan.await_count == 1  # No rediscovery when disabled, unavailable, or already full.
+    repair.assert_not_awaited()
+    if mode == 'unavailable':
+        assert result.status == JobStatus.FAILED
+        assert not observed
+        assert live_calls
+        assert audit['outcome'] == 'no_approved_clips'
+        return
+    assert result.status == JobStatus.COMPLETED, result.error
+    assert len(observed) == 2
+    assert [request.start_time_ms for request in observed] == [0, 40000]
+    assert observed[0].skip_ranges_ms == [(4000, 5000)]
+    assert [c['status'] for c in audit['candidates']] == ['rendered', 'overlap_not_selected', 'rendered', 'selection_limit']
+    if mode == 'off':
+        assert not live_calls
+        assert 'discovery' not in audit
+        for c in audit['candidates'][:3]:
+            assert c['report']['coherence']['status'] == 'skipped'
+            assert c['report']['coherence']['reason'] == 'disabled_by_user'
+            assert c['report']['coherence']['attempts'] == []
+        output = json.loads((tmp_path / 'out/fixture/job_output.json').read_text())
+        assert not {'editorial', 'editorial_repair', 'editorial_vision'} & output['metrics']['api_costs'].keys()
+        assert next(row for row in output['metrics']['pipeline_stages'] if row['id'] == 'reviewing')['state'] == 'skipped'
+    else:
+        assert live_calls
+        assert audit['candidates'][0]['report']['coherence']['status'] == 'accepted'

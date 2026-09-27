@@ -88,6 +88,9 @@ export function JevTrace({ trace }: { trace: EditorialTrace | null }): React.JSX
   const [selected, setSelected] = useState(0)
   const selectId = useId()
   const entry = entries[selected] ?? entries[0]
+  if (trace?.coherence?.status === 'skipped' && trace.coherence.reason === 'disabled_by_user') {
+    return <p className="rounded-xl border border-white/10 p-4 text-sm text-ink-muted">Jev review was turned off for this run. BridgeClip used the planner’s proposed clips and cuts without Jev checks or repairs.</p>
+  }
   if (!entry) return <p className="rounded-xl border border-white/10 p-4 text-sm text-ink-muted">No Jev question trace was recorded for this candidate. Older runs may only have a transcript.</p>
   const judgment = entry.judgment
   const names = [...new Set([...Object.keys(judgment?.questions ?? {}), ...Object.keys(judgment?.answers ?? {})])]

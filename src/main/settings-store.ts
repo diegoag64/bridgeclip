@@ -1,3 +1,4 @@
+import { JEV_DEFAULTS, type JevThresholdSettings } from '../shared/jev-settings'
 import { app, safeStorage } from 'electron'
 import { closeSync, existsSync, fchmodSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'fs'
 import { isAbsolute, join } from 'path'
@@ -8,7 +9,7 @@ import { randomUUID } from 'crypto'
  * machine with the user's own keys. Keys are encrypted with the OS keychain
  * (safeStorage) when it is available.
  */
-export interface AppSettings {
+export interface AppSettings extends JevThresholdSettings {
   openrouterApiKey: string
   /** Optional: connects social accounts for posting. Used only by the main process, never sent to the engine. */
   zernioApiKey: string
@@ -24,7 +25,7 @@ export interface AppSettings {
 }
 
 export type ApiKeyName = 'openrouterApiKey' | 'zernioApiKey'
-export type PublicSettings = Pick<AppSettings, 'outputDirectory' | 'pythonPath' | 'customVocabulary' | 'jevEnabled' | 'jevVisualContext' | 'sourceContextWebResearch'> & {
+export type PublicSettings = Pick<AppSettings, 'outputDirectory' | 'pythonPath' | 'customVocabulary' | 'jevEnabled' | 'jevVisualContext' | 'sourceContextWebResearch' | keyof JevThresholdSettings> & {
   openrouterConfigured: boolean
   zernioConfigured: boolean
 }
@@ -33,6 +34,7 @@ const SECRET_KEYS = ['openrouterApiKey', 'zernioApiKey'] as const
 type SecretKey = (typeof SECRET_KEYS)[number]
 
 const DEFAULT_SETTINGS: AppSettings = {
+  ...JEV_DEFAULTS,
   openrouterApiKey: '',
   zernioApiKey: '',
   jevEnabled: 'on',
@@ -43,11 +45,11 @@ const DEFAULT_SETTINGS: AppSettings = {
   customVocabulary: ''
 }
 
-const SETTINGS_VERSION = 10
+const SETTINGS_VERSION = 11
 
 type PersistedSecret = { scheme: 'safeStorage' | 'base64'; value: string } | ''
 
-interface PersistedSettings {
+interface PersistedSettings extends JevThresholdSettings {
   version: number
   openrouterApiKey: PersistedSecret
   zernioApiKey: PersistedSecret
@@ -76,6 +78,14 @@ function normalizeSettings(settings: Partial<AppSettings>): AppSettings {
     if (settings[key] !== undefined && (typeof settings[key] !== 'string' || settings[key]!.length > 8192 || settings[key]!.includes('\0'))) throw new Error(`Invalid ${key}`)
   }
   const normalized: AppSettings = {
+    jevThreshold: settings.jevThreshold ?? JEV_DEFAULTS.jevThreshold,
+    jevSelfContainedThreshold: settings.jevSelfContainedThreshold ?? JEV_DEFAULTS.jevSelfContainedThreshold,
+    jevFaithfulToSourceThreshold: settings.jevFaithfulToSourceThreshold ?? JEV_DEFAULTS.jevFaithfulToSourceThreshold,
+    jevTitleSupportedThreshold: settings.jevTitleSupportedThreshold ?? JEV_DEFAULTS.jevTitleSupportedThreshold,
+    jevSponsorThreshold: settings.jevSponsorThreshold ?? JEV_DEFAULTS.jevSponsorThreshold,
+    jevEvidenceThreshold: settings.jevEvidenceThreshold ?? JEV_DEFAULTS.jevEvidenceThreshold,
+    jevCutThreshold: settings.jevCutThreshold ?? JEV_DEFAULTS.jevCutThreshold,
+
     openrouterApiKey: (settings.openrouterApiKey ?? DEFAULT_SETTINGS.openrouterApiKey).trim(),
     zernioApiKey: (settings.zernioApiKey ?? DEFAULT_SETTINGS.zernioApiKey).trim(),
     jevEnabled: settings.jevEnabled ?? 'on',
@@ -84,6 +94,11 @@ function normalizeSettings(settings: Partial<AppSettings>): AppSettings {
     outputDirectory: (settings.outputDirectory || DEFAULT_SETTINGS.outputDirectory).trim(),
     pythonPath: (settings.pythonPath || DEFAULT_SETTINGS.pythonPath).trim(),
     customVocabulary: vocabularyTerms(settings.customVocabulary ?? DEFAULT_SETTINGS.customVocabulary).join('\n')
+  }
+  for (const key of Object.keys(JEV_DEFAULTS) as (keyof JevThresholdSettings)[]) {
+    const value = normalized[key].trim()
+    if (!/^(?:0(?:\.\d+)?|1(?:\.0+)?)$/.test(value)) throw new Error(`Invalid Jev threshold: ${key}. Use a probability from 0 to 1.`)
+    normalized[key] = String(Number(value))
   }
   normalized.outputDirectory ||= DEFAULT_SETTINGS.outputDirectory
   normalized.pythonPath ||= DEFAULT_SETTINGS.pythonPath
@@ -157,6 +172,14 @@ export function loadSettings(): AppSettings {
 
     const settings = normalizeSettings({
       ...secrets,
+      jevThreshold: raw.jevThreshold ?? JEV_DEFAULTS.jevThreshold,
+      jevSelfContainedThreshold: raw.jevSelfContainedThreshold ?? JEV_DEFAULTS.jevSelfContainedThreshold,
+      jevFaithfulToSourceThreshold: raw.jevFaithfulToSourceThreshold ?? JEV_DEFAULTS.jevFaithfulToSourceThreshold,
+      jevTitleSupportedThreshold: raw.jevTitleSupportedThreshold ?? JEV_DEFAULTS.jevTitleSupportedThreshold,
+      jevSponsorThreshold: raw.jevSponsorThreshold ?? JEV_DEFAULTS.jevSponsorThreshold,
+      jevEvidenceThreshold: raw.jevEvidenceThreshold ?? JEV_DEFAULTS.jevEvidenceThreshold,
+      jevCutThreshold: raw.jevCutThreshold ?? JEV_DEFAULTS.jevCutThreshold,
+
       jevEnabled: raw.jevEnabled ?? 'on',
       jevVisualContext: raw.jevVisualContext ?? raw.typesafeVisualContext ?? 'off',
       sourceContextWebResearch: raw.sourceContextWebResearch ?? 'on',
@@ -178,6 +201,14 @@ function writeSettings(settings: AppSettings): void {
 
   const persisted: PersistedSettings = {
     version: SETTINGS_VERSION,
+    jevThreshold: settings.jevThreshold,
+    jevSelfContainedThreshold: settings.jevSelfContainedThreshold,
+    jevFaithfulToSourceThreshold: settings.jevFaithfulToSourceThreshold,
+    jevTitleSupportedThreshold: settings.jevTitleSupportedThreshold,
+    jevSponsorThreshold: settings.jevSponsorThreshold,
+    jevEvidenceThreshold: settings.jevEvidenceThreshold,
+    jevCutThreshold: settings.jevCutThreshold,
+
     openrouterApiKey: encodeSecret(settings.openrouterApiKey),
     zernioApiKey: encodeSecret(settings.zernioApiKey),
     jevEnabled: settings.jevEnabled,
@@ -210,6 +241,14 @@ export function saveSettings(settings: AppSettings): AppSettings {
 
 export function publicSettings(settings: AppSettings): PublicSettings {
   return {
+    jevThreshold: settings.jevThreshold,
+    jevSelfContainedThreshold: settings.jevSelfContainedThreshold,
+    jevFaithfulToSourceThreshold: settings.jevFaithfulToSourceThreshold,
+    jevTitleSupportedThreshold: settings.jevTitleSupportedThreshold,
+    jevSponsorThreshold: settings.jevSponsorThreshold,
+    jevEvidenceThreshold: settings.jevEvidenceThreshold,
+    jevCutThreshold: settings.jevCutThreshold,
+
     outputDirectory: settings.outputDirectory,
     pythonPath: settings.pythonPath,
     customVocabulary: settings.customVocabulary,
@@ -221,10 +260,17 @@ export function publicSettings(settings: AppSettings): PublicSettings {
   }
 }
 
-export function savePublicSettings(update: Pick<PublicSettings, 'outputDirectory' | 'pythonPath' | 'customVocabulary' | 'jevEnabled' | 'jevVisualContext' | 'sourceContextWebResearch'>): PublicSettings {
+export function savePublicSettings(update: Pick<PublicSettings, 'outputDirectory' | 'pythonPath' | 'customVocabulary' | 'jevEnabled' | 'jevVisualContext' | 'sourceContextWebResearch' | keyof JevThresholdSettings>): PublicSettings {
   const current = loadSettings()
   return publicSettings(saveSettings({
     ...current,
+    jevThreshold: update.jevThreshold ?? current.jevThreshold,
+    jevSelfContainedThreshold: update.jevSelfContainedThreshold ?? current.jevSelfContainedThreshold,
+    jevFaithfulToSourceThreshold: update.jevFaithfulToSourceThreshold ?? current.jevFaithfulToSourceThreshold,
+    jevTitleSupportedThreshold: update.jevTitleSupportedThreshold ?? current.jevTitleSupportedThreshold,
+    jevSponsorThreshold: update.jevSponsorThreshold ?? current.jevSponsorThreshold,
+    jevEvidenceThreshold: update.jevEvidenceThreshold ?? current.jevEvidenceThreshold,
+    jevCutThreshold: update.jevCutThreshold ?? current.jevCutThreshold,
     outputDirectory: update.outputDirectory,
     pythonPath: update.pythonPath,
     customVocabulary: update.customVocabulary,
@@ -264,6 +310,13 @@ export function getSettingsForBridge(settings: AppSettings): Record<string, stri
   return {
     OPENROUTER_API_KEY: settings.openrouterApiKey,
     SOURCE_CONTEXT_WEB_RESEARCH: settings.sourceContextWebResearch !== 'off' ? 'true' : 'false',
+    JEV_THRESHOLD: settings.jevThreshold,
+    JEV_SELF_CONTAINED_THRESHOLD: settings.jevSelfContainedThreshold,
+    JEV_FAITHFUL_TO_SOURCE_THRESHOLD: settings.jevFaithfulToSourceThreshold,
+    JEV_TITLE_SUPPORTED_THRESHOLD: settings.jevTitleSupportedThreshold,
+    JEV_SPONSOR_THRESHOLD: settings.jevSponsorThreshold,
+    JEV_EVIDENCE_THRESHOLD: settings.jevEvidenceThreshold,
+    JEV_CUT_THRESHOLD: settings.jevCutThreshold,
     JEV_ENABLED: settings.jevEnabled === 'on' ? 'true' : 'false',
     JEV_VISUAL_CONTEXT: settings.jevVisualContext === 'on' ? 'true' : 'false',
     LOCAL_MODE: 'true',

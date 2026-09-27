@@ -1,0 +1,72 @@
+.jev-settings { --jev-pink: #f4b6e4; overflow: hidden; border: 1px solid #514751; border-radius: 16px; color: #eee9f0; background: #19171d; box-shadow: 0 12px 40px #0002; }
+.jev-settings button, .jev-settings input { outline-offset: 4px; }
+.jev-settings button:focus-visible, .jev-settings input:focus-visible, .jev-settings summary:focus-visible { outline: 2px solid #df8fc9; }
+.jev-hero { position: relative; padding: 24px 28px; color: #251e29; background: radial-gradient(ellipse at 94% 40%, #d8cdf5 0%, transparent 55%), radial-gradient(ellipse at 0% 0%, #f4b6e4, transparent 75%), #eee5eb; }
+.jev-topline, .jev-intro, .jev-enable-row, .jev-controls-heading, .jev-control-top, .jev-actions, .jev-actions > div { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.jev-wordmark { font-size: 16px; font-weight: 650; letter-spacing: -.5px; }
+.jev-chip, .jev-kicker, .jev-customized, .jev-index, .jev-scale { font-family: ui-monospace, SFMono-Regular, monospace; }
+.jev-chip { padding: 5px 8px; border: 1px solid #251e2940; font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
+.jev-intro { margin: 15px 0 12px; }
+.jev-intro h2 { font-size: 88px; font-weight: 650; line-height: 1; letter-spacing: -7px; }
+.jev-intro h2 > span { color: #966380; }
+.jev-tagline { margin-top: 10px; font-size: 18px; font-weight: 550; letter-spacing: -.5px; }
+.jev-description { max-width: 460px; font-size: 12px; line-height: 1.7; color: #574a59; }
+.jev-docs { display: inline-flex; align-items: center; gap: 6px; margin-top: 16px; font-size: 11px; font-weight: 600; border-bottom: 1px solid #251e2950; padding-bottom: 3px; }
+.jev-docs:hover { border-color: #251e29; }
+.jev-body { padding: 0 24px 20px; }
+.jev-accordion { display: grid; grid-template-rows: 0fr; visibility: hidden; transition: grid-template-rows .24s ease, visibility .24s; }
+.jev-accordion[data-open=true] { grid-template-rows: 1fr; visibility: visible; }
+.jev-accordion-content { min-height: 0; overflow: hidden; }
+.jev-enable-row { padding: 20px 0; border-bottom: 1px solid #ffffff10; }
+.jev-enable-row h3, .jev-controls-heading h3 { font-size: 13px; font-weight: 600; }
+.jev-enable-row p { margin-top: 4px; color: #aba3b0; font-size: 11px; line-height: 1.6; }
+.jev-switch { background: #514956; width: 38px; height: 22px; padding: 3px; border-radius: 20px; flex-shrink: 0; transition: background .18s; }
+.jev-switch span { display: block; height: 16px; width: 16px; background: #1c1720; border-radius: 50%; transition: transform .18s; }
+.jev-switch[aria-checked=true] { background: var(--jev-pink); }
+.jev-switch[aria-checked=true] span { transform: translateX(16px); }
+.jev-controls-heading { margin: 24px 0 8px; flex-wrap: wrap; }
+.jev-kicker { display: flex; align-items: center; gap: 7px; text-transform: uppercase; font-size: 9px; letter-spacing: .13em; color: #d4a5c9; margin-bottom: 9px; }
+.jev-controls-heading h3 { font-size: 18px; font-weight: 500; letter-spacing: -.4px; }
+.jev-customized { font-size: 9px; color: #c5a9ca; padding: 5px 7px; border: 1px solid #c5a9ca30; }
+.jev-explainer { font-size: 11px; color: #aba3b0; line-height: 1.8; margin-bottom: 18px; max-width: 580px; }
+.jev-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; min-width: 0; }
+.jev-controls:disabled { opacity: .45; }
+.jev-control { padding: 15px; border: 1px solid #ffffff12; border-radius: 8px; background: #ffffff03; min-width: 0; transition: border-color .15s; }
+.jev-control:focus-within { border-color: #d59fc975; }
+.jev-control-cut { grid-column: 1 / -1; background: linear-gradient(100deg, #c77cb510, #ffffff03); border-color: #d59fc92b; }
+.jev-control-top { gap: 8px; }
+.jev-control-top label { display: flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 550; }
+.jev-index { color: #8e8197; font-size: 9px; font-weight: 400; }
+.jev-number { display: flex; align-items: center; color: var(--jev-pink); flex-shrink: 0; border-bottom: 1px solid #d59fc940; }
+.jev-number input { appearance: textfield; background: transparent; width: 51px; padding: 3px 0; text-align: right; color: inherit; font: 17px ui-monospace, SFMono-Regular, monospace; }
+.jev-number input::-webkit-inner-spin-button, .jev-number input::-webkit-outer-spin-button { appearance: none; margin: 0; }
+.jev-number span { font-size: 10px; padding-left: 2px; }
+.jev-control p { font-size: 10px; line-height: 1.7; color: #aaa1b0; margin: 9px 0 13px; min-height: 34px; }
+.jev-control-cut p { min-height: 0; }
+.jev-range { display: block; width: 100%; height: 20px; appearance: none; background: transparent; cursor: pointer; }
+.jev-range::-webkit-slider-runnable-track { height: 3px; background: linear-gradient(to right, #dca7cf 0 var(--jev-value), #49404e var(--jev-value) 100%); border-radius: 4px; }
+.jev-range::-webkit-slider-thumb { appearance: none; height: 12px; width: 12px; margin-top: -4.5px; border-radius: 3px; background: #f0c9e7; box-shadow: 0 0 0 3px #19171d; }
+.jev-scale { display: flex; justify-content: space-between; gap: 4px; color: #9c91a4; font-size: 8px; margin-top: 3px; }
+.jev-scale span:nth-child(2) { color: #c9b0c8; }
+.jev-actions { margin-top: 18px; flex-wrap: wrap; }
+.jev-actions > div { flex-wrap: wrap; gap: 12px; }
+.jev-reset, .jev-apply { display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-size: 10px; }
+.jev-reset { color: #b5aabf; padding: 7px 0; }
+.jev-reset:hover { color: #f3d6ed; }
+.jev-apply { background: #edc3e2; color: #2b1a29; padding: 9px 12px; border-radius: 5px; font-weight: 650; }
+.jev-apply:hover { background: #ffdcf5; }
+.jev-settings button:disabled { opacity: .4; cursor: not-allowed; }
+.jev-save-state { display: inline-flex; align-items: center; gap: 4px; font-size: 9px; color: #b7a4ba; }
+.jev-footnote { display: flex; gap: 10px; margin-top: 22px; padding: 14px 0; border-top: 1px solid #ffffff10; }
+.jev-footnote p, .jev-evidence p { color: #a99daf; font-size: 10px; line-height: 1.8; }
+.jev-evidence { border-top: 1px solid #ffffff10; padding-top: 13px; }
+.jev-evidence summary { font-size: 11px; color: #ccbecf; cursor: pointer; }
+.jev-evidence label { display: flex; gap: 9px; align-items: start; font-size: 11px; margin: 16px 0 8px; }
+.jev-evidence input { accent-color: #eab6dc; }
+.jev-evidence p + p { margin-top: 8px; }
+.jev-off, .jev-error { padding: 10px 12px; margin-top: 14px; background: #dfa17912; color: #efc0a0; font-size: 11px; line-height: 1.6; border-radius: 6px; }
+@media (max-width: 1000px) { .jev-controls { grid-template-columns: minmax(0, 1fr); } .jev-control p { min-height: 0; } }
+@media (max-width: 600px) { .jev-hero { padding: 20px; } .jev-body { padding: 0 16px 16px; } .jev-chip { font-size: 8px; } .jev-intro h2 { font-size: 72px; } .jev-tagline { font-size: 16px; } }
+@media (prefers-reduced-motion: reduce) { .jev-settings * { transition: none !important; } }
+
+.jev-learn { color: #e7b5d9; text-decoration: underline; text-underline-offset: 3px; }

@@ -256,3 +256,20 @@ test('clip results retain bounded framing, pacing, and complete cost metrics', (
   assert.equal(output.metrics.secret, undefined)
   assert.equal(output.metrics.analysis_duration_seconds, 120)
 })
+
+
+test('Jev custom thresholds survive unrelated queued settings saves and failed writes', async () => {
+  let persisted = { ...settings, jevCutThreshold: '0.91', jevThreshold: '0.82' }
+  const { useSettingsStore } = load({ settings: {
+    load: async () => persisted,
+    save: async (next) => { if (next.jevCutThreshold === 'invalid') throw new Error('Invalid threshold'); persisted = next; return next }
+  } })
+  await useSettingsStore.getState().load()
+  assert.equal(useSettingsStore.getState().jevCutThreshold, '0.91')
+  await Promise.all([useSettingsStore.getState().save({ jevThreshold: '0.81' }), useSettingsStore.getState().save({ customVocabulary: 'Jev' })])
+  assert.equal(persisted.jevThreshold, '0.81')
+  assert.equal(persisted.jevCutThreshold, '0.91')
+  await assert.rejects(useSettingsStore.getState().save({ jevCutThreshold: 'invalid' }))
+  assert.equal(useSettingsStore.getState().jevCutThreshold, '0.91')
+  assert.equal(useSettingsStore.getState().saving, false)
+})

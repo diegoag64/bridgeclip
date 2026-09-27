@@ -197,8 +197,9 @@ class AIClippingPipeline:
         loop = asyncio.get_running_loop()
         start_time = time.time()
         job_id = request.job_id
+        jev_enabled = getattr(self.settings, 'jev_enabled', True)
         editorial_service = JevService.from_settings(self.settings)
-        coherence_service = JevService(self.settings.openrouter_api_key if getattr(self.settings, 'jev_enabled', True) else '', max_requests=256, token_budget=1536000)
+        coherence_service = JevService(self.settings.openrouter_api_key if jev_enabled else '', max_requests=256, token_budget=1536000)
         work_dir = os.path.join(self.settings.temp_directory, job_id)
         stage_timings: dict[str, float] = {}
         stage_memory_mb: dict[str, float] = {}
@@ -364,7 +365,7 @@ class AIClippingPipeline:
                 'preferred_range': [request.start_time_seconds, effective_end_time],
                 'transcript': [{'start_ms': t.start_time_ms, 'end_ms': t.end_time_ms, 'text': t.text, 'speaker': t.speaker_label} for t in transcription_result.segments],
                 'planner': getattr(self.intelligence_planner, 'audit', {'requests': []}),
-                'candidates': [], 'outcome': 'reviewing'}
+                'jev_enabled': jev_enabled, 'candidates': [], 'outcome': 'reviewing' if jev_enabled else 'selecting'}
             def save_edit_audit():
                 if self.local_mode:
                     self._save_local_json(job_id, 'edit_audit', edit_audit)
@@ -431,8 +432,9 @@ class AIClippingPipeline:
             for discovery_pass in (1, 2):
                 for segment in pending:
                     i = len(edit_audit['candidates'])
-                    self._update_progress(job_id, JobStatus.PLANNING, 35, f"Reviewing candidate {i + 1} for coherence (discovery {discovery_pass})...",
-                        stage_id="reviewing", stage_percent=None)
+                    self._update_progress(job_id, JobStatus.PLANNING, 35,
+                        f"Reviewing candidate {i + 1} for coherence (discovery {discovery_pass})..." if jev_enabled else f"Selecting planned clip {i + 1}...",
+                        stage_id="reviewing" if jev_enabled else "planning", stage_percent=None)
                     segment.editorial = await analyze_reactions(transcription_result.segments,
                         segment.start_time_ms, segment.end_time_ms, JevService())
                     entry = {'candidate_index': i, 'title': segment.summary or '', 'discovery_pass': discovery_pass,
@@ -445,20 +447,25 @@ class AIClippingPipeline:
                         continue
                     segment.start_time_ms, segment.end_time_ms = repair_context_boundaries(
                         segment.start_time_ms, segment.end_time_ms, segment.editorial, 0, round(video_duration * 1000), round(video_duration * 1000))
-                    if await reviewer.prepare(segment, segment.editorial):
+                    if not jev_enabled:
+                        # Explicit opt-out bypasses review; provider failures never do.
+                        reviewer.trace(segment.editorial).update(status='skipped', reason='disabled_by_user',
+                            original_interval=entry['original_interval'])
+                    if not jev_enabled or await reviewer.prepare(segment, segment.editorial):
                         entry['title'] = segment.summary or ''
                         if any(overlaps([segment.start_time_ms, segment.end_time_ms], [c.start_time_ms, c.end_time_ms]) for c in accepted):
                             entry['status'] = 'overlap_not_selected'
                         else:
                             entry['status'] = 'accepted'
                             accepted.append(segment)
-                            await protect_acknowledgments(editorial_service, transcription_result.segments,
-                                                          segment.start_time_ms, segment.end_time_ms, segment.editorial)
+                            if jev_enabled:
+                                await protect_acknowledgments(editorial_service, transcription_result.segments,
+                                                              segment.start_time_ms, segment.end_time_ms, segment.editorial)
                     else:
                         entry['status'] = 'rejected'
                     save_edit_audit()
                 # One bounded search for overlooked moments, not repeated attempts to fill a quota.
-                if (discovery_pass == 2 or len(accepted) >= limit or not coherence_service.enabled
+                if (not jev_enabled or discovery_pass == 2 or len(accepted) >= limit or not coherence_service.enabled
                         or not any(c['status'] == 'rejected' for c in edit_audit['candidates'])
                         or coherence_service.requests >= coherence_service.max_requests
                         or coherence_service.reserved_tokens >= coherence_service.token_budget
@@ -614,8 +621,8 @@ class AIClippingPipeline:
                         skip_ranges_ms=segment.skip_ranges_ms,
                         chapters=segment.chapters,
                         editorial_context=segment.editorial,
-                        editorial_service=editorial_service,
-                        coherence_reviewer=reviewer,
+                        editorial_service=editorial_service if jev_enabled else None,
+                        coherence_reviewer=reviewer if jev_enabled else None,
                         apply_padding=False,
                     )
 
@@ -678,7 +685,8 @@ class AIClippingPipeline:
             if not successes:
                 raise failures[0][1]
             rendered_clips = [(path, segment) for _, path, segment in successes]
-            await review_duplicate_candidates(editorial_service, [segment for _, _, segment in successes])
+            if jev_enabled:
+                await review_duplicate_candidates(editorial_service, [segment for _, _, segment in successes])
             save_edit_audit()
             # Duplicate review consumes final retained dialogue, after rendering.
             # Update only this job's private trace before copying it to the library.

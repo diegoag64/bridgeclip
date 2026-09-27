@@ -366,3 +366,14 @@ test('source context survives saved audit parsing, keeps evidence labels, and re
   saved.source_context.citations[0].url = 'javascript:alert(1)'
   assert.throws(() => parseEditAudit(saved), /Invalid context source URL/)
 })
+
+
+test('explicit Jev opt-out is shown as skipped, never as a passed or missing review', () => {
+  const { JevTrace } = load('src/renderer/components/JevTrace.tsx')
+  const raw = structuredClone(fixture.editorial)
+  raw.coherence = { status: 'skipped', reason: 'disabled_by_user', policy: 'coherence-v9', threshold: .75, evidence_threshold: .5, cut_threshold: .95, attempts: [], repairs: [] }
+  const trace = parseEditorialTrace(raw)
+  const html = renderToStaticMarkup(React.createElement(JevTrace, { trace }))
+  assert.match(html, /Jev review was turned off for this run/)
+  assert.doesNotMatch(html, /No Jev question trace|Below threshold|saved requests/)
+})

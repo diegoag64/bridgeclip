@@ -9,7 +9,7 @@ import os
 from functools import lru_cache
 from typing import List, Literal, Optional
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh")
@@ -589,6 +589,13 @@ class Settings(BaseSettings):
 
     # API Keys (required)
     openrouter_api_key: Optional[str] = None
+    jev_threshold: float = Field(default=0.75, ge=0, le=1, allow_inf_nan=False)
+    jev_self_contained_threshold: float = Field(default=0.70, ge=0, le=1, allow_inf_nan=False)
+    jev_faithful_to_source_threshold: float = Field(default=0.65, ge=0, le=1, allow_inf_nan=False)
+    jev_title_supported_threshold: float = Field(default=0.70, ge=0, le=1, allow_inf_nan=False)
+    jev_sponsor_threshold: float = Field(default=0.80, ge=0, le=1, allow_inf_nan=False)
+    jev_evidence_threshold: float = Field(default=0.50, ge=0, le=1, allow_inf_nan=False)
+    jev_cut_threshold: float = Field(default=0.95, ge=0, le=1, allow_inf_nan=False)
     jev_enabled: bool = True
     jev_visual_context: bool = False
     source_context_web_research: bool = True

@@ -97,7 +97,7 @@ def test_relaxed_thresholds_apply_to_candidate_and_final_review(self_contained, 
     clip = ClipPlanSegment(0, 11000, .9, summary='Supported result')
     assert asyncio.run(r.prepare(clip, audit)) == accepted
     assert asyncio.run(r.judge(clip.summary, [(0, 11000)], audit, 'final_edit')) == accepted
-    assert audit['coherence']['policy'] == 'coherence-v8'
+    assert audit['coherence']['policy'] == 'coherence-v9'
     assert audit['coherence']['self_contained_threshold'] == .70
     assert audit['coherence']['evidence_threshold'] == .50
     if accepted:
@@ -470,3 +470,61 @@ def test_repair_requires_a_real_source_citation(monkeypatch, bad):
     audit = report()
     assert not asyncio.run(r.prepare(ClipPlanSegment(3000, 8000, .9), audit))
     assert audit['coherence']['repairs'][0]['proposal'] is None
+
+
+@pytest.mark.parametrize('field,question', [
+    ('threshold', 'opening_context'), ('threshold', 'complete_ending'), ('threshold', 'logical_flow'),
+    ('self_contained_threshold', 'self_contained'), ('faithful_to_source_threshold', 'faithful_to_source'),
+    ('title_supported_threshold', 'title_supported'), ('sponsor_threshold', 'not_sponsored'), ('evidence_threshold', 'evidence')])
+def test_custom_threshold_controls_actual_clip_acceptance_and_trace(field, question):
+    from clip_engine.services.coherence_review import CLIP_QUESTIONS
+    async def evaluate(state, schema):
+        body = response(schema)
+        if question in body['answers']:
+            answer = body['answers'][question]
+            if question == 'evidence': answer['probabilities'] = {'sufficient': .8, 'insufficient': .2}
+            else: answer['noul'] = .8
+        return {'status': 'success', 'questions': schema, 'answers': body['answers']}
+    for threshold, expected in [(.8, True), (.81, False)]:
+        r = CoherenceReviewer(SimpleNamespace(evaluate=evaluate), SimpleNamespace(**{'jev_' + field: threshold}), transcript(), 12000)
+        trace = report()
+        assert asyncio.run(r.judge('Setup and result', [(0, 8000)], trace, 'candidate')) is expected
+        assert trace['coherence'][field] == threshold
+        r.settings.__dict__['jev_' + field] = .1
+        assert trace['coherence'][field] == threshold
+
+
+def test_custom_cut_threshold_changes_restoration_and_manual_review_display():
+    from clip_engine.services.manual_editor import questions
+    from clip_engine.services.coherence_review import CUT_QUESTIONS
+    async def evaluate(state, schema):
+        body = response(schema)
+        for name in ('removal_safe', 'join_logical'):
+            if name in body['answers']: body['answers'][name]['noul'] = .9
+        return {'status': 'success', 'questions': schema, 'answers': body['answers']}
+    for threshold, expected in [(.9, [(0, 2000), (3000, 8000)]), (.91, [(0, 8000)])]:
+        r = CoherenceReviewer(SimpleNamespace(evaluate=evaluate), SimpleNamespace(jev_cut_threshold=threshold, jev_evidence_threshold=.6), transcript(), 12000)
+        trace = report()
+        result = asyncio.run(r.audit_edit('Setup and result', TimeMap([(0, 2000), (3000, 8000)], 8000), 0, 8000, trace, None))
+        assert result.keeps == expected
+        assert trace['coherence']['cut_threshold'] == threshold
+        judgment = asyncio.run(evaluate({}, CUT_QUESTIONS))
+        displayed = {q['id']: q['threshold'] for q in questions(CUT_QUESTIONS, [judgment], threshold, r.policy)}
+        assert displayed == {'removal_safe': threshold, 'join_logical': threshold, 'evidence': .6}
+
+
+@pytest.mark.parametrize('value', [-.01, 1.01, float('nan'), float('inf')])
+def test_engine_rejects_invalid_jev_probabilities(value):
+    from clip_engine.config import Settings
+    from pydantic import ValidationError
+    for key in ('threshold', 'self_contained_threshold', 'faithful_to_source_threshold', 'title_supported_threshold', 'sponsor_threshold', 'evidence_threshold', 'cut_threshold'):
+        with pytest.raises(ValidationError): Settings(_env_file=None, **{'jev_' + key: value})
+
+
+def test_engine_reads_custom_threshold_environment(monkeypatch):
+    from clip_engine.config import Settings
+    monkeypatch.setenv('JEV_THRESHOLD', '0.83')
+    monkeypatch.setenv('JEV_CUT_THRESHOLD', '0.97')
+    settings = Settings(_env_file=None)
+    assert settings.jev_threshold == .83
+    assert settings.jev_cut_threshold == .97

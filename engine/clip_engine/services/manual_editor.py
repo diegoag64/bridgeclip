@@ -12,7 +12,7 @@ from dataclasses import replace
 from pathlib import Path
 from clip_engine.error_policy import NoClipCandidatesError
 
-from clip_engine.services.coherence_review import CLIP_QUESTIONS, CUT_QUESTIONS, CUT_PASS, CoherenceReviewer, check_threshold, dialogue
+from clip_engine.services.coherence_review import CLIP_QUESTIONS, CUT_QUESTIONS, CoherenceReviewer, check_threshold, dialogue
 from clip_engine.services.jev_service import JevService
 from clip_engine.services.layout_analyzer import ClipLayoutPlan, ShotLayout, LayoutType
 from clip_engine.services.layout_renderer import shot_views
@@ -90,7 +90,7 @@ def signature(c):
         ([s['transition_ms']] if s.get('transition_ms') else []) for s in c['scenes']]], separators=(',', ':'), ensure_ascii=False)
 
 
-def questions(schema, judgments, threshold=None):
+def questions(schema, judgments, threshold=None, policy=None):
     result = []
     for name, question in schema.items():
         judgment = next((j for j in judgments if j and name in j.get('questions', {})), None) or {}
@@ -99,7 +99,7 @@ def questions(schema, judgments, threshold=None):
         criteria = question['criteria']
         result.append({'id': name, 'prompt': question['instructions'], 'yes': criteria.get('true', criteria.get('sufficient', '')),
             'no': criteria.get('false', criteria.get('insufficient', '')), 'probability': probability,
-            'threshold': check_threshold(name, threshold or .75), 'status': judgment.get('status', 'unavailable')})
+            'threshold': check_threshold(name, threshold if threshold is not None else (policy['threshold'] if policy else .75), policy), 'status': judgment.get('status', 'unavailable')})
     return result
 
 
@@ -116,11 +116,11 @@ async def review_candidate(c, reviewer):
             'after': dialogue(reviewer.segments, [(b, min(reviewer.duration_ms, b + 15000))]),
             'source_context': reviewer.source_context}
         judgment = await reviewer.service.evaluate(state, CUT_QUESTIONS)
-        cuts.append({'interval': [a, b], 'questions': questions(CUT_QUESTIONS, [judgment], CUT_PASS)})
+        cuts.append({'interval': [a, b], 'questions': questions(CUT_QUESTIONS, [judgment], reviewer.policy['cut_threshold'], reviewer.policy)})
     accepted = accepted and all(q['probability'] is not None and q['probability'] >= q['threshold'] for cut in cuts for q in cut['questions'])
     c['review'] = {'signature': signature(c), 'reviewed_at': datetime.now(timezone.utc).isoformat(),
         'decision': 'passes' if accepted else 'needs_attention',
-        'questions': questions(CLIP_QUESTIONS, [attempt.get('judgment'), attempt.get('policy_judgment')]), 'cuts': cuts}
+        'questions': questions(CLIP_QUESTIONS, [attempt.get('judgment'), attempt.get('policy_judgment')], policy=reviewer.policy), 'cuts': cuts}
 
 
 def default_crop(w, h, aspect, cx=.5):

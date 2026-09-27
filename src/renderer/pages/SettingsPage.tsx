@@ -1,5 +1,6 @@
+import { JevSettings } from '../components/JevSettings'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { ArrowUpRight, BookA, Check, ChevronDown, Cpu, FolderOpen, Github, Info, KeyRound, Loader2, RefreshCw, ScrollText } from 'lucide-react'
+import { ArrowUpRight, BookA, Check, ChevronDown, Cpu, FolderOpen, Github, Info, KeyRound, Loader2, RefreshCw, ScrollText, SlidersHorizontal } from 'lucide-react'
 import { useSettingsStore } from '../store/use-settings-store'
 import { useApiKeyDrafts } from '../hooks/use-api-key-drafts'
 import { getApi } from '../lib/ipc'
@@ -19,12 +20,12 @@ import { Callout } from '../components/ui/Callout'
 import { UpdatesRow } from '../components/Updates'
 import { OutputStorage } from '../components/OutputStorage'
 
-type SectionId = 'keys' | 'vocabulary' | 'output' | 'system' | 'about'
+type SectionId = 'keys' | 'jev' | 'vocabulary' | 'output' | 'system' | 'about'
 type SectionTone = 'success' | 'warning' | 'danger' | 'idle'
 
 /** `showUpdates` changes each time Help → Check for Updates… asks for the Updates row. */
 export function SettingsPage({ showUpdates = 0 }: { showUpdates?: number }): React.JSX.Element {
-  const { outputDirectory, pythonPath, customVocabulary, openrouterConfigured, zernioConfigured, jevEnabled, jevVisualContext, sourceContextWebResearch, saving, save, toolStatus, toolError, checkTools, checkingTools } =
+  const { outputDirectory, pythonPath, customVocabulary, openrouterConfigured, zernioConfigured, sourceContextWebResearch, saving, save, toolStatus, toolError, checkTools, checkingTools } =
     useSettingsStore()
   const keys = useApiKeyDrafts()
   const [isPackaged, setIsPackaged] = useState(true)
@@ -56,6 +57,7 @@ export function SettingsPage({ showUpdates = 0 }: { showUpdates?: number }): Rea
 
   const sections: { id: SectionId; label: string; icon: ReactNode; tone: SectionTone }[] = [
     { id: 'keys', label: 'API keys', icon: <KeyRound />, tone: keysMissing ? 'warning' : 'success' },
+    { id: 'jev', label: 'TypeSafe Jev', icon: <SlidersHorizontal />, tone: 'idle' },
     { id: 'vocabulary', label: 'Vocabulary', icon: <BookA />, tone: 'idle' },
     { id: 'output', label: 'Output', icon: <FolderOpen />, tone: 'idle' },
     { id: 'system', label: 'System check', icon: <Cpu />, tone: !toolsChecked ? 'idle' : toolsMissing ? 'danger' : 'success' },
@@ -82,7 +84,7 @@ export function SettingsPage({ showUpdates = 0 }: { showUpdates?: number }): Rea
       <PageHeader
         eyebrow="Preferences"
         title="Settings"
-        description="Changes save automatically."
+        description="Changes save automatically. Jev thresholds use Apply."
         actions={<SaveIndicator saving={saving} savedAt={lastSaved || null} error={error} />}
       />
 
@@ -163,20 +165,6 @@ export function SettingsPage({ showUpdates = 0 }: { showUpdates?: number }): Rea
                 </span>
               </label>
               <p className="eyebrow px-1 pt-2">Optional</p>
-              <label className="flex items-start gap-3 px-3 py-2 text-sm text-ink-muted">
-                <input type="checkbox" className="mt-1" checked={jevEnabled === 'on'}
-                  onChange={(e) => commit({ jevEnabled: e.target.checked ? 'on' : 'off' })} />
-                <span>Jev editorial review via OpenRouter
-                  <span className="mt-1 block text-xs text-ink-subtle">Required to approve new clips. Turning this off prevents automatic clip generation. Uses your existing OpenRouter key to judge complete ideas and proposed cuts. Transcript excerpts, titles and diagnostic text go to Jev; no video or audio. Charges appear on your OpenRouter account.</span>
-                </span>
-              </label>
-              <label className="flex items-start gap-3 px-3 py-2 text-sm text-ink-muted">
-                <input type="checkbox" className="mt-1" disabled={jevEnabled !== 'on'} checked={jevVisualContext === 'on'}
-                  onChange={(e) => commit({ jevVisualContext: e.target.checked ? 'on' : 'off' })} />
-                <span>Use additional visual evidence for reaction context
-                  <span className="mt-1 block text-xs text-ink-subtle">When Jev text evidence is insufficient, send timestamped frames to your OpenRouter vision model. Limited to 8 requests per run and 12 frames per interval, with additional provider charges. Unknown cuts are restored; clips that cannot establish enough context are omitted.</span>
-                </span>
-              </label>
               <KeyRow>
                 <ApiKeyInput
                   label="Zernio (optional)"
@@ -192,6 +180,8 @@ export function SettingsPage({ showUpdates = 0 }: { showUpdates?: number }): Rea
               </KeyRow>
             </div>
           </Section>
+
+          <JevSettings />
 
           <Section id="vocabulary">
             <PanelHeader
