@@ -291,6 +291,17 @@ class VideoDownloaderService:
         # Direct video URL
         return "direct_url"
 
+    def _progress(self, label, downloaded=None, total=None):
+        callback = getattr(self, 'progress_callback', None)
+        if not callback:
+            return
+        now = time.monotonic()
+        if label == getattr(self, '_progress_label', None) and now - getattr(self, '_progress_at', 0) < .25:
+            return
+        self._progress_label, self._progress_at = label, now
+        percent = min(100, downloaded / total * 100) if total and downloaded is not None else None
+        callback(label, percent, downloaded, total or None)
+
     async def download_video(
         self,
         url: str,
@@ -319,6 +330,7 @@ class VideoDownloaderService:
         output_path = os.path.join(output_dir, output_filename)
         
         source_type = self.detect_source_type(url)
+        self._progress('Reading local video' if source_type == 'local' else 'Reading video information')
         logger.info("Detected source type: %s", source_type)
 
         try:
@@ -410,6 +422,16 @@ class VideoDownloaderService:
             self._check_free_space(
                 output_dir, total_bytes - int(progress.get("downloaded_bytes") or 0)
             )
+            info = progress.get('info_dict') or {}
+            label = 'Downloading audio stream' if info.get('vcodec') == 'none' else 'Downloading video stream'
+            if not progress.get('downloaded_bytes') and progress.get('postprocessor'):
+                self._progress('Combining downloaded streams')
+            elif progress.get('status') == 'finished':
+                self._progress('Finishing downloaded stream')
+            else:
+                if not progress.get('total_bytes') and total_bytes:
+                    label += ' (estimated size)'
+                self._progress(label, int(progress.get('downloaded_bytes') or 0), total_bytes)
             # yt-dlp downloads video and audio separately, so each stream can
             # be smaller than the limit while their combined files exceed it.
             stored_bytes = sum(
@@ -590,6 +612,7 @@ class VideoDownloaderService:
             with progress_lock:
                 downloaded += chunk_size
                 self._check_source_size(downloaded)
+                self._progress('Downloading video', downloaded, int(size) if size else None)
             if time.monotonic() > deadline:
                 raise VideoDownloadError("Video download deadline exceeded")
 
@@ -725,6 +748,7 @@ class VideoDownloaderService:
                             if time.monotonic() > deadline:
                                 raise VideoDownloadError("Video download deadline exceeded")
                             f.write(chunk)
+                            self._progress('Downloading video', downloaded, int(content_length) if content_length else None)
                     break
         
         if not os.path.isfile(output_path):

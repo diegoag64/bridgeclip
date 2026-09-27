@@ -1,6 +1,7 @@
+import { StageBreakdown } from './StageBreakdown'
 import { useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, Check, Clapperboard, Clock3, Download, FileText, Film, Gauge, Github, RotateCcw, ScrollText, Sparkles } from 'lucide-react'
-import { cn, formatTimecode, sourceLabel } from '../lib/utils'
+import { AlertTriangle, Clapperboard, Clock3, Gauge, Github, RotateCcw, ScrollText } from 'lucide-react'
+import { formatTimecode, sourceLabel } from '../lib/utils'
 import { getApi } from '../lib/ipc'
 import { ISSUES_URL } from '../config/brand'
 import type { Job } from '../store/use-job-store'
@@ -23,19 +24,6 @@ export const STAGE_LABELS: Record<string, string> = {
   completed: 'Done',
   failed: 'Failed',
   cancelled: 'Cancelled'
-}
-
-const STEPS = [
-  { label: 'Download', icon: Download, statuses: ['downloading'] },
-  { label: 'Context', icon: ScrollText, statuses: ['contextualizing'] },
-  { label: 'Transcribe', icon: FileText, statuses: ['transcribing'] },
-  { label: 'Find moments', icon: Sparkles, statuses: ['planning'] },
-  { label: 'Render', icon: Film, statuses: ['rendering', 'uploading'] }
-]
-
-function stepIndex(status: string): number {
-  if (status === 'completed') return STEPS.length
-  return STEPS.findIndex((s) => s.statuses.includes(status))
 }
 
 function useElapsed(since: string, running: boolean): number {
@@ -66,7 +54,6 @@ interface JobProgressProps {
 }
 
 export function JobProgress({ job, onCancel, leading }: JobProgressProps): React.JSX.Element {
-  const current = stepIndex(job.status)
   const queued = job.status === 'queued'
   const elapsed = useElapsed(job.startedAt ?? job.queuedAt, true)
   const pct = Math.round(Math.min(job.percent, 100))
@@ -89,6 +76,7 @@ export function JobProgress({ job, onCancel, leading }: JobProgressProps): React
               {pct}
               <span className="ml-0.5 text-xl text-ink-subtle">%</span>
             </p>
+            <p className="mt-1 text-2xs text-ink-subtle">Overall estimate</p>
             <p className="mt-1.5 text-xs font-medium text-accent">{STAGE_LABELS[job.status] ?? 'Working'}</p>
           </ProgressRing>
 
@@ -109,48 +97,8 @@ export function JobProgress({ job, onCancel, leading }: JobProgressProps): React
           </div>
         </div>
 
-        <ol className="relative mt-6 flex items-start" aria-label="Progress">
-          {STEPS.map((step, i) => {
-            const done = current > i
-            const active = current === i
-            const Icon = step.icon
-            return (
-              <li key={step.label} className="flex flex-1 items-start last:flex-none">
-                <div className="flex w-[84px] flex-col items-center gap-2.5">
-                  <span
-                    className={cn(
-                      'flex h-10 w-10 items-center justify-center rounded-full transition-[background,box-shadow,color] duration-300',
-                      done &&
-                        'bg-ink text-canvas shadow-[inset_0_1px_0_rgb(255_255_255/0.9),0_4px_14px_-4px_rgb(255_255_255/0.35)]',
-                      active &&
-                        'animate-pulse-ring bg-accent text-accent-ink shadow-[inset_0_1px_0_rgb(255_255_255/0.16)]',
-                      !done && !active && 'bg-black/25 text-ink-faint shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1),inset_0_1px_2px_rgb(0_0_0/0.3)]'
-                    )}
-                    aria-current={active ? 'step' : undefined}
-                  >
-                    {done ? <Check className="h-4 w-4" strokeWidth={3} /> : <Icon className="h-4 w-4" />}
-                  </span>
-                  <span
-                    className={cn(
-                      'text-center text-2xs font-medium',
-                      active ? 'text-ink' : done ? 'text-ink-muted' : 'text-ink-faint'
-                    )}
-                  >
-                    {step.label}
-                  </span>
-                </div>
-                {i < STEPS.length - 1 && (
-                  <div className="mt-4 h-[3px] flex-1 overflow-hidden rounded-full bg-black/30 shadow-[inset_0_1px_1px_rgb(0_0_0/0.4)]">
-                    <div
-                      className="h-full rounded-full bg-accent transition-[width] duration-700 ease-out"
-                      style={{ width: done ? '100%' : '0%' }}
-                    />
-                  </div>
-                )}
-              </li>
-            )
-          })}
-        </ol>
+        {job.stages && <div className="mt-6 border-t border-white/[0.08] pt-5"><StageBreakdown stages={job.stages} updatedAt={job.progressAt} running={!queued} /></div>}
+
       </section>
 
       <div className="mt-4 flex items-center justify-between gap-4 px-1">
@@ -198,6 +146,7 @@ export function JobFailure({ job, onRetry, leading }: { job: Job; onRetry: () =>
         )}
       </section>
 
+      {job.stages && <div className="mt-4"><StageBreakdown stages={job.stages} /></div>}
       <div className="mt-5 flex flex-wrap items-center gap-2">
         <Button variant="primary" icon={<RotateCcw className="h-4 w-4" />} onClick={onRetry}>
           Run again

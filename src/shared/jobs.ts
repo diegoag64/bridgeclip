@@ -1,3 +1,4 @@
+import type { PipelineStage } from './job-progress'
 import type { JobOutput } from './job-output'
 
 /** Options for one clipping run, as the Create wizard submits them. */
@@ -53,6 +54,8 @@ export interface JobSnapshot {
   request: ClipJobRequest
   status: JobStatus
   percent: number
+  stages?: PipelineStage[]
+  progressAt?: number
   step: string
   clipsDone: number
   clipsTotal: number

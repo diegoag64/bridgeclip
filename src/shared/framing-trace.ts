@@ -114,10 +114,10 @@ export function parseFramingTrace(value: unknown): FramingTrace {
     config: { style: oneOf(config.style, ['auto', 'fit', 'fill']), pacing: oneOf(config.pacing, ['natural', 'tight']), vision_enabled: bool(config.vision_enabled),
       vision_model: text(config.vision_model), detector: text(config.detector), analysis_width: number(config.analysis_width, 32768) },
     analysis_status: oneOf(v.analysis_status, ['recorded', 'unavailable']),
-    samples: array(v.samples, 14401, (x) => { const s = object(x); return { t_ms: number(s.t_ms), evidence: optional(s.evidence, (e) => oneOf(e, layouts)), histogram_distance: optional(s.histogram_distance, (n) => number(n, 1.001)),
+    samples: array(v.samples, 20401, (x) => { const s = object(x); return { t_ms: number(s.t_ms), evidence: optional(s.evidence, (e) => oneOf(e, layouts)), histogram_distance: optional(s.histogram_distance, (n) => number(n, 1.001)),
       content_box: optional(s.content_box, (b) => rect(b, true)),
       faces: array(s.faces, 32, (f) => { const face = object(f); return { box: rect(face.box, true), score: optional(face.score, (n) => number(n, 1)) } }) } }),
-    boundaries: array(v.boundaries, 30000, (x) => { const b = object(x); return { t_ms: number(b.t_ms), kind: oneOf(b.kind, ['scene', 'layout', 'content']), accepted: bool(b.accepted),
+    boundaries: array(v.boundaries, 30000, (x) => { const b = object(x); return { t_ms: number(b.t_ms), kind: oneOf(b.kind, ['scene', 'layout', 'content', 'precise_scene']), accepted: bool(b.accepted),
       from_layout: optional(b.from_layout, (s) => oneOf(s, layouts)), to_layout: optional(b.to_layout, (s) => oneOf(s, layouts)),
       distance: optional(b.distance, (n) => number(n, 1.001)), hold_ms: optional(b.hold_ms, (n) => number(n)), samples: optional(b.samples, (n) => integer(n)) } }),
     decisions: array(v.decisions, 14401, (x) => {
@@ -126,7 +126,7 @@ export function parseFramingTrace(value: unknown): FramingTrace {
         tracks: array(d.tracks, 32768, (t) => { const track = object(t); return { id: integer(track.id, 32768), selected: bool(track.selected), samples: array(track.samples, 14401, (p) => {
           const point = array(p, 2, (n) => number(n)); if (point.length !== 2 || point[1] > 31 || !Number.isInteger(point[1])) throw new Error('Invalid face association'); return point as [number, number]
         }) } }),
-        vision: { status: oneOf(ai.status, ['disabled', 'unavailable', 'no_image', 'success', 'failed', 'content_region']), t_ms: optional(ai.t_ms, (n) => number(n)), source_ms: optional(ai.source_ms, (n) => number(n)),
+        vision: { status: oneOf(ai.status, ['disabled', 'unavailable', 'no_image', 'success', 'failed', 'content_region', 'budget_limited']), t_ms: optional(ai.t_ms, (n) => number(n)), source_ms: optional(ai.source_ms, (n) => number(n)),
           model: optional(ai.model, text), cache_hit: optional(ai.cache_hit, bool), cache_id: optional(ai.cache_id, (s) => { const id = text(s, 16); if (!/^[a-f0-9]{16}$/.test(id)) throw new Error('Invalid cache id'); return id }),
           cache_source_ms: optional(ai.cache_source_ms, (n) => number(n)), validated: optional(ai.validated, shot) } }
     }),

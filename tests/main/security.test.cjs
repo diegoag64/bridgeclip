@@ -11,14 +11,14 @@ function loadSource(file, mocks = {}, globals = {}) {
   const source = fs.readFileSync(path.join(__dirname, '../../src/main', file), 'utf8')
   const js = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText
   const module = { exports: {} }
-  vm.runInNewContext(js, { module, exports: module.exports, require: (id) => mocks[id] ?? require(id), URL, Set, Map, process, Buffer, console, setTimeout, clearTimeout, __dirname: path.join(__dirname, '../../src/main'), ...globals })
+  vm.runInNewContext(js, { module, exports: module.exports, require: (id) => mocks[id] ?? (id === '../shared/job-progress' ? loadShared('job-progress.ts') : require(id)), URL, Set, Map, process, Buffer, console, setTimeout, clearTimeout, __dirname: path.join(__dirname, '../../src/main'), ...globals })
   return module.exports
 }
 function loadShared(file) {
   const source = fs.readFileSync(path.join(__dirname, '../../src/shared', file), 'utf8')
   const js = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText
   const module = { exports: {} }
-  vm.runInNewContext(js, { module, exports: module.exports, require: (id) => id === './editorial' ? loadShared('editorial.ts') : require(id), URL })
+  vm.runInNewContext(js, { module, exports: module.exports, require: (id) => id.startsWith('./') ? loadShared(id.slice(2) + '.ts') : require(id), URL })
   return module.exports
 }
 const TEST_WORK_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'bridgeclip-worker-test-'))

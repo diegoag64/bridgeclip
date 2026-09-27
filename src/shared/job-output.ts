@@ -1,3 +1,4 @@
+import { parseStages } from './job-progress'
 import { parseEditorialSummary, type EditorialSummary } from './editorial'
 
 export interface ClipArtifact {
@@ -101,6 +102,8 @@ function safeMetrics(value: unknown): Record<string, unknown> | null {
     'source_video_size_bytes', 'rendered_output_bytes', 'peak_rss_mb', 'analysis_duration_seconds']) {
     if (nonNegative(value[field])) result[field] = value[field]
   }
+  const stages = parseStages(value.pipeline_stages)
+  if (stages) result.pipeline_stages = stages
   const stageDurations = value.stage_durations_seconds
   if (record(stageDurations)) {
     const safe: Record<string, number> = {}

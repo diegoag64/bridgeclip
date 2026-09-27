@@ -382,3 +382,22 @@
     background: rgb(var(--overlay));
   }
 }
+
+/* Native progress preserves accessible measured/indeterminate semantics. */
+.stage-progress {
+  appearance: none;
+  overflow: hidden;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, .07);
+}
+.stage-progress::-webkit-progress-bar { background: rgba(255, 255, 255, .07); border-radius: 9999px; }
+.stage-progress::-webkit-progress-value { background: var(--color-accent, #2563eb); border-radius: 9999px; transition: width .2s ease; }
+.stage-progress:indeterminate {
+  background: linear-gradient(90deg, transparent, #2563eb 50%, transparent) -100% 0 / 50% 100% no-repeat, rgba(255, 255, 255, .07);
+  animation: stage-progress-pulse 1.8s ease-in-out infinite;
+}
+@keyframes stage-progress-pulse { to { background-position: 200% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .stage-progress:indeterminate { animation: none; background-position: 50% 0; }
+  .stage-progress::-webkit-progress-value { transition: none; }
+}

@@ -597,6 +597,8 @@ class TranscriptionService:
                     chunk_path = os.path.join(work, "chunk.wav")
                     await asyncio.to_thread(self._extract_chunk, audio_path, chunk_path, start, end - start)
                 self._progress(f"Transcribing audio, part {index + 1} of {chunk_count}...")
+                if getattr(self, 'detail_callback', None):
+                    self.detail_callback(index, chunk_count)
                 parsed = await self._transcribe_chunk(chunk_path, language, keyterms, end - start, models, costs)
                 detected_language = detected_language or parsed.language
                 for segment in parsed.segments:

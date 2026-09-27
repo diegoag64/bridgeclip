@@ -160,7 +160,7 @@ function TraceView({ trace, inspection, mediaUrl }: { trace: FramingTrace; inspe
             </g>)}
           </svg>
         </div>
-        <p className="mt-2 text-2xs text-ink-subtle">{sample ? `Detection sample ${time(trace.window.start_ms + sample.t_ms)} · held for ${(t - sample.t_ms).toFixed(0)} ms · ${trace.sample_fps} fps sampling` : 'No detection sample at this time'}{sample?.faces.length === 0 ? ' · no face detected' : ''}</p>
+        <p className="mt-2 text-2xs text-ink-subtle">{sample ? `Detection sample ${time(trace.window.start_ms + sample.t_ms)} · held for ${(t - sample.t_ms).toFixed(0)} ms · ${trace.sample_fps} fps base sampling` : 'No detection sample at this time'}{sample?.faces.length === 0 ? ' · no face detected' : ''}</p>
       </section>
       <section className="min-w-0 rounded-2xl border border-white/10 bg-black/30 p-3">
         <h3 className="mb-2 text-xs font-medium">Generated clip · synchronized</h3>
@@ -192,7 +192,7 @@ function TraceView({ trace, inspection, mediaUrl }: { trace: FramingTrace; inspe
         <h3 className="text-sm font-semibold">Decision at {time(sourceMs)}</h3>
         <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-5 gap-y-2 text-xs">
           <dt className="text-ink-subtle">Heuristic</dt><dd>{decision ? (decision.heuristic.content_box ? 'Inset video' : layoutNames[decision.heuristic.layout]) : 'Not recorded at this time'}</dd>
-          <dt className="text-ink-subtle">AI classification</dt><dd>{decision?.vision.validated ? layoutNames[decision.vision.validated.layout] : decision?.vision.status === 'content_region' ? 'Local padding detection' : decision?.vision.status ?? 'Not recorded'}</dd>
+          <dt className="text-ink-subtle">AI classification</dt><dd>{decision?.vision.validated ? layoutNames[decision.vision.validated.layout] : decision?.vision.status === 'content_region' ? 'Local padding detection' : decision?.vision.status === 'budget_limited' ? 'Local analysis (AI check limit reached)' : decision?.vision.status ?? 'Not recorded'}</dd>
           <dt className="text-ink-subtle">AI image</dt><dd>{decision?.vision.t_ms != null ? time(trace.window.start_ms + decision.vision.t_ms) : 'No image inspected'}</dd>
           <dt className="text-ink-subtle">Cache</dt><dd>{decision?.vision.cache_hit === true ? `Reused ${decision.vision.cache_id} · originally inspected at ${decision.vision.cache_source_ms == null ? 'unrecorded time' : time(decision.vision.cache_source_ms)}` : decision?.vision.cache_hit === false ? 'Fresh provider result' : 'Not used / not recorded'}</dd>
           <dt className="text-ink-subtle">Final layout</dt><dd>{shot ? `${shot.content_box ? 'Inset video' : layoutNames[shot.layout]} (${shot.source})` : 'Outside window'}{isRemoved ? ' · this interval was removed' : ''}</dd>
@@ -206,13 +206,13 @@ function TraceView({ trace, inspection, mediaUrl }: { trace: FramingTrace; inspe
       </section>
       <section className="rounded-2xl border border-white/10 p-4 text-xs">
         <h3 className="text-sm font-semibold">Transitions & render outcome</h3>
-        <div className="mt-3 space-y-2">{trace.boundaries.filter((b) => Math.abs(b.t_ms - t) <= 1500).map((b, i) => <p key={i}>{time(trace.window.start_ms + b.t_ms)} · {b.kind} · {b.accepted ? 'accepted' : 'merged short shot'}{b.hold_ms != null ? ` · ${b.samples} samples over ${b.hold_ms} ms (required ${b.to_layout === 'screen' ? trace.thresholds.MIN_SHOT_MS : trace.thresholds.LAYOUT_CHANGE_MS} ms)` : b.distance != null ? ` · distance ${b.distance.toFixed(3)}` : ''}</p>)}
+        <div className="mt-3 space-y-2">{trace.boundaries.filter((b) => Math.abs(b.t_ms - t) <= 1500).map((b, i) => <p key={i}>{time(trace.window.start_ms + b.t_ms)} · {b.kind === 'precise_scene' ? 'Camera cut' : b.kind} · {b.accepted ? 'accepted' : 'merged short shot'}{b.hold_ms != null ? ` · ${b.samples} samples over ${b.hold_ms} ms (required ${b.to_layout === 'screen' ? trace.thresholds.MIN_SHOT_MS : trace.thresholds.LAYOUT_CHANGE_MS} ms)` : b.distance != null ? ` · distance ${b.distance.toFixed(3)}` : ''}</p>)}
           {!trace.boundaries.some((b) => Math.abs(b.t_ms - t) <= 1500) && <p className="text-ink-subtle">No recorded transition within 1.5 seconds.</p>}
           {trace.attempts.map((a, i) => <p key={i}>Attempt {i + 1}: {a.fallback ?? 'planned framing'} · <span className={a.status === 'failed' ? 'text-amber-300' : 'text-green-300'}>{a.status}</span>{a.failure ? ` (${a.failure})` : ''}</p>)}
         </div>
         <details className="mt-4"><summary className="cursor-pointer text-ink-muted">Attempted vs rendered plans</summary><JsonViewer className="mt-3" label="Framing plans" value={{ attempted: trace.attempted_plan.map((s) => [s.start_ms, s.end_ms, s.layout]), rendered: trace.rendered_plan.map((s) => [s.start_ms, s.end_ms, s.layout]) }} /></details>
         <details className="mt-3"><summary className="cursor-pointer text-ink-muted">Recorded thresholds & configuration</summary><JsonViewer className="mt-3" label="Framing configuration" value={{ version: trace.version, ...trace.config, ...trace.thresholds }} /></details>
-        <p className="mt-3 text-2xs text-ink-subtle">Crop paths come from renderer geometry. Detection boxes are sampled at {trace.sample_fps} fps and held briefly; no per-frame detection is implied. Playback and scrubbing make no AI calls.</p>
+        <p className="mt-3 text-2xs text-ink-subtle">Crop paths come from renderer geometry. Detection uses {trace.sample_fps} fps base sampling with extra face checks near likely camera changes. Boxes are held briefly between observations. Playback and scrubbing make no AI calls.</p>
       </section>
     </div>
   </div>

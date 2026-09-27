@@ -1,3 +1,4 @@
+import { SavedStageTimings } from './StageBreakdown'
 import { registerNavigationCommit } from '../lib/navigation'
 import { nextCaptionRange } from '../lib/caption-ranges'
 import { cloneElement, isValidElement, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
@@ -460,6 +461,7 @@ export function ClipEditor({ outputDir, leading, onExports }: { outputDir: strin
       <ActionMenu label="More bake options" disabled={!!busy || readyCount === 0} icon={<ChevronDown aria-hidden size={14} />} triggerClassName="btn-primary editor-bake-toggle disabled:opacity-100" actions={[{ label: `Bake all ready clips (${readyCount})`, disabled: readyCount === 0, icon: <Download size={14} />, onSelect: () => { void run('export-all') } }]} />
       </div>
     </header>
+    <SavedStageTimings outputDir={outputDir} />
     <div className="editor-stagebar">
       <span className={cn('editor-status', status)}>{status === 'baked' || status === 'ready' ? <Check size={12} /> : status === 'discarded' ? <Archive size={12} /> : <Pencil size={12} />}{statusLabels[status]}</span>
       <span className="editor-stage-hint">{status === 'refining' ? 'Review the cut, framing and captions.' : status === 'ready' ? 'Ready for the final render.' : status === 'baked' ? 'Your finished clip is in Exports.' : 'Set aside. Restore it whenever you need.'}</span>

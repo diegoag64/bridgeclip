@@ -137,16 +137,21 @@ async def prepare_project(request, segments, transcript, download, renderer, rev
     project = {'version': 1, 'revision': 0, 'title': download.metadata.title, 'width': w, 'height': h,
         'duration_ms': duration, 'aspect_ratio': request.aspect_ratio, 'candidates': [],
         'transcript': [{'start_ms': max(0, min(duration, s.start_time_ms)), 'end_ms': max(0, min(duration, s.end_time_ms)), 'text': s.text} for s in transcript]}
+    loop = asyncio.get_running_loop()
+    total = min(100, len(segments))
     for i, segment in enumerate(segments[:100]):
-        progress(f'Reviewing candidate {i + 1} of {min(100, len(segments))} with Jev…')
+        progress(f'Analyzing framing for candidate {i + 1} of {total}…', 100 * i / total)
         a, b = max(0, segment.start_time_ms), min(duration, segment.end_time_ms)
         if b - a < 100:
             continue
+        plan = None
         scenes = [{'at_ms': 0, 'layout': 'fit' if request.layout_style == 'fit' else 'fill', 'crops': [default_crop(w, h, aspect)]}]
         # Suggested shot layouts stay editable; no pacing cuts or captions are baked.
         if request.aspect_ratio == '9:16' and request.layout_style != 'fit':
             try:
-                plan = await renderer.layout_analyzer.analyze(download.video_path, a, b - a, w, h, request.layout_style)
+                plan = await renderer.layout_analyzer.analyze(download.video_path, a, b - a, w, h, request.layout_style,
+                    progress=lambda detail, percent: loop.call_soon_threadsafe(progress,
+                        f'Candidate {i + 1} of {total}: {detail} {percent}%', 100 * i / total))
                 scenes = []
                 for j, shot in enumerate(plan.shots[:60]):
                     views = shot_views(shot, (shot.start_ms + shot.end_ms) // 2, w, h, 1080, 1920)
@@ -171,16 +176,31 @@ async def prepare_project(request, segments, transcript, download, renderer, rev
             'reason': (getattr(segment, 'reasoning', '') or '')[:4000], 'captions': request.include_captions,
             'caption_preset': request.caption_preset, 'video_speed': request.video_speed, 'exports': [], 'review': None,
             'status': 'refining', 'caption_edits': [], 'caption_suppression_ranges': []}
+        if plan is not None and getattr(plan, 'camera_scan', None):
+            c['camera_scan'] = plan.camera_scan
+            c['dismissed_camera_markers'] = []
+        progress(f'Reviewing candidate {i + 1} of {total} with Jev…', 100 * i / total)
         await review_candidate(c, reviewer)
         project['candidates'].append(c)
     if not project['candidates']:
         raise NoClipCandidatesError()
-    progress('Saving source video and editor preview…')
+    progress('Saving source video…', 0, 'saving')
     destination = os.path.join(output_dir, 'editor-source.mp4')
     # A real copy also isolates local inputs from later changes to the original file.
-    await asyncio.to_thread(shutil.copyfile, download.video_path, destination)
+    def copy_source():
+        size, copied = os.path.getsize(download.video_path), 0
+        with open(download.video_path, 'rb') as source, open(destination, 'wb') as target:
+            while chunk := source.read(8 * 1024 * 1024):
+                target.write(chunk)
+                copied += len(chunk)
+                percent = 100 * copied / max(1, size)
+                loop.call_soon_threadsafe(progress, f'Saving source video: {percent:.0f}%', percent, 'saving')
+    await asyncio.to_thread(copy_source)
     os.chmod(destination, 0o600)
-    await renderer.capture_framing_source(destination, os.path.join(output_dir, 'editor-preview.mp4'))
+    loop = asyncio.get_running_loop()
+    await renderer.capture_framing_source(destination, os.path.join(output_dir, 'editor-preview.mp4'),
+        progress=lambda percent: loop.call_soon_threadsafe(progress, 'Preparing editor preview…', percent, 'preview'),
+        duration_ms=duration)
     project['frame_preview'] = True
     atomic_json(Path(output_dir) / 'editor-project.json', project)
     return project

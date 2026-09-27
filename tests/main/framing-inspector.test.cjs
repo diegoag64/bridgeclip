@@ -208,3 +208,13 @@ test('card availability includes recorded traces without media and excludes abse
     await assert.rejects(availableFraming(path.dirname(root), root))
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
+
+
+test('precise pipeline boundaries and bounded vision decisions remain inspectable', () => {
+  const raw = clone()
+  raw.boundaries.push({ t_ms: 709.042, kind: 'precise_scene', accepted: true })
+  raw.decisions[0].vision.status = 'budget_limited'
+  const trace = parseFramingTrace(raw)
+  assert.equal(trace.boundaries.at(-1).t_ms, 709.042)
+  assert.equal(trace.decisions[0].vision.status, 'budget_limited')
+})

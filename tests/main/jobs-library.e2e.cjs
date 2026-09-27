@@ -110,19 +110,43 @@ test('Jobs actions inspect runs and open completed jobs in the shared Library vi
   await page.getByRole('button', { name: 'All jobs', exact: true }).click()
 
   const liveDir = writeRun(liveId, 'Watched test run', 'running')
-  const live = snapshot(liveId, 'rendering', liveDir)
+  const live = { ...snapshot(liveId, 'downloading', liveDir), startedAt: new Date(Date.now() - 7000).toISOString(), progressAt: Date.now(), stages: [
+    { id: 'download', state: 'running', percent: 25, elapsed_ms: 2000, completed: 25000000, total: 100000000, unit: 'bytes' },
+    { id: 'planning', state: 'pending', percent: null, elapsed_ms: 0 }
+  ] }
   await publish(live)
   await page.getByRole('region', { name: 'Active jobs' }).getByRole('button').first().click()
   await page.getByRole('button', { name: 'Cancel', exact: true }).waitFor()
-  const finishedOutput = output(liveId, 'Watched test run')
+  const download = page.getByRole('progressbar', { name: 'Download / read video progress' })
+  await download.waitFor()
+  assert.equal(await download.getAttribute('value'), '25')
+  await page.getByText('25.0 MB of 100.0 MB', { exact: true }).waitFor()
+  await publish({ ...live, revision: 2, stages: [{ ...live.stages[0], percent: 80 }] })
+  await page.waitForFunction(() => document.querySelector('progress')?.value === 80)
+  await publish({ ...live, revision: 3, status: 'planning', stages: [
+    { ...live.stages[0], state: 'completed', percent: 100, elapsed_ms: 5000 },
+    { id: 'planning', state: 'running', percent: null, elapsed_ms: 1000 }
+  ] })
+  const planning = page.getByRole('progressbar', { name: 'Find moments progress' })
+  await planning.waitFor()
+  assert.equal(await planning.getAttribute('value'), null)
+  if (process.env.BRIDGECLIP_E2E_SHOTS) await page.screenshot({ path: path.join(process.env.BRIDGECLIP_E2E_SHOTS, 'stage-progress.png') })
+  const finishedOutput = { ...output(liveId, 'Watched test run'), metrics: { pipeline_stages: [
+    { ...live.stages[0], state: 'completed', percent: 100, elapsed_ms: 5000 },
+    { id: 'planning', state: 'completed', percent: 100, elapsed_ms: 9000 }
+  ] } }
   fs.writeFileSync(path.join(liveDir, 'job_output.json'), JSON.stringify(finishedOutput))
-  await publish({ ...live, revision: 2, status: 'completed', percent: 100, output: finishedOutput, finishedAt: date })
+  await publish({ ...live, revision: 4, status: 'completed', percent: 100, output: finishedOutput, finishedAt: date })
   await expectLibrary('Watched test run')
+  await page.getByText('Processing time by stage', { exact: true }).click()
+  await page.getByRole('list', { name: 'Stage progress' }).getByText('0:05', { exact: true }).waitFor()
   // Returning to Jobs must stay at the list, without a stale completion redirect.
   await jobs()
   await page.getByRole('button', { name: 'Actions for Watched test run', exact: true }).waitFor()
   await page.getByTitle('Open in Library', { exact: true }).filter({ hasText: 'Watched test run' }).click()
   await expectLibrary('Watched test run')
+  await page.getByText('Processing time by stage', { exact: true }).click()
+  await page.getByRole('list', { name: 'Stage progress' }).getByText('0:05', { exact: true }).waitFor()
   assert.deepEqual(errors, [])
 })
 

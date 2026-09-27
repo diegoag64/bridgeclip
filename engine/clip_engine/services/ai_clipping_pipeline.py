@@ -138,6 +138,7 @@ class ClippingJobProgress:
     clips_completed: int = 0
     total_clips: int = 0
     error: Optional[str] = None
+    stages: Optional[list[dict]] = None
 
 
 @dataclass
@@ -191,6 +192,9 @@ class AIClippingPipeline:
 
         Pipeline: download -> source context -> transcribe -> plan -> render (smart framing) -> upload
         """
+        from .job_progress import StageProgress
+        self._stage_progress = StageProgress(request.workflow == 'review')
+        loop = asyncio.get_running_loop()
         start_time = time.time()
         job_id = request.job_id
         editorial_service = JevService.from_settings(self.settings)
@@ -246,10 +250,14 @@ class AIClippingPipeline:
             current_stage = "download"
             self._update_progress(job_id, JobStatus.DOWNLOADING, 5, "Downloading video...")
             stage_start = time.perf_counter()
-            download_result = await self.video_downloader.download_video(
-                url=request.video_url,
-                output_dir=work_dir,
-            )
+            self.video_downloader.progress_callback = lambda detail, percent, done, total: loop.call_soon_threadsafe(
+                lambda: self._update_progress(job_id, JobStatus.DOWNLOADING, 5 + (percent or 0) * .06, detail,
+                    stage_percent=percent, completed=done, total=total, unit='bytes'))
+            try:
+                download_result = await self.video_downloader.download_video(
+                    url=request.video_url, output_dir=work_dir)
+            finally:
+                self.video_downloader.progress_callback = None
             stage_timings["download"] = time.perf_counter() - stage_start
             logger.info(f"Downloaded: {download_result.metadata.title}")
 
@@ -285,6 +293,9 @@ class AIClippingPipeline:
             self.transcription_service.progress_callback = lambda message: self._update_progress(
                 job_id, JobStatus.TRANSCRIBING, 15, message,
             )
+            self.transcription_service.detail_callback = lambda done, total: self._update_progress(
+                job_id, JobStatus.TRANSCRIBING, 15 + 10 * done / total, f'Transcribing audio, part {done + 1} of {total}…',
+                stage_id='transcription', stage_percent=100 * done / total, completed=done, total=total, unit='chunks')
             try:
                 transcription_result = await self.transcription_service.transcribe(
                     video_path=download_result.video_path,
@@ -302,6 +313,7 @@ class AIClippingPipeline:
                     transcription_status = "no_speech"
             finally:
                 self.transcription_service.progress_callback = previous_transcription_progress
+                self.transcription_service.detail_callback = None
             stage_timings["transcription"] = time.perf_counter() - stage_start
             logger.info(f"Transcription complete: {len(transcription_result.segments)} segments")
 
@@ -392,7 +404,9 @@ class AIClippingPipeline:
                 from clip_engine.services.manual_editor import prepare_project
                 project = await prepare_project(request, clip_plan.segments, transcription_result.segments,
                     download_result, self.rendering_service, reviewer, self._get_local_output_dir(job_id),
-                    lambda message: self._update_progress(job_id, JobStatus.PLANNING, 60, message))
+                    lambda message, percent=None, stage='preparing': self._update_progress(job_id, JobStatus.PLANNING,
+                        {'preparing': 40, 'saving': 80, 'preview': 85}[stage] + (percent or 0) * {'preparing': .4, 'saving': .05, 'preview': .1}[stage], message,
+                        stage_id=stage, stage_percent=percent))
                 edit_audit['outcome'] = 'ready_for_review'
                 save_edit_audit()
                 costs = source_context['cost_usd'] + coherence_service.estimated_cost_usd
@@ -405,7 +419,8 @@ class AIClippingPipeline:
                     total_clips=0, clips=[], editor_project=True, transcript_url=transcript_upload.s3_url,
                     processing_time_seconds=time.time() - start_time,
                     metrics={'planned_clip_count': len(project['candidates']),
-                        'api_costs': {'total_estimated_cost_usd': costs, 'cost_incomplete': True}})
+                        'api_costs': {'total_estimated_cost_usd': costs, 'cost_incomplete': True},
+                        'pipeline_stages': self._stage_progress.update('completed')})
                 self._save_local_json(job_id, 'job_output', asdict(output))
                 self._update_progress(job_id, JobStatus.COMPLETED, 100, 'Ready to edit')
                 return ClippingJobResult(job_id=job_id, status=JobStatus.COMPLETED, output=output,
@@ -416,7 +431,8 @@ class AIClippingPipeline:
             for discovery_pass in (1, 2):
                 for segment in pending:
                     i = len(edit_audit['candidates'])
-                    self._update_progress(job_id, JobStatus.PLANNING, 35, f"Reviewing candidate {i + 1} for coherence (discovery {discovery_pass})...")
+                    self._update_progress(job_id, JobStatus.PLANNING, 35, f"Reviewing candidate {i + 1} for coherence (discovery {discovery_pass})...",
+                        stage_id="reviewing", stage_percent=None)
                     segment.editorial = await analyze_reactions(transcription_result.segments,
                         segment.start_time_ms, segment.end_time_ms, JevService())
                     entry = {'candidate_index': i, 'title': segment.summary or '', 'discovery_pass': discovery_pass,
@@ -518,7 +534,7 @@ class AIClippingPipeline:
             self._update_progress(
                 job_id, JobStatus.RENDERING, 50,
                 f"Rendering {total_clips} clip{'s' if total_clips != 1 else ''}...",
-                clips_completed=0, total_clips=total_clips,
+                clips_completed=0, total_clips=total_clips, stage_percent=0,
             )
 
             render_semaphore = asyncio.Semaphore(self.settings.max_concurrent_renders)
@@ -526,6 +542,22 @@ class AIClippingPipeline:
                 request.duration_ranges, request.min_clip_duration_seconds, request.max_clip_duration_seconds,
             )[0])
             clips_finished = 0
+            render_fractions = {}
+            finished_renders = set()
+            last_render_update = [0.0]
+            def render_progress(i, detail, percent):
+                def report():
+                    if i in finished_renders: return
+                    if percent is not None:
+                        render_fractions[i] = min(.99, max(0, percent / 100))
+                    now = time.monotonic()
+                    if now - last_render_update[0] < .25: return
+                    last_render_update[0] = now
+                    fraction = (clips_finished + sum(render_fractions.values())) / total_clips
+                    self._update_progress(job_id, JobStatus.RENDERING, 50 + 40 * fraction,
+                        f'Clip {i + 1} of {total_clips}: {detail}', clips_finished, total_clips,
+                        stage_percent=100 * fraction, completed=clips_finished, total=total_clips, unit='clips')
+                loop.call_soon_threadsafe(report)
 
             async def render_single_clip(i: int, segment: ClipPlanSegment) -> tuple[int, str, ClipPlanSegment]:
                 nonlocal layout_vision_cost
@@ -536,10 +568,13 @@ class AIClippingPipeline:
                     # (or failed) clip instead of sitting at 50% until all are done.
                     nonlocal clips_finished
                     clips_finished += 1
+                    finished_renders.add(i)
+                    render_fractions.pop(i, None)
                     self._update_progress(
                         job_id, JobStatus.RENDERING, 50 + 40 * clips_finished / total_clips,
                         f"Rendered {clips_finished} of {total_clips} clip{'s' if total_clips != 1 else ''}",
                         clips_completed=clips_finished, total_clips=total_clips,
+                        stage_percent=100 * clips_finished / total_clips, completed=clips_finished, total=total_clips, unit='clips',
                     )
 
             async def render_clip_locked(i: int, segment: ClipPlanSegment) -> tuple[int, str, ClipPlanSegment]:
@@ -555,6 +590,7 @@ class AIClippingPipeline:
                     )
 
                     render_request = RenderRequest(
+                        progress_callback=lambda detail, percent=None: render_progress(i, detail, percent),
                         video_path=download_result.video_path,
                         output_path=output_path,
                         start_time_ms=segment.start_time_ms,
@@ -686,13 +722,20 @@ class AIClippingPipeline:
                     clips_completed=total_clips, total_clips=total_clips,
                 )
                 stage_start = time.perf_counter()
-                clip_artifacts = self._save_clips_locally(job_id, rendered_clips, clip_durations_ms)
+                def save_progress(done, total):
+                    loop.call_soon_threadsafe(lambda: self._update_progress(job_id, JobStatus.UPLOADING,
+                        90 + 5 * done / total, f'Saving clip {done} of {total}', total_clips, total_clips,
+                        stage_percent=100 * done / total, completed=done, total=total, unit='clips'))
+                clip_artifacts = await asyncio.to_thread(self._save_clips_locally, job_id, rendered_clips, clip_durations_ms, save_progress)
                 if request.debug_capture:
                     output_dir = self._get_local_output_dir(job_id)
                     preview_status = "available"
                     try:
                         await self.rendering_service.capture_framing_source(
-                            download_result.video_path, os.path.join(output_dir, "framing-source.mp4"))
+                            download_result.video_path, os.path.join(output_dir, "framing-source.mp4"),
+                            progress=lambda percent: loop.call_soon_threadsafe(lambda: self._update_progress(
+                                job_id, JobStatus.UPLOADING, 95 + .04 * percent, 'Preparing framing preview',
+                                stage_id='preview', stage_percent=percent)), duration_ms=round(video_duration * 1000))
                     except Exception:
                         preview_status = "failed"
                         logger.warning("Framing source preview could not be saved")
@@ -858,6 +901,7 @@ class AIClippingPipeline:
             logger.info(f"Job {job_id} total API cost: ${total_cost:.6f}")
 
             metrics = {
+                'pipeline_stages': self._stage_progress.update('completed'),
                 "analysis_duration_seconds": video_duration,
                 "requested_settings": {
                     "clipping_mode": self.settings.clipping_mode,
@@ -1060,6 +1104,7 @@ class AIClippingPipeline:
         job_id: str,
         rendered_clips: list[tuple[str, ClipPlanSegment]],
         durations_ms: Optional[dict[int, int]] = None,
+        progress=None,
     ) -> list[ClipArtifact]:
         """Copy rendered clips to the local output directory."""
         output_dir = self._get_local_output_dir(job_id)
@@ -1107,6 +1152,8 @@ class AIClippingPipeline:
                 subtitle_url=subtitle_url,
                 editorial=editorial_summary(segment.editorial),
             ))
+
+            if progress: progress(i + 1, len(rendered_clips))
 
         return artifacts
 
@@ -1164,8 +1211,23 @@ class AIClippingPipeline:
         total_clips: int = 0,
         error: Optional[str] = None,
         output: Optional[dict] = None,
+        stage_id=None, stage_percent=None, completed=None, total=None, unit=None,
     ) -> None:
         """Update job progress via callback and webhook."""
+        tracker = getattr(self, '_stage_progress', None)
+        stages = tracker.update(status.value, stage_id, stage_percent, completed, total, unit) if tracker else None
+        # Scans may decode hundreds of frames in a second. Keep the bridge
+        # responsive and below its message-rate limit, while retaining state.
+        key = (job_id, status.value, stage_id)
+        now = time.monotonic()
+        terminal = status.value in ('completed', 'failed', 'cancelled')
+        if not terminal and key == getattr(self, '_last_progress_key', None) and now - getattr(self, '_last_progress_at', 0) < .15:
+            return
+        self._last_progress_key, self._last_progress_at = key, now
+        if getattr(self, '_overall_job', None) != job_id:
+            self._overall_job, self._overall_progress = job_id, 0
+        self._overall_progress = max(self._overall_progress, min(100, progress))
+        progress = self._overall_progress
         if self.progress_callback:
             try:
                 self.progress_callback(ClippingJobProgress(
@@ -1175,7 +1237,7 @@ class AIClippingPipeline:
                     current_step=step,
                     clips_completed=clips_completed,
                     total_clips=total_clips,
-                    error=error,
+                    error=error, stages=stages,
                 ))
             except Exception as e:
                 logger.warning(f"Progress callback failed: {e}")

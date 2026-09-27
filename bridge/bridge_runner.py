@@ -163,6 +163,7 @@ def progress_callback(progress) -> None:
         "step": progress.current_step,
         "clips_done": progress.clips_completed,
         "clips_total": progress.total_clips,
+        "stages": getattr(progress, "stages", None),
     })
 
 

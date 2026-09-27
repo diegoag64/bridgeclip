@@ -1,3 +1,4 @@
+import { parseStages } from '../shared/job-progress'
 import { join } from 'path'
 import { cancelJob as cancelRunningJob, startClipJob, type ClipJobConfig, type JobEventSink } from './pipeline-runner'
 import { finishRunRecord } from './run-history'
@@ -42,7 +43,13 @@ function update(jobId: string, patch: Partial<Omit<JobSnapshot, 'id' | 'revision
 }
 
 function finish(jobId: string, status: Extract<JobStatus, 'completed' | 'failed' | 'cancelled'>, patch: Partial<JobSnapshot> = {}): void {
-  update(jobId, { ...patch, status, finishedAt: new Date().toISOString() })
+  const previous = jobs.get(jobId)?.snapshot
+  const now = Date.now()
+  const stages = previous?.stages?.map(stage => stage.state !== 'running' ? stage : {
+    ...stage, state: status, percent: status === 'completed' ? 100 : stage.percent,
+    elapsed_ms: stage.elapsed_ms + Math.max(0, now - (previous.progressAt ?? now))
+  })
+  update(jobId, { ...patch, ...(stages ? { stages, progressAt: now } : {}), status, finishedAt: new Date(now).toISOString() })
   pruneFinished()
 }
 
@@ -115,8 +122,10 @@ function onRunnerEvent(jobId: string, channel: string, payload: unknown): void {
 
   if (channel === 'job:progress') {
     const status = typeof data.status === 'string' && isActiveJobStatus(data.status) && data.status !== 'queued' ? data.status : job.snapshot.status
+    const stages = parseStages(data.stages)
     update(jobId, {
       status,
+      ...(stages ? { stages, progressAt: Date.now() } : {}),
       percent: Math.max(0, Math.min(100, number(data.percent, job.snapshot.percent))),
       step: typeof data.step === 'string' ? data.step : job.snapshot.step,
       clipsDone: number(data.clips_done, job.snapshot.clipsDone),

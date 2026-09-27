@@ -107,7 +107,10 @@ def test_one_failed_clip_does_not_fail_the_job(monkeypatch, tmp_path, debug_capt
                             layout_type="fit", render_fallback="letterbox", framing_trace_path=trace_path)
 
     preview_calls = []
-    async def preview(source, target):
+    async def preview(source, target, *, progress, duration_ms):
+        assert duration_ms == 300000
+        progress(0)
+        progress(100)
         assert os.path.isfile(source)  # captured before work-directory cleanup
         preview_calls.append(target)
         with open(target, "wb") as f:

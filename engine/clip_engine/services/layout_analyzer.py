@@ -21,6 +21,7 @@ heuristic classification is used.
 """
 
 import asyncio
+from bisect import bisect_left
 import base64
 import json
 import hashlib
@@ -235,6 +236,7 @@ class ClipLayoutPlan:
     # frames without any. Captions use them to stay off faces.
     face_samples: list[tuple[int, list[Box]]] = field(default_factory=list)
     trace: Optional[dict] = None
+    camera_scan: Optional[dict] = None
 
     @property
     def dominant_layout(self) -> str:
@@ -844,7 +846,7 @@ def smooth_focus_path(
     # Resample onto a regular grid, holding the nearest detection.
     grid: list[tuple[int, float, float]] = []
     j = 0
-    for t in range(0, max(duration_ms, 1), step_ms):
+    for t in range(0, max(math.ceil(duration_ms), 1), step_ms):
         while j + 1 < len(samples) and abs(samples[j + 1][0] - t) <= abs(samples[j][0] - t):
             j += 1
         grid.append((t, samples[j][1].cx, samples[j][1].cy))
@@ -1062,6 +1064,7 @@ class LayoutAnalyzer:
         style: str = LayoutStyle.AUTO,
         vision: bool = True,
         capture: bool = False,
+        progress=None,
     ) -> Optional[ClipLayoutPlan]:
         """Plan the framing for the render window [start_ms, start_ms + duration_ms).
 
@@ -1085,8 +1088,18 @@ class LayoutAnalyzer:
             logger.warning("Layout analysis decoded no frames; using letterbox")
             return None
 
+        # Keep the cheap regular analysis, then examine likely transitions at
+        # source-frame precision. Failures retain the established heuristic plan.
+        scan = None
+        try:
+            scan, frames, keyframes = await loop.run_in_executor(
+                None, self._precise_frames, video_path, start_ms, duration_ms, src_w, src_h, frames, keyframes, progress)
+        except (OSError, ValueError, MediaProcessError):
+            logger.warning("Detailed camera analysis unavailable; retaining sampled layout evidence")
+
         shots: list[ShotLayout] = []
         vision_cost = 0.0
+        vision_decisions = 0
         trace = {"samples": [], "boundaries": [], "decisions": []} if capture else None
         color_segments = segment_shots(frames, duration_ms)
         inset_cuts = content_boundaries(frames)
@@ -1112,6 +1125,14 @@ class LayoutAnalyzer:
                                                 "distance": distance})
             trace["boundaries"].extend({"t_ms": t, "kind": "content", "accepted": True} for t in inset_cuts)
 
+        if scan:
+            from .layout_precision import confirmed_cuts, align_boundaries
+            markers = [{**m, 'at_ms': m['at_ms'] - start_ms} for m in scan['markers']]
+            exact = confirmed_cuts(markers, frames, duration_ms, frame_layout_evidence)
+            cuts = sorted(set(align_boundaries(cuts, markers, duration_ms) + exact))
+            color_segments = list(zip(cuts, cuts[1:]))
+            if trace is not None:
+                trace['boundaries'].extend({'t_ms': t, 'kind': 'precise_scene', 'accepted': True} for t in cuts[1:-1])
         segments = []
         for start, end in color_segments:
             local_frames = [f for f in frames if start <= f.t_ms < end]
@@ -1121,8 +1142,14 @@ class LayoutAnalyzer:
             segments.extend([(start, end)] if inset else split_layout_segments(
                 local_frames, start, end, trace["boundaries"] if trace is not None else None))
 
+        if scan:
+            boundaries = align_boundaries([a for a, _ in segments], markers, duration_ms)
+            segments = list(zip(boundaries, boundaries[1:]))
         for shot_start, shot_end in segments:
-            shot_frames = [f for f in frames if shot_start <= f.t_ms < shot_end]
+            shot_frames = []
+            for frame in frames:
+                if shot_start <= frame.t_ms < shot_end and (not shot_frames or frame.t_ms - shot_frames[-1].t_ms >= 200):
+                    shot_frames.append(frame)
             decision = {"start_ms": shot_start, "end_ms": shot_end, "tracks": [],
                         "vision": {"status": "disabled" if not vision or not self._vision_enabled() else "unavailable"}} if capture else None
             shot = heuristic_layout(shot_frames, shot_start, shot_end, src_w, src_h, decision)
@@ -1136,17 +1163,19 @@ class LayoutAnalyzer:
                 keyframe = self._pick_keyframe(keyframes, reference_ms, shot_start, shot_end)
                 if decision is not None:
                     decision["vision"] = {"status": "no_image"}
-                if keyframe is not None:
+                if keyframe is not None and shot_frames:
                     reference_ms, image = keyframe
+                    cache_only = vision_decisions >= 12
+                    vision_decisions += 1
                     # Face hints and the cache signature must describe the
                     # image being sent, not faces pooled from other moments.
                     reference_frame = min(shot_frames, key=lambda f: abs(f.t_ms - reference_ms))
                     if decision is not None:
                         decision["vision"] = {"status": "failed", "t_ms": reference_ms,
                                               "source_ms": start_ms + reference_ms}
-                        result, cost = await self._vision_classify(image, [reference_frame], shot, decision["vision"])
+                        result, cost = await self._vision_classify(image, [reference_frame], shot, decision["vision"], **({"cache_only": True} if cache_only else {}))
                     else:
-                        result, cost = await self._vision_classify(image, [reference_frame], shot)
+                        result, cost = await self._vision_classify(image, [reference_frame], shot, **({"cache_only": True} if cache_only else {}))
                     vision_cost += cost
                     if result:
                         refined = merge_vision_result(shot, result, src_w, src_h)
@@ -1175,7 +1204,7 @@ class LayoutAnalyzer:
         plan = ClipLayoutPlan(
             shots=shots, source_width=src_w, source_height=src_h, vision_cost_usd=vision_cost,
             face_samples=[(f.t_ms, f.faces) for f in frames],
-            trace=trace,
+            trace=trace, camera_scan=scan,
         )
         logger.info(
             "Layout plan: " + ", ".join(
@@ -1305,6 +1334,7 @@ class LayoutAnalyzer:
             "-ss", f"{start_ms / 1000:.3f}",
             "-protocol_whitelist", "file,pipe,fd", "-format_whitelist", "mov,matroska,webm,avi,flv,mpegts", "-i", video_path,
             "-t", f"{duration_ms / 1000:.3f}",
+            "-map", "0:v:0", "-an", "-sn", "-dn",
             "-vf", f"fps={ANALYSIS_FPS},scale={width}:{height}",
             "-f", "rawvideo", "-pix_fmt", "bgr24", "-",
         ]
@@ -1329,22 +1359,7 @@ class LayoutAnalyzer:
                 image = np.frombuffer(raw, np.uint8).reshape(height, width, 3)
                 t_ms = int(index * 1000 / ANALYSIS_FPS)
 
-                _, faces = detector.detect(image)
-                boxes = []
-                scores = []
-                candidates = sorted(faces, key=lambda row: float(row[14]), reverse=True)[:MAX_FACES_PER_FRAME] if faces is not None else []
-                for row in candidates:
-                    if float(row[14]) < FACE_SCORE_THRESHOLD:
-                        continue
-                    x, y, w, h = (float(v) for v in row[:4])
-                    boxes.append(Box(x / width, y / height, w / width, h / height).clamp())
-                    scores.append(float(row[14]))
-
-                hsv = cv2.cvtColor(cv2.resize(image, (160, 90)), cv2.COLOR_BGR2HSV)
-                hist = cv2.calcHist([hsv], [0, 1], None, [24, 16], [0, 180, 0, 256])
-                cv2.normalize(hist, hist)
-                frames.append(FrameInfo(t_ms=t_ms, faces=boxes, hist=hist, scores=scores,
-                                        content_box=detect_content_box(image)))
+                frames.append(self._frame_info(image, t_ms, detector, width, height))
 
                 if index % keyframe_every == 0:
                     ok, jpg = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 80])
@@ -1358,6 +1373,91 @@ class LayoutAnalyzer:
         if proc.returncode:
             raise MediaProcessError("Layout decoding failed")
         return frames, keyframes
+
+    def _frame_info(self, image, t_ms, detector, width, height):
+        _, faces = detector.detect(image)
+        boxes = []
+        scores = []
+        candidates = sorted(faces, key=lambda row: float(row[14]), reverse=True)[:MAX_FACES_PER_FRAME] if faces is not None else []
+        for row in candidates:
+            if float(row[14]) < FACE_SCORE_THRESHOLD:
+                continue
+            x, y, w, h = (float(v) for v in row[:4])
+            boxes.append(Box(x / width, y / height, w / width, h / height).clamp())
+            scores.append(float(row[14]))
+
+        hsv = cv2.cvtColor(cv2.resize(image, (160, 90)), cv2.COLOR_BGR2HSV)
+        hist = cv2.calcHist([hsv], [0, 1], None, [24, 16], [0, 180, 0, 256])
+        cv2.normalize(hist, hist)
+        return FrameInfo(t_ms=t_ms, faces=boxes, hist=hist, scores=scores,
+                        content_box=detect_content_box(image))
+
+
+    def _precise_frames(self, video_path, start_ms, duration_ms, src_w, src_h, frames, keyframes, progress=None):
+        from .camera_scan import scan_camera_changes
+        from .layout_precision import detail_indices, select_expression
+        scan = scan_camera_changes(video_path, start_ms, start_ms + duration_ms,
+            progress=(lambda p: progress('Scanning camera changes', p)) if progress else None)
+        # Include low-score visual changes and changes in sampled face geometry.
+        hints = [m['at_ms'] for m in sorted(scan['markers'], key=lambda m: -m['score'])]
+        face_hints = []
+        for a, b in zip(frames, frames[1:]):
+            if frame_layout_evidence(a) != frame_layout_evidence(b) or (len(a.faces) == len(b.faces) == 1 and
+                (abs(a.faces[0].cx - b.faces[0].cx) > .15 or abs(a.faces[0].h - b.faces[0].h) > .08)):
+                face_hints.append(start_ms + (a.t_ms + b.t_ms) / 2)
+        indices = detail_indices(scan, list(dict.fromkeys(face_hints + hints)))
+        if not indices:
+            return scan, frames, keyframes
+        width, height = analysis_dimensions(src_w, src_h)
+        cmd = ['ffmpeg', '-nostdin', '-v', 'error', '-ss', f"{scan['start_ms']/1000:.6f}",
+               '-protocol_whitelist', 'file,pipe,fd', '-format_whitelist', 'mov,matroska,webm,avi,flv,mpegts', '-i', video_path,
+               '-t', f"{(scan['end_ms']-scan['start_ms'])/1000:.6f}",
+               '-map', '0:v:0', '-an', '-sn', '-dn',
+               '-vf', f"select='{select_expression(indices)}',scale={width}:{height}",
+               '-fps_mode', 'passthrough', '-f', 'rawvideo', '-pix_fmt', 'bgr24', '-']
+        detailed, images = [], []
+        image_bytes = 0
+        detector = self._get_detector(width, height)
+        size = width * height * 3
+        with media_process(cmd, timeout=30 * 60) as (proc, _):
+            for position, index in enumerate(indices):
+                if progress and position % 25 == 0:
+                    progress("Refining face tracking", round(100 * position / len(indices)))
+                raw = proc.stdout.read(size)
+                if len(raw) != size:
+                    raise MediaProcessError('Incomplete precise layout frame')
+                at = scan['frames'][index] - start_ms
+                if not 0 <= at < duration_ms:
+                    continue
+                image = np.frombuffer(raw, np.uint8).reshape(height, width, 3)
+                detailed.append(self._frame_info(image, at, detector, width, height))
+                # One image just after each suggested cut supports short-shot
+                # classification without borrowing an image from the previous shot.
+                if any(0 <= start_ms + at - m['at_ms'] < 1 for m in scan['markers']) and len(images) < MAX_RETAINED_KEYFRAMES:
+                    ok, jpg = cv2.imencode('.jpg', image, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                    if ok:
+                        encoded = jpg.tobytes()
+                        image_bytes += len(encoded)
+                        if image_bytes > MAX_KEYFRAME_BYTES:
+                            raise MediaProcessError('Layout keyframes exceed the size limit')
+                        images.append((at, encoded))
+            if proc.stdout.read(1):
+                raise MediaProcessError('Unexpected precise layout frame')
+        if proc.returncode:
+            raise MediaProcessError('Precise layout decoding failed')
+        # Replace nearby approximate samples, which can otherwise place the old
+        # camera on the new side of a real cut.
+        precise_times = [f.t_ms for f in detailed]
+        def near(times, t, distance):
+            i = bisect_left(times, t)
+            return any(abs(t-v) <= distance for v in times[max(0, i-1):i+1])
+        combined = [f for f in frames if not near(precise_times, f.t_ms, 125)] + detailed
+        image_times = sorted(t for t, _ in images)
+        combined_images = [k for k in keyframes if not near(image_times, k[0], 250)] + images
+        combined_images = sorted(combined_images)[:MAX_RETAINED_KEYFRAMES]
+        if sum(len(image) for _, image in combined_images) > MAX_KEYFRAME_BYTES:
+            raise MediaProcessError('Layout keyframes exceed the size limit')
+        return scan, sorted(combined, key=lambda f: f.t_ms), combined_images
 
     def _get_detector(self, width: int, height: int):
         detector = getattr(self._local, "detector", None)
@@ -1413,6 +1513,7 @@ class LayoutAnalyzer:
     async def _vision_classify(
         self, keyframe: bytes, shot_frames: list[FrameInfo], heuristic: ShotLayout,
         diagnostic: Optional[dict] = None,
+        cache_only: bool = False,
     ) -> tuple[Optional[dict], float]:
         """Ask the vision model about one keyframe; cached per visual setup."""
         signature = (heuristic.layout, tuple(sorted(
@@ -1428,6 +1529,10 @@ class LayoutAnalyzer:
                 if diagnostic is not None:
                     diagnostic.update({**provenance, "status": "success", "cache_hit": True})
                 return cached, 0.0
+
+        if cache_only:
+            if diagnostic is not None: diagnostic.update(status='budget_limited')
+            return None, 0.0
 
         faces = sorted(
             {tuple(round(v, 3) for v in b.to_list()) for f in shot_frames[:: max(1, len(shot_frames) // 4)] for b in framing_faces(f)}

@@ -54,13 +54,13 @@ def test_prepare_retains_rejected_candidates_and_does_not_render(tmp_path):
     source = tmp_path / 'original.mov'
     source.write_bytes(b'original source')
     out = tmp_path / 'run'; out.mkdir()
-    async def preview(src, dest): Path(dest).write_bytes(b'preview')
+    async def preview(src, dest, **kwargs): Path(dest).write_bytes(b'preview')
     renderer = SimpleNamespace(_get_video_dimensions=AsyncMock(return_value=(1920, 1080)),
         capture_framing_source=AsyncMock(side_effect=preview), render_clip=AsyncMock())
     request = SimpleNamespace(aspect_ratio='9:16', layout_style='fit', include_captions=True, caption_preset='pop', video_speed=1)
     segments = [ClipPlanSegment(0, 5000, .9, summary='First'), ClipPlanSegment(6000, 11000, .7, summary='Second')]
     project = asyncio.run(prepare_project(request, segments, transcript(), SimpleNamespace(video_path=str(source),
-        metadata=SimpleNamespace(title='Original', duration_seconds=12)), renderer, gate, str(out), lambda _: None))
+        metadata=SimpleNamespace(title='Original', duration_seconds=12)), renderer, gate, str(out), lambda *_: None))
     assert len(project['candidates']) == 2
     assert all(c['status'] == 'refining' and c['caption_edits'] == [] for c in project['candidates'])
     assert all(c['review']['decision'] == 'needs_attention' for c in project['candidates'])
@@ -370,7 +370,7 @@ def test_pipeline_review_stops_before_automatic_repairs_and_render(monkeypatch, 
     pipeline.transcription_service.transcribe = AsyncMock(return_value=TranscriptionResult(segments=transcript(), full_text='Original source'))
     pipeline.intelligence_planner.plan_clips = AsyncMock(return_value=ClipPlanResponse(segments=[ClipPlanSegment(0, 5000, .8, summary='First'), ClipPlanSegment(6000, 11000, .7, summary='Second')], total_clips=2))
     pipeline.rendering_service._get_video_dimensions = AsyncMock(return_value=(1920, 1080))
-    async def preview(src, dest): Path(dest).write_bytes(b'preview')
+    async def preview(src, dest, **kwargs): Path(dest).write_bytes(b'preview')
     pipeline.rendering_service.capture_framing_source = AsyncMock(side_effect=preview)
     pipeline.rendering_service.render_clip = AsyncMock(side_effect=AssertionError('Review must not render'))
     monkeypatch.setattr(module.CoherenceReviewer, 'prepare', AsyncMock(side_effect=AssertionError('Review must not repair')))

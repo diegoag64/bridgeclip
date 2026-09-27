@@ -16,11 +16,12 @@ import math
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
-from typing import Optional, Union
+from typing import Callable, Optional, Union
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -119,6 +120,7 @@ class RenderRequest:
     skip_ranges_ms: list[tuple[int, int]] = field(default_factory=list)
     chapters: list[tuple[int, str]] = field(default_factory=list)
     debug_capture: bool = False
+    progress_callback: Optional[Callable[[str, Optional[float]], None]] = None
     manual_plan: Optional[ClipLayoutPlan] = None
     # Exact source-time selections from the manual editor; no automatic pacing,
     # sliver removal or protected-interval restoration may change these cuts.
@@ -253,8 +255,7 @@ class RenderingService:
             if progress is None:
                 await self._run_cmd(cmd)
             else:
-                progress(0)
-                await asyncio.to_thread(self._capture_preview_progress, cmd, duration_ms, progress)
+                await self._run_cmd(cmd, progress=progress, duration_ms=duration_ms)
             os.chmod(temporary, 0o600)
             os.replace(temporary, output_path)
         finally:
@@ -262,13 +263,14 @@ class RenderingService:
                 os.remove(temporary)
 
     @staticmethod
-    def _capture_preview_progress(cmd, duration_ms, progress):
+    def _capture_preview_progress(cmd, duration_ms, progress, check=True):
         """Read FFmpeg's machine progress without exposing paths or stderr."""
         if not isinstance(duration_ms, (int, float)) or not math.isfinite(duration_ms) or duration_ms <= 0:
             raise ValueError('Invalid preview duration')
         reported = 0
+        progress(0)
         cmd = [cmd[0], '-progress', 'pipe:1', '-stats_period', '0.5', *cmd[1:]]
-        with media_process(cmd) as (process, _):
+        with media_process(cmd) as (process, stderr):
             while raw := process.stdout.readline(1025):
                 if len(raw) > 1024:
                     raise RenderingError('Invalid preview progress')
@@ -280,9 +282,12 @@ class RenderingService:
                     if percent > reported:
                         reported = percent
                         progress(percent)
-            if process.wait() != 0:
-                raise RenderingError('Preview preparation failed')
-        progress(100)
+        result = subprocess.CompletedProcess(cmd, process.returncode, b'', bytes(stderr))
+        if result.returncode:
+            if check: raise RenderingError('Video encoding failed')
+        else:
+            progress(100)
+        return result
 
     async def render_clip(self, request: RenderRequest) -> RenderResult:
         """
@@ -328,6 +333,8 @@ class RenderingService:
         else:
             window_start_ms, window_ms = request.start_time_ms, duration_ms
 
+        if request.progress_callback:
+            request.progress_callback('Analyzing framing and camera changes', None)
         plan: Optional[ClipLayoutPlan] = None
         if request.manual_plan is not None:
             plan = request.manual_plan
@@ -558,6 +565,7 @@ class RenderingService:
                 fps=fps,
                 output_size=(target_width, target_height),
                 output_duration_ms=scaled_duration_ms(time_map.output_ms, request.video_speed),
+                **({'progress': lambda percent: request.progress_callback('Rendering video', percent)} if request.progress_callback else {}),
             )
         finally:
             for path in extra_inputs:
@@ -584,6 +592,7 @@ class RenderingService:
             return await self.layout_analyzer.analyze(
                 request.video_path, window_start_ms, window_ms, source_w, source_h, request.layout_style,
                 **({"capture": True} if request.debug_capture else {}),
+                **({'progress': lambda detail, percent: request.progress_callback(f'{detail} {percent}%', None)} if request.progress_callback else {}),
             )
         except Exception as e:
             logger.warning(f"Layout analysis failed, falling back to letterbox: {e}", exc_info=True)
@@ -1049,6 +1058,7 @@ class RenderingService:
         fps: str = "30",
         output_size: tuple[int, int] = (1080, 1920),
         output_duration_ms: Optional[int] = None,
+        progress=None,
     ) -> None:
         """Run FFmpeg over the render window [start, start + duration) with a filter graph.
 
@@ -1096,7 +1106,10 @@ class RenderingService:
         cmd.append(output_path)
 
         try:
-            await self._run_cmd(cmd)
+            if progress:
+                await self._run_cmd(cmd, progress=progress, duration_ms=output_duration_ms or duration_ms)
+            else:
+                await self._run_cmd(cmd)
             await self._validate_output_timing(
                 output_path, output_duration_ms if output_duration_ms is not None else duration_ms,
                 fps, bool(audio_label),
@@ -1196,9 +1209,12 @@ class RenderingService:
         adjusted_duration_ms = duration_ms + start_adjustment + audio_padding_ms
         return adjusted_start_ms, adjusted_duration_ms
 
-    async def _run_cmd(self, cmd: list[str]) -> None:
+    async def _run_cmd(self, cmd: list[str], *, progress=None, duration_ms=None) -> None:
         """Run a command asynchronously."""
         logger.debug(f"Running: {' '.join(cmd[:10])}...")
+
+        def execute(command):
+            return self._capture_preview_progress(command, duration_ms, progress, check=False) if progress else run_media(command)
 
         def invoke():
             # Keep the script inside the worker: cancelling the await does not
@@ -1206,10 +1222,10 @@ class RenderingService:
             try:
                 graph_index = cmd.index("-filter_complex")
             except ValueError:
-                return run_media(cmd)
+                return execute(cmd)
             graph = cmd[graph_index + 1]
             if len(graph.encode("utf-8")) <= MAX_INLINE_FILTER_GRAPH_BYTES:
-                return run_media(cmd)
+                return execute(cmd)
 
             script_path = None
             try:
@@ -1223,7 +1239,7 @@ class RenderingService:
                     script.write(graph)
                 script_cmd = cmd.copy()
                 script_cmd[graph_index:graph_index + 2] = ["-/filter_complex", script_path]
-                result = run_media(script_cmd)
+                result = execute(script_cmd)
                 # FFmpeg 6 (Ubuntu 24.04) predates file-backed option values;
                 # FFmpeg 9 removed the older script option. Retry only when the
                 # first option itself is unknown, before any render can start.
@@ -1232,7 +1248,7 @@ class RenderingService:
                     if (b"Unrecognized option '/filter_complex'." in stderr and
                             b"Error splitting the argument list: Option not found" in stderr):
                         script_cmd[graph_index] = "-filter_complex_script"
-                        result = run_media(script_cmd)
+                        result = execute(script_cmd)
                 return result
             finally:
                 if script_path is not None:

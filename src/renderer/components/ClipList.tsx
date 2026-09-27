@@ -1,3 +1,4 @@
+import { SavedStageTimings } from './StageBreakdown'
 import { parseJobOutput } from '../../shared/job-output'
 import { editorProgress } from '../../shared/clip-editor'
 import { ClipEditor } from './ClipEditor'
@@ -368,6 +369,7 @@ function GeneratedClipList({ output, outputDir: runDirectory, leading, onNewClip
         <RunStats key={output.job_id} output={output} costs={costs} videoSpeed={typeof videoSpeed === 'number' && videoSpeed > 1 ? videoSpeed : null} />
       </div>
 
+      <SavedStageTimings stages={output.metrics?.pipeline_stages} />
       {framingNotice && (
         <Callout tone="warning" className="mt-3">
           <span className="text-ink-muted">{framingNotice}</span>

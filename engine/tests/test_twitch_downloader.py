@@ -215,3 +215,17 @@ def test_missing_metadata_is_an_unavailable_vod(service):
     with pytest.raises(module.VideoDownloadError) as error:
         service._validate_twitch_info(None, 21600)
     assert error.value.reason == 'twitch_unavailable'
+
+
+@pytest.mark.parametrize('event, expected', [
+    ({'downloaded_bytes': 25, 'total_bytes': 100}, ('Downloading video stream', 25, 25, 100)),
+    ({'downloaded_bytes': 10}, ('Downloading video stream', None, 10, None)),
+    ({'downloaded_bytes': 25, 'total_bytes_estimate': 100}, ('Downloading video stream (estimated size)', 25, 25, 100)),
+    ({'downloaded_bytes': 25, 'total_bytes': 50, 'info_dict': {'vcodec': 'none'}}, ('Downloading audio stream', 50, 25, 50)),
+])
+def test_download_hooks_report_real_bytes_and_unknown_totals(service, monkeypatch, tmp_path, event, expected):
+    fake_download(monkeypatch, service, tmp_path, progress=event)
+    updates = []
+    service.progress_callback = lambda *values: updates.append(values)
+    asyncio.run(service.download_video(URL, str(tmp_path)))
+    assert expected in updates
