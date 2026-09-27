@@ -1,5 +1,6 @@
 import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from 'react'
 import { Loader2 } from 'lucide-react'
+import { HoverCard } from './HoverCard'
 import { cn } from '../../lib/utils'
 
 type Variant = 'primary' | 'secondary' | 'ghost' | 'danger'
@@ -13,6 +14,8 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   loading?: boolean
   /** Round button with only an icon; pass `aria-label`. */
   iconOnly?: boolean
+  /** Short help shown on hover or focus, including for disabled controls. */
+  tooltip?: string
 }
 
 // Capsules throughout: liquid glass controls are pill-shaped.
@@ -44,6 +47,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
     trailingIcon,
     loading = false,
     iconOnly = false,
+    tooltip,
     className,
     children,
     disabled,
@@ -52,7 +56,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
   },
   ref
 ) {
-  return (
+  const button = (
     <button
       ref={ref}
       type={type}
@@ -66,10 +70,14 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
         className
       )}
       {...props}
+      // An empty title also blocks native tooltips inherited from ancestors.
+      title={tooltip ? '' : props.title}
     >
       {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : icon}
       {!iconOnly && children}
       {!loading && trailingIcon}
     </button>
   )
+  return tooltip ? <HoverCard interactive openDelay={350} className="inline-flex shrink-0" cardClassName="max-w-[260px] bg-surface"
+    content={<p className="px-3 py-2 text-xs leading-relaxed">{tooltip}</p>}>{button}</HoverCard> : button
 })

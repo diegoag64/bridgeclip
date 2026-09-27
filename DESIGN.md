@@ -117,6 +117,12 @@ Depth, back to front: `app-backdrop` → `glass` panel → `glass-tile` / `glass
 
 ---
 
+### Editor surfaces
+
+The editor uses scoped surface tokens in `components/clip-editor.css` to make its work areas distinct: near-black previews and timeline, neutral charcoal sidebars, and a dark transport strip. The timeline stays darker than the sidebars; avoid blue-gray or lighter slate fills. Hairline dividers reinforce these boundaries. Inputs and timeline lanes use recessed dark wells; blue remains the selection/action accent, with amber camera suggestions and lavender layout markers. Keep these colors scoped to the editor.
+
+Compact editor actions use `Button`’s `tooltip` prop for short explanations on hover or keyboard focus. Include shortcuts where useful. Tooltips reuse `HoverCard`, stay above clipped panels, and do not introduce extra keyboard stops around buttons. Custom-tooltip buttons and wrappers explicitly use an empty native `title` to prevent inherited browser tooltips.
+
 ## Components (`components/ui/`)
 
 | Component | Notes |
@@ -151,6 +157,7 @@ Brand: `components/brand/BridgeClipLogo` renders the lockup (`variant="lockup"`,
 - **Media cards** (clips, runs): `glass` card with the media inset concentrically, and only a title and one line of metadata under it. Overlays are `glass-chip`s (no gradient scrims over media). The media is the play button. On hover the card lifts 2px, a frosted play lens appears, and the card's actions (post, add to automation, show in Finder) show as small frosted buttons on the media; selected cards get `shadow-accent-ring`. A run opens with a stats bar (`RunStats`): clips, processing time, API cost and when it was created. Numbers count up once, with one quiet line under each. When a run beat OpusClip, processing and cost say so in green ("5× faster than OpusClip", "94% less than OpusClip") and hovering shows a small card with OpusClip's logo, that one number and its basis. OpusClip's numbers live in `config/opus-clip.ts` (update them with their `checked` date); no claim is shown when the run didn't win.
 - **Floating toolbars** (clip selection): `glass-thick` bar, sticky at `top-0 z-20`.
 - **Caption previews** mirror the clipping engine presets in `engine/clip_engine/config.py` (colours, outline, glow, casing, spacing, box and karaoke effects). If a preset changes in the engine, update `CaptionPresetPicker.tsx`.
+- **Library bookmarks**: use a dedicated Bookmarked group above Recent runs, reverting to All runs when empty. Keep cards in one keyed grid so moving between groups preserves thumbnail nodes and focus. Bookmark updates are optimistic and local; failed saves restore the prior state. Animate positions with `useLibraryMotion` instead of fading the grid. Respect reduced motion and keep unbookmarked runs in their original chronological order.
 - **Autosave**: Settings has no Save button. Keys save 600ms after typing stops and on blur, and paths save on blur or Enter. A "Saved" pill confirms it in the header.
 - **Long work**: clipping runs in the main process's job queue (`src/main/job-manager.ts`): up to `MAX_PARALLEL_JOBS` (2) run at once and the rest wait in FIFO order. The Jobs page shows Active jobs (a small progress ring or queue position, stage, elapsed time, cancel) above Previous jobs (run history on disk, one line each: status dot, title, clips, run time, cost, date; the row opens the run, and the folder button shows on hover). Opening a running job shows a compact Studio Timeline: every workflow stage has a progress bar, the active stage shows its current work, and a proportional time strip shows where processing time went. Unmeasured work stays indeterminate; older workers show an explicit measurement-unavailable state. Completed jobs open their clips; failures offer Run again. The sidebar shows a live count on Jobs and a card with the running jobs' progress.
 - **Thumbnails** go through `lib/thumbnails.ts`, a one-at-a-time queue, because each one is a synchronous ffmpeg call in the main process.

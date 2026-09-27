@@ -6,7 +6,7 @@ import { Archive, Check, ChevronLeft, ChevronRight, ChevronDown, Download, Film,
 import { getApi } from '../lib/ipc'
 import { cn, errorMessage, formatTimecode, localFileUrl, parseTimecode } from '../lib/utils'
 import { cameraMarkers, snapFrame, stepFrame, candidateEdit, canAnimateScene, defaultCrop, editDuration, editSignature, editorProgress, framingAt, normalizeSceneTransitions, refineEdit, resizeCrop, retimeScene, sceneAt, trimRange, type CandidateEdit, type Crop, type CropCorner, type EditorCandidate, type EditorQuestion, type EditorRange, type EditorScene, type EditorSession } from '../../shared/clip-editor'
-import { CameraChanges } from './CameraChanges'
+import { CameraChanges, CameraScanButton } from './CameraChanges'
 import { ActionMenu } from './ui/ActionMenu'
 import { Button } from './ui/Button'
 import { ConfirmDialog } from './ui/ConfirmDialog'
@@ -14,6 +14,7 @@ import { CaptionPresetPicker } from './CaptionPresetPicker'
 import { EditorCaptionPreview } from './EditorCaptionPreview'
 import { captionAnchor } from '../lib/caption-preview'
 import { Switch } from './ui/Switch'
+import { Select } from './ui/Select'
 import { EditInspector } from './EditInspector'
 
 const labels: Record<string, string> = { not_sponsored: 'Not sponsored', opening_context: 'Opening context', self_contained: 'Self contained', complete_ending: 'Complete ending', logical_flow: 'Logical flow', faithful_to_source: 'Faithful to source', title_supported: 'Title supported', evidence: 'Enough evidence', removal_safe: 'Safe to remove', join_logical: 'Natural join' }
@@ -58,9 +59,10 @@ export function ClipEditor({ outputDir, leading, onExports }: { outputDir: strin
   const [showSubtitlePreview, setShowSubtitlePreview] = useState(true)
   const [cameraThreshold, setCameraThreshold] = useState(.08)
   const [selectedCamera, setSelectedCamera] = useState<number | null>(null)
-  const [zoomWindow, setZoomWindow] = useState<[number, number] | null>(null)
+  const deselectCamera = useCallback(() => setSelectedCamera(null), [])
+  const [timelineZoom, setTimelineZoom] = useState<'clip' | 'source' | [number, number]>('clip')
+  const zoomWindow = Array.isArray(timelineZoom) ? timelineZoom : null
   const presentedTime = useRef<number | null>(null)
-  const [fullTimeline, setFullTimeline] = useState(false)
   const [cropDragging, setCropDragging] = useState(false)
   const dragging = useRef(false)
   const editorRoot = useRef<HTMLElement>(null)
@@ -201,7 +203,7 @@ export function ClipEditor({ outputDir, leading, onExports }: { outputDir: strin
       if (timelineArrow) e.preventDefault()
       if ((e.code !== 'Space' && !speedKey && !timelineArrow) || e.metaKey || e.ctrlKey || e.altKey || e.isComposing || showAudit || replacement || busy) return
       if ((!editorRoot.current?.contains(target) && target !== document.body) ||
-          target.closest('[role="menu"],[aria-haspopup="menu"],input:not([type="range"]),textarea,select,[contenteditable]:not([contenteditable="false"])')) return
+          target.closest('[role="dialog"],[role="combobox"],[role="listbox"],[role="menu"],[aria-haspopup="menu"],[aria-haspopup="dialog"],input:not([type="range"]),textarea,select,[contenteditable]:not([contenteditable="false"])')) return
       // Own Space before focused buttons/markers can activate or seek on it.
       // A held key must not repeatedly pause and restart playback.
       e.preventDefault(); e.stopPropagation()
@@ -213,7 +215,7 @@ export function ClipEditor({ outputDir, leading, onExports }: { outputDir: strin
       }
     }
     const handler = (e: KeyboardEvent): void => {
-      if ((e.target as HTMLElement).closest('[role="menu"],[aria-haspopup="menu"],input,textarea,select,[contenteditable]') || showAudit || replacement || dragging.current) return
+      if ((e.target as HTMLElement).closest('[role="dialog"],[role="combobox"],[role="listbox"],[role="menu"],[aria-haspopup="menu"],input,textarea,select,[contenteditable]') || showAudit || replacement || dragging.current) return
       if ((e.metaKey || e.ctrlKey) && e.key === 'z') { e.preventDefault(); history(e.shiftKey ? 'redo' : 'undo'); return }
       if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); void save(); return }
       if (e.metaKey || e.ctrlKey || e.altKey || busy) return
@@ -230,7 +232,7 @@ export function ClipEditor({ outputDir, leading, onExports }: { outputDir: strin
     }
   })
   useEffect(() => {
-    if (candidate && video.current) { video.current.pause(); seek(candidate.ranges[0][0]); setPanel(0); setEditingCaption(null); setSelectedCamera(null); setZoomWindow(null) }
+    if (candidate && video.current) { video.current.pause(); seek(candidate.ranges[0][0]); setPanel(0); setEditingCaption(null); setSelectedCamera(null); setTimelineZoom((zoom) => zoom === 'source' ? 'source' : 'clip') }
   // Only candidate selection resets the playhead, never an edit.
   }, [selected, session?.previewPath])
   useEffect(() => { if (video.current && candidate) video.current.playbackRate = candidate.video_speed * reviewSpeed }, [candidate?.video_speed, reviewSpeed])
@@ -378,7 +380,7 @@ export function ClipEditor({ outputDir, leading, onExports }: { outputDir: strin
   }
   const current = reviewCurrent(candidate)
   const start = candidate.ranges[0][0], end = candidate.ranges[candidate.ranges.length - 1][1]
-  const [viewStart, viewEnd] = dragWindow ?? zoomWindow ?? (fullTimeline ? [0, project.duration_ms] : [Math.max(0, start - 10000), Math.min(project.duration_ms, end + 10000)])
+  const [viewStart, viewEnd] = dragWindow ?? zoomWindow ?? (timelineZoom === 'source' ? [0, project.duration_ms] : [Math.max(0, start - 10000), Math.min(project.duration_ms, end + 10000)])
   const sceneIndex = candidate.scenes.indexOf(currentScene)
   const canAnimate = canAnimateScene(candidate.scenes, sceneIndex)
   const crop = currentScene.crops[Math.min(panel, currentScene.crops.length - 1)]
@@ -403,7 +405,7 @@ export function ClipEditor({ outputDir, leading, onExports }: { outputDir: strin
     const scenes = retimeScene(candidate.scenes, index, at, project.duration_ms, frames)
     if (scenes === candidate.scenes) return
     video.current?.pause(); change({ scenes }); seek(scenes[index].at_ms); setTab('framing')
-    if (scenes[index].at_ms < viewStart || scenes[index].at_ms > viewEnd) setFullTimeline(true)
+    if (scenes[index].at_ms < viewStart || scenes[index].at_ms > viewEnd) setTimelineZoom('source')
   }
   const startSceneDrag = (e: React.PointerEvent<HTMLButtonElement>, index: number): void => {
     if (editingDisabled || e.button !== 0) return
@@ -475,7 +477,7 @@ export function ClipEditor({ outputDir, leading, onExports }: { outputDir: strin
       </div>
     </div>
     {error && <div role="alert" className="editor-notice text-danger">{error}<Button size="sm" variant="ghost" onClick={() => { setError(null); void save().catch((e) => setError(errorMessage(e))) }}>Retry save</Button></div>}
-    {notice && !busy && <div role="status" className="editor-notice"><Check size={14} />{notice}<Button size="sm" variant="ghost" aria-label="Dismiss bake notice" iconOnly icon={<X size={14} />} onClick={() => setNotice(null)} /></div>}
+    {notice && !busy && <div role="status" className="editor-notice"><Check size={14} />{notice}<Button size="sm" variant="ghost" tooltip="Hide this completion message." aria-label="Dismiss bake notice" iconOnly icon={<X size={14} />} onClick={() => setNotice(null)} /></div>}
     {replacement && <ConfirmDialog onClose={closeReplacement} request={{
       title: 'Replace source video?', confirmLabel: 'Replace source', tone: 'primary',
       body: <>Use <strong>{replacement.split(/[\\/]/).pop()}</strong> for every clip in this project?<br /><br />Only recommended for the exact same video at higher quality: identical content, timing, audio and framing. Matching duration alone does not guarantee a match.<br /><br />Your cuts, layouts and caption edits will be kept. Previously baked clips will be ready to bake again. Existing exports will stay in the library.</>,
@@ -543,21 +545,23 @@ export function ClipEditor({ outputDir, leading, onExports }: { outputDir: strin
           </div>
         </div>
         <div className="editor-transport">
-          <Button size="sm" variant="ghost" iconOnly icon={<ChevronLeft size={14} />} aria-label="Previous frame" title="Previous frame (←). Exact in scanned footage; approximate outside it." disabled={!!busy || time <= .01} onClick={() => frameStep(-1)} />
-          <Button size="sm" variant="ghost" iconOnly icon={<ChevronRight size={14} />} aria-label="Next frame" title="Next frame (→). Exact in scanned footage; approximate outside it." disabled={!!busy || time >= project.duration_ms - 1 - .01} onClick={() => frameStep(1)} /><Button title="Back to start" aria-label="Back to start" iconOnly variant="ghost" icon={<SkipBack size={15} />} onClick={() => seek(start)} /><Button title="Play / pause (Space)" aria-label="Play / pause" iconOnly icon={playing ? <Pause size={16} /> : <Play size={16} />} onClick={toggle} /><span className="font-mono text-xs">{clock(time)}</span><span className="text-ink-subtle text-2xs">/ {(editDuration(candidate) / 1000).toFixed(1)}s selected</span><label className="editor-review-speed" title="Preview only. Press 1/2/3 for speed; arrow keys step 1/2/3 source frames (1.5× rounds to two). Shift+arrows jump one second. Multiplies the clip’s export speed without changing the export.">Review speed<select aria-label="Review speed" value={reviewSpeed} onChange={(e) => {
+          <Button size="sm" variant="ghost" iconOnly icon={<ChevronLeft size={14} />} aria-label="Previous frame" tooltip="Move back one source frame. Exact after scanning; approximate outside scanned footage." disabled={!!busy || time <= .01} onClick={() => frameStep(-1)} />
+          <Button size="sm" variant="ghost" iconOnly icon={<ChevronRight size={14} />} aria-label="Next frame" tooltip="Move forward one source frame. Exact after scanning; approximate outside scanned footage." disabled={!!busy || time >= project.duration_ms - 1 - .01} onClick={() => frameStep(1)} /><Button tooltip="Move the playhead to the beginning of this clip." aria-label="Back to start" iconOnly variant="ghost" icon={<SkipBack size={15} />} onClick={() => seek(start)} /><Button tooltip="Play or pause the preview. Shortcut: Space." aria-label="Play / pause" iconOnly icon={playing ? <Pause size={16} /> : <Play size={16} />} onClick={toggle} /><span className="font-mono text-xs">{clock(time)}</span><span className="text-ink-subtle text-2xs">/ {(editDuration(candidate) / 1000).toFixed(1)}s selected</span><label className="editor-review-speed" title="Preview only. Press 1/2/3 for speed; arrow keys step 1/2/3 source frames (1.5× rounds to two). Shift+arrows jump one second. Multiplies the clip’s export speed without changing the export.">Review speed<select aria-label="Review speed" value={reviewSpeed} onChange={(e) => {
             setReviewSpeed(Number(e.target.value))
             // Return Space to playback after choosing a speed.
             e.currentTarget.blur()
           }}>{[1, 1.5, 2, 3].map((speed) => <option key={speed} value={speed}>{speed}×</option>)}</select></label><label className="ml-auto flex gap-2 items-center text-2xs text-ink-muted"><input type="checkbox" checked={previewCut} onChange={(e) => setPreviewCut(e.target.checked)} />Play cuts only</label></div>
         <div className="editor-timeline">
           <div className="editor-timeline-tools">
-            <Button size="sm" variant="ghost" onClick={() => setZoomWindow(zoomWindow ? null : [Math.max(0, time - 1000), Math.min(project.duration_ms, time + 1000)])}>{zoomWindow ? 'Show clip timeline' : 'Zoom to playhead'}</Button><Button variant="ghost" size="sm" title="Undo (⌘Z)" aria-label="Undo" iconOnly icon={<Undo2 size={14} />} disabled={!undo.length || !!busy} onClick={() => history('undo')} /><Button variant="ghost" size="sm" title="Redo (⌘⇧Z)" aria-label="Redo" iconOnly icon={<Redo2 size={14} />} disabled={!redo.length || !!busy} onClick={() => history('redo')} /><Button variant="ghost" size="sm" icon={<Scissors size={14} />} onClick={split} disabled={editingDisabled || candidate.ranges.length >= 24}>Split</Button><Button variant="ghost" size="sm" disabled={editingDisabled || (time >= start && time <= end)} title="Extend the first or last cut to the playhead. Turn off Play cuts only to watch beyond the current cut." onClick={() => { const t = (video.current?.currentTime ?? time / 1000) * 1000; if (t < start) trim('in', t); else if (t > end) trim('out', t) }}>Extend to playhead</Button><Button variant="ghost" size="sm" aria-pressed={fullTimeline} title={fullTimeline ? 'Zoom to the selected clip' : 'Show the full source to extend a cut farther'} onClick={() => { setZoomWindow(null); setFullTimeline((v) => !v) }}>{fullTimeline ? 'Zoom to clip' : 'Full source'}</Button><span className="ml-auto text-2xs text-ink-subtle">{clock(viewStart)} — {clock(viewEnd)}</span></div>
+            <CameraScanButton key={candidate.id} candidate={candidate} threshold={cameraThreshold} setThreshold={setCameraThreshold}
+              restore={() => change({ dismissed_camera_markers: [] })} disabled={editingDisabled} onOpen={() => video.current?.pause()} scan={() => { void run('scan-cameras') }} />
+            <Button variant="ghost" size="sm" tooltip="Undo the last editor change (⌘/Ctrl+Z)." aria-label="Undo" iconOnly icon={<Undo2 size={14} />} disabled={!undo.length || !!busy} onClick={() => history('undo')} /><Button variant="ghost" size="sm" tooltip="Redo the change you just undid (⌘/Ctrl+Shift+Z)." aria-label="Redo" iconOnly icon={<Redo2 size={14} />} disabled={!redo.length || !!busy} onClick={() => history('redo')} /><Button variant="ghost" size="sm" icon={<Scissors size={14} />} tooltip="Split the cut at the playhead into two editable sections. No footage is removed. Shortcut: S." onClick={split} disabled={editingDisabled || candidate.ranges.length >= 24}>Split</Button><Button variant="ghost" size="sm" disabled={editingDisabled || (time >= start && time <= end)} tooltip="Extend the clip’s beginning or ending to the playhead. Turn off Play cuts only to move beyond the current cut." onClick={() => { const t = (video.current?.currentTime ?? time / 1000) * 1000; if (t < start) trim('in', t); else if (t > end) trim('out', t) }}>Extend to playhead</Button><span className="ml-auto text-2xs text-ink-subtle">{clock(viewStart)} — {clock(viewEnd)}</span></div>
           <input aria-label="Source timeline" className="editor-source-scrub" type="range" min={0} max={project.duration_ms} step="any" value={time} onChange={(e) => seek(snapFrame(frames, Number(e.target.value)))} />
-          <CameraChanges candidate={candidate} threshold={cameraThreshold} setThreshold={setCameraThreshold} selected={selectedCamera}
-            select={(t) => { video.current?.pause(); setSelectedCamera(t); seek(t); setTab('framing'); if (zoomWindow) setZoomWindow([Math.max(0, t - 1000), Math.min(project.duration_ms, t + 1000)]) }}
-            scan={() => { void run('scan-cameras') }} insert={newLayout} align={moveScene}
-            dismiss={(t) => { change({ dismissed_camera_markers: [...(candidate.dismissed_camera_markers ?? []), t] }); setSelectedCamera(null) }}
-            restore={() => change({ dismissed_camera_markers: [] })} disabled={editingDisabled} viewStart={viewStart} viewEnd={viewEnd} clock={clock} />
+          <CameraChanges candidate={candidate} threshold={cameraThreshold} selected={selectedCamera} deselect={deselectCamera}
+            select={(t) => { video.current?.pause(); setSelectedCamera(t); seek(t); setTab('framing'); if (zoomWindow) setTimelineZoom([Math.max(0, t - 1000), Math.min(project.duration_ms, t + 1000)]) }}
+            insert={newLayout} align={moveScene}
+            remove={(t) => { change({ dismissed_camera_markers: [...(candidate.dismissed_camera_markers ?? []), t] }); setSelectedCamera(null) }}
+            disabled={editingDisabled} viewStart={viewStart} viewEnd={viewEnd} clock={clock} />
           <div className="editor-overview" aria-label="All candidate moments">{edits.map((c, i) => <button key={c.id} title={c.title} aria-label={`Jump to candidate ${i + 1}: ${c.title}`} className={cn(i === selected && 'selected')} style={{ left: `${c.ranges[0][0] / project.duration_ms * 100}%`, width: `${(c.ranges.at(-1)![1] - c.ranges[0][0]) / project.duration_ms * 100}%`, top: (i % 3) * 4 }} onClick={() => { setSelected(i); seek(c.ranges[0][0]) }} />)}</div>
           <div className="editor-track" onPointerDown={(e) => { if (e.target === e.currentTarget) seek(viewStart + (e.clientX - e.currentTarget.getBoundingClientRect().left) / e.currentTarget.clientWidth * (viewEnd - viewStart)) }}>
             {candidate.ranges.map(([a, b], i) => <div key={i} className="editor-timeline-piece" style={{ left: `${(a - viewStart) / (viewEnd - viewStart) * 100}%`, width: `${(b - a) / (viewEnd - viewStart) * 100}%` }}><button className="editor-trim-handle" aria-label={`Trim start of cut ${i + 1}`} disabled={editingDisabled} title="Drag to trim or extend; arrow keys adjust by 0.1s (Shift: 1s)" onKeyDown={(e) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); e.stopPropagation(); change({ ranges: trimRange(candidate.ranges, i, 0, a + (e.key === 'ArrowLeft' ? -1 : 1) * (e.shiftKey ? 1000 : 100), project.duration_ms) }) } }} onPointerDown={(e) => { video.current?.pause(); dragging.current = true; setDragWindow([viewStart, viewEnd]); trimDrag(e, i, 0, viewStart, viewEnd, project.duration_ms, candidate, edits, selected, setEdits, setUndo, setRedo, () => { dragging.current = false; setDragWindow(null) }) }} /><button className="editor-piece-body" aria-label={`Seek within cut ${i + 1}`} onClick={(e) => {
@@ -587,7 +591,17 @@ export function ClipEditor({ outputDir, leading, onExports }: { outputDir: strin
               onClick={() => { seek(a); setTab('captions') }} />)}
           </div>}
           <input aria-label="Fine timeline position" type="range" min={viewStart} max={viewEnd} step="any" value={Math.max(viewStart, Math.min(viewEnd, time))} onChange={(e) => seek(snapFrame(frames, Number(e.target.value)))} className="editor-fine-scrub" />
-          <div className="editor-cut-list">{candidate.ranges.map(([a, b], i) => <div key={i} className="flex items-center gap-2"><span className="text-2xs text-ink-subtle">{i + 1}</span><TimeInput label={`Cut ${i + 1} start`} value={a} disabled={editingDisabled} onChange={(t) => { const ranges = candidate.ranges.map((r) => [...r] as [number, number]); ranges[i][0] = Math.max(i ? ranges[i - 1][1] : 0, Math.min(b - 100, t)); change({ ranges }) }} /><span className="text-ink-subtle">–</span><TimeInput label={`Cut ${i + 1} end`} value={b} disabled={editingDisabled} onChange={(t) => { const ranges = candidate.ranges.map((r) => [...r] as [number, number]); ranges[i][1] = Math.min(i + 1 < ranges.length ? ranges[i + 1][0] : project.duration_ms, Math.max(a + 100, t)); change({ ranges }) }} /><Button variant="ghost" size="sm" aria-label={`Remove cut ${i + 1}`} title="Remove this section" iconOnly icon={<X size={12} />} disabled={candidate.ranges.length === 1 || editingDisabled} onClick={() => change({ ranges: candidate.ranges.filter((_, j) => j !== i) })} /></div>)}</div>
+          <div className="editor-timeline-footer">
+            <div className="editor-cut-list">{candidate.ranges.map(([a, b], i) => <div key={i} className="flex items-center gap-2"><span className="text-2xs text-ink-subtle">{i + 1}</span><TimeInput label={`Cut ${i + 1} start`} value={a} disabled={editingDisabled} onChange={(t) => { const ranges = candidate.ranges.map((r) => [...r] as [number, number]); ranges[i][0] = Math.max(i ? ranges[i - 1][1] : 0, Math.min(b - 100, t)); change({ ranges }) }} /><span className="text-ink-subtle">–</span><TimeInput label={`Cut ${i + 1} end`} value={b} disabled={editingDisabled} onChange={(t) => { const ranges = candidate.ranges.map((r) => [...r] as [number, number]); ranges[i][1] = Math.min(i + 1 < ranges.length ? ranges[i + 1][0] : project.duration_ms, Math.max(a + 100, t)); change({ ranges }) }} /><Button variant="ghost" size="sm" aria-label={`Remove cut ${i + 1}`} tooltip="Remove this cut from the clip. The source video is kept; Undo restores the cut." iconOnly icon={<X size={12} />} disabled={candidate.ranges.length === 1 || editingDisabled} onClick={() => change({ ranges: candidate.ranges.filter((_, j) => j !== i) })} /></div>)}</div>
+            <div className="editor-timeline-zoom">
+              <span className="text-2xs text-ink-subtle">Timeline zoom</span>
+              <Select aria-label="Timeline zoom" size="sm" className="w-32" value={Array.isArray(timelineZoom) ? 'playhead' : timelineZoom}
+                options={[{ value: 'source', label: 'Full source' }, { value: 'clip', label: 'Clip' }, { value: 'playhead', label: 'Playhead', detail: '±1 second' }]}
+                onChange={(value) => setTimelineZoom(value === 'playhead'
+                  ? [Math.max(0, time - 1000), Math.min(project.duration_ms, time + 1000)]
+                  : value === 'source' ? 'source' : 'clip')} />
+            </div>
+          </div>
         </div>
       </div>
       <aside className="editor-inspector"><div className="editor-tabs">{(['review', 'framing', 'captions', 'transcript'] as const).map((t) => <button key={t} aria-pressed={tab === t} onClick={() => setTab(t)} className={cn(tab === t && 'selected')}>{t === 'review' ? 'Jev' : t[0].toUpperCase() + t.slice(1)}</button>)}</div>
@@ -620,7 +634,7 @@ export function ClipEditor({ outputDir, leading, onExports }: { outputDir: strin
             return <div key={i} ref={r === activeTranscript ? activeCaption : undefined} aria-current={r === activeTranscript ? 'true' : undefined}
               className={cn('editor-transcript-row', r === activeTranscript && 'selected')}>
               <div className="editor-transcript-time"><button onClick={() => seek(r.start_ms)} title="Playhead to this line">{formatTimecode(r.start_ms)}</button>{edited && <span>Edited</span>}
-                <Button variant="ghost" size="sm" iconOnly icon={<Pencil size={12} />} aria-label={`Edit caption at ${clock(r.start_ms)}`} title="Edit caption" disabled={!canEditCaption(i)} onClick={() => editCaption(i)} />
+                <Button variant="ghost" size="sm" iconOnly icon={<Pencil size={12} />} aria-label={`Edit caption at ${clock(r.start_ms)}`} tooltip="Correct this caption’s text for the selected clip." disabled={!canEditCaption(i)} onClick={() => editCaption(i)} />
               </div>
               {editingCaption === i ? <><textarea ref={captionInput} aria-label={`Caption at ${clock(r.start_ms)}`} maxLength={2000} rows={3} value={captionText(i)} disabled={editingDisabled}
                 onChange={(e) => { updateCaption(i, e.target.value, firstCaptionChange.current); firstCaptionChange.current = false }}
@@ -654,7 +668,7 @@ function CaptionSuppression({ ranges, cuts, time, duration, disabled, onChange, 
     {ranges.length > 0 && <p className="text-2xs text-ink-subtle">{!nextRange ? ranges.length >= 200 ? 'Section limit reached. Remove a section to add another.' : 'Captions are suppressed throughout the selected footage. Shorten or remove a section to make room.' : 'Add as many sections as you need. Each has its own start and end. New sections start at the playhead or the next available spot in this clip.'}</p>}
     {!ranges.length && <p className="text-2xs text-ink-subtle">Seek to a section, add a range, then adjust its start and end.</p>}
     {ranges.map(([a, b], i) => <div key={i} className="editor-caption-range">
-      <div className="flex items-center justify-between gap-2"><button className="text-2xs text-ink-muted" onClick={() => seek(a)}>Section {i + 1}</button><Button size="sm" variant="ghost" iconOnly icon={<X size={12} />} aria-label={`Remove caption-free section ${i + 1}`} disabled={disabled} onClick={() => onChange(ranges.filter((_, j) => j !== i))} /></div>
+      <div className="flex items-center justify-between gap-2"><button className="text-2xs text-ink-muted" onClick={() => seek(a)}>Section {i + 1}</button><Button size="sm" variant="ghost" iconOnly icon={<X size={12} />} tooltip="Restore captions in this section by removing its suppression range." aria-label={`Remove caption-free section ${i + 1}`} disabled={disabled} onClick={() => onChange(ranges.filter((_, j) => j !== i))} /></div>
       <div className="flex flex-wrap items-end gap-2">{([0, 1] as const).map((edge) => <label key={edge} className="text-2xs text-ink-subtle">{edge === 0 ? 'Start' : 'End'}<TimeInput label={`Caption-free section ${i + 1} ${edge === 0 ? 'start' : 'end'}`} value={edge === 0 ? a : b} disabled={disabled} onChange={(t) => update(i, edge, t)} /></label>)}</div>
       <div className="flex flex-wrap gap-2 mt-2"><Button size="sm" variant="ghost" disabled={disabled || at < (ranges[i - 1]?.[1] ?? 0) || at > b - 100} onClick={() => update(i, 0, at)}>Start at playhead</Button><Button size="sm" variant="ghost" disabled={disabled || at < a + 100 || at > (ranges[i + 1]?.[0] ?? duration)} onClick={() => update(i, 1, at)}>End at playhead</Button></div>
     </div>)}

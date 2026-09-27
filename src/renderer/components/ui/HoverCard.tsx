@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { cloneElement, isValidElement, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { cn } from '../../lib/utils'
 
 const GAP = 8
@@ -13,6 +13,8 @@ interface HoverCardProps {
   className?: string
   cardClassName?: string
   openDelay?: number
+  /** The single child is already focusable; attach the description to it. */
+  interactive?: boolean
 }
 
 /**
@@ -20,7 +22,7 @@ interface HoverCardProps {
  * under it (above it when there's no room). The card is a top-layer popover,
  * so panels with hidden overflow never clip it. Escape closes it.
  */
-export function HoverCard({ content, children, label, className, cardClassName, openDelay = 120 }: HoverCardProps): React.JSX.Element {
+export function HoverCard({ content, children, label, className, cardClassName, openDelay = 120, interactive = false }: HoverCardProps): React.JSX.Element {
   const id = useId()
   const triggerRef = useRef<HTMLDivElement>(null)
   const cardRef = useRef<HTMLDivElement>(null)
@@ -71,21 +73,27 @@ export function HoverCard({ content, children, label, className, cardClassName, 
   return (
     <div
       ref={triggerRef}
-      tabIndex={0}
+      tabIndex={interactive ? undefined : 0}
+      title={interactive ? '' : undefined}
       aria-label={label}
-      aria-describedby={open ? id : undefined}
+      aria-describedby={!interactive && open ? id : undefined}
       onPointerEnter={() => show(openDelay)}
       onPointerLeave={hide}
       onFocus={() => show(0)}
       onBlur={hide}
+      onClick={interactive ? hide : undefined}
+      onPointerDown={interactive ? hide : undefined}
       className={cn('cursor-default', className)}
     >
-      {children}
+      {interactive && isValidElement<{ 'aria-describedby'?: string }>(children)
+        ? cloneElement(children, { 'aria-describedby': [children.props['aria-describedby'], open ? id : undefined].filter(Boolean).join(' ') || undefined })
+        : children}
       {open && (
         <div
           ref={cardRef}
           id={id}
           role="tooltip"
+          title=""
           popover="manual"
           className={cn('glass-thick pointer-events-none fixed inset-auto z-[120] m-0 overflow-hidden rounded-2xl border-0 p-0 text-ink animate-menu-in', cardClassName)}
           style={{ top: -9999, left: -9999 }}

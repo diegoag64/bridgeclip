@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, Clapperboard, FolderOpen, ListVideo, Pencil, RefreshCw, Search, Sparkles, Star, Trash2 } from 'lucide-react'
+import { AlertTriangle, Bookmark, Clapperboard, FolderOpen, ListVideo, Pencil, RefreshCw, Search, Sparkles, Trash2 } from 'lucide-react'
 import { getApi } from '../lib/ipc'
 import { cn, errorMessage, formatRelativeDate, formatUsd, localFileUrl } from '../lib/utils'
 import { clipFilePath, loadThumbnail } from '../lib/thumbnails'
@@ -19,6 +19,8 @@ import { Callout } from '../components/ui/Callout'
 import { Skeleton } from '../components/ui/Skeleton'
 import { ConfirmDialog, type ConfirmRequest } from '../components/ui/ConfirmDialog'
 import { HoverCard } from '../components/ui/HoverCard'
+import { useLibraryMotion } from '../hooks/use-library-motion'
+import './library.css'
 import type { Page as AppPage } from '../components/Sidebar'
 
 export function LibraryPage({ onNavigate, initialRun, initialClipIndex }: { onNavigate: (page: AppPage) => void; initialRun?: string | null; initialClipIndex?: number }): React.JSX.Element {
@@ -35,6 +37,8 @@ export function LibraryPage({ onNavigate, initialRun, initialClipIndex }: { onNa
   const closeConfirm = useCallback(() => setConfirm(null), [])
   const [busy, setBusy] = useState<Set<string>>(new Set())
   const busyRef = useRef(new Set<string>())
+  const { gridRef, capture } = useLibraryMotion()
+  const [bookmarkMessage, setBookmarkMessage] = useState('')
   const [counts, setCounts] = useState<Record<string, { posted: number; notPosted: number } | null>>({})
   const posts = usePostsStore((state) => state.posts)
   const postError = usePostsStore((state) => state.error)
@@ -63,6 +67,7 @@ export function LibraryPage({ onNavigate, initialRun, initialClipIndex }: { onNa
     setOpen(null)
     setConfirm(null)
     setCounts({})
+    setBookmarkMessage('')
     setEntries(null)
     openRequestId.current++
     void load()
@@ -101,9 +106,10 @@ export function LibraryPage({ onNavigate, initialRun, initialClipIndex }: { onNa
     if (!entries) return []
     const q = query.trim().toLowerCase()
     return entries.filter((entry) => !q || entry.videoTitle.toLowerCase().includes(q))
-      .sort((a, b) => Number(Boolean(b.favorite)) - Number(Boolean(a.favorite)))
   }, [entries, query])
 
+  const bookmarked = filtered.filter(entry => entry.favorite)
+  const recent = filtered.filter(entry => !entry.favorite)
   const totalClips = entries?.reduce((sum, e) => sum + e.clipCount, 0) ?? 0
 
   const openRun = useCallback(async (entry: HistoryEntry, clipIndex?: number): Promise<void> => {
@@ -146,15 +152,26 @@ export function LibraryPage({ onNavigate, initialRun, initialClipIndex }: { onNa
     ++openRequestId.current
     setRefreshing(false)
     setError(null)
+    const favorite = !entry.favorite
+    if (action === 'favorite') {
+      capture(entry.outputDir)
+      setEntries(current => current?.map(item => item.outputDir === entry.outputDir ? { ...item, favorite } : item) ?? null)
+      setBookmarkMessage('')
+    }
     try {
       if (action === 'delete') await getApi().history.delete(entry.outputDir)
-      else await getApi().history.setFavorite(entry.outputDir, !entry.favorite)
+      else await getApi().history.setFavorite(entry.outputDir, favorite)
       if (directoryRef.current !== directory) return
-      setEntries((current) => current?.flatMap((item) => item.outputDir !== entry.outputDir ? [item]
-        : action === 'delete' ? [] : [{ ...item, favorite: !entry.favorite }]) ?? null)
-      await load()
+      if (action === 'delete') setEntries(current => current?.filter(item => item.outputDir !== entry.outputDir) ?? null)
+      else setBookmarkMessage(favorite ? `Bookmarked “${entry.videoTitle}”.` : `Removed “${entry.videoTitle}” from bookmarks.`)
     } catch (cause) {
-      if (directoryRef.current === directory) setError(errorMessage(cause, action === 'delete' ? 'Could not delete this run. Refresh the Library to check its files.' : 'Could not update this favorite.'))
+      if (directoryRef.current === directory) {
+        if (action === 'favorite') {
+          capture(entry.outputDir)
+          setEntries(current => current?.map(item => item.outputDir === entry.outputDir ? { ...item, favorite: entry.favorite } : item) ?? null)
+        }
+        setError(errorMessage(cause, action === 'delete' ? 'Could not delete this run. Refresh the Library to check its files.' : 'Could not save this bookmark. Please try again.'))
+      }
     } finally {
       busyRef.current.delete(entry.outputDir)
       setBusy(new Set(busyRef.current))
@@ -205,7 +222,7 @@ export function LibraryPage({ onNavigate, initialRun, initialClipIndex }: { onNa
               aria-label="Refresh"
               title="Refresh"
               onClick={() => { void load(); if (configured) void usePostsStore.getState().refresh(true) }}
-              disabled={refreshing}
+              disabled={refreshing || busy.size > 0}
               icon={<RefreshCw className={cn('h-4 w-4', refreshing && 'animate-spin')} />}
             />
             {outputDirectory && (
@@ -235,6 +252,7 @@ export function LibraryPage({ onNavigate, initialRun, initialClipIndex }: { onNa
         />
       )}
 
+      <p className="sr-only" role="status" aria-live="polite">{bookmarkMessage}</p>
       <div className="mt-4">
         {entries === null ? (
           <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-4" aria-busy="true" aria-label="Loading library">
@@ -265,10 +283,18 @@ export function LibraryPage({ onNavigate, initialRun, initialClipIndex }: { onNa
             <p className="mt-3 text-sm text-ink-muted">No runs match “{query}”.</p>
           </div>
         ) : (
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-4">
-            {filtered.map((entry) => (
+          <div ref={gridRef} className="library-grid grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-4">
+            {[
+              ...(bookmarked.length ? [{ key: 'bookmarked', title: 'Bookmarked', items: bookmarked }] : []),
+              ...(recent.length ? [{ key: 'recent', title: bookmarked.length ? 'Recent runs' : 'All runs', items: recent }] : [])
+            ].flatMap(group => [
+              <div key={`heading:${group.key}`} data-library-layout={`heading:${group.key}`} className="library-section-heading">
+                {group.key === 'bookmarked' && <Bookmark size={15} className="text-[#f2c66d]" fill="currentColor" aria-hidden />}
+                <h2 className="text-sm font-medium text-ink">{group.title}</h2>
+                <span className="text-xs tabular-nums text-ink-subtle">{group.items.length}</span>
+              </div>,
+              ...group.items.map(entry => <div key={entry.outputDir} data-library-layout={entry.outputDir} data-bookmarked={Boolean(entry.favorite)} className="library-run-slot">
               <RunCard
-                key={entry.outputDir}
                 entry={entry}
                 counts={counts[entry.outputDir]}
                 busy={busy.has(entry.outputDir)}
@@ -283,7 +309,8 @@ export function LibraryPage({ onNavigate, initialRun, initialClipIndex }: { onNa
                   }
                 }}
               />
-            ))}
+              </div>)
+            ])}
           </div>
         )}
       </div>
@@ -366,9 +393,10 @@ function RunCard({ entry, counts, busy, onFavorite, onDelete, onOpen, onOpenFold
       </div>
       </button>
       <div className="absolute right-3.5 top-3.5 flex items-center gap-1.5">
-        <HoverCard cardClassName="px-3 py-2 text-xs" content={entry.favorite ? 'Remove from favorites' : 'Favorite this Library item'}>
-          <Button size="sm" iconOnly className={cn('glass-chip', entry.favorite && 'text-brand-gold')} disabled={busy} aria-label={`${entry.favorite ? 'Unfavorite' : 'Favorite'} ${entry.videoTitle}`} aria-pressed={Boolean(entry.favorite)} onClick={onFavorite} icon={<Star className="h-3.5 w-3.5" fill={entry.favorite ? 'currentColor' : 'none'} />} />
-        </HoverCard>
+        <Button size="sm" iconOnly className="glass-chip library-bookmark" aria-disabled={busy || undefined}
+          tooltip={entry.favorite ? 'Remove bookmark. This run returns to its place among your recent runs.' : 'Bookmark this run to keep it in the Bookmarked section.'}
+          aria-label={`${entry.favorite ? 'Remove bookmark from' : 'Bookmark'} ${entry.videoTitle}`} aria-pressed={Boolean(entry.favorite)}
+          onClick={() => { if (!busy) onFavorite() }} icon={<Bookmark className="h-3.5 w-3.5" fill={entry.favorite ? 'currentColor' : 'none'} />} />
         <HoverCard cardClassName="px-3 py-2 text-xs" content="Delete this Library item and its local files">
           <Button size="sm" iconOnly className="glass-chip hover:text-danger" disabled={busy} aria-label={`Delete ${entry.videoTitle}`} onClick={onDelete} icon={<Trash2 className="h-3.5 w-3.5" />} />
         </HoverCard>
@@ -381,10 +409,10 @@ function RunCard({ entry, counts, busy, onFavorite, onDelete, onOpen, onOpenFold
 function useRunPreview(entry: HistoryEntry | null): { thumb: string | null; remaining: number | null } {
   const [thumb, setThumb] = useState<string | null>(null)
   const [remaining, setRemaining] = useState<number | null>(null)
+  const outputDir = entry?.outputDir
   useEffect(() => {
     setThumb(null); setRemaining(null)
-    if (!entry) return
-    const outputDir = entry.outputDir
+    if (!outputDir) return
     let cancelled = false
     getApi()
       .history.getJob(outputDir)
@@ -415,6 +443,6 @@ function useRunPreview(entry: HistoryEntry | null): { thumb: string | null; rema
     return () => {
       cancelled = true
     }
-  }, [entry])
+  }, [outputDir, entry?.clipCount, entry?.candidateCount, entry?.editorProject, entry?.date])
   return { thumb, remaining }
 }
