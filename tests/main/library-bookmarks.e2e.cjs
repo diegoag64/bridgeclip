@@ -6,7 +6,7 @@ const path = require('node:path')
 const { execFileSync } = require('node:child_process')
 const { buildApp, launchApp, ROOT } = require('../zernio/support/electron-app.cjs')
 
-test('Library bookmarks move existing cards, preserve thumbnails, persist and recover from failed writes', { timeout: 90000 }, async t => {
+async function setupLibrary(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bridgeclip-bookmarks-'))
   const userDataDir = path.join(root, 'user-data'), library = path.join(userDataDir, 'BridgeClip')
   const titles = ['A better morning', 'The creative process', 'Small ideas, big changes', 'Behind the scenes', 'Finding your focus', 'The long conversation']
@@ -30,6 +30,11 @@ test('Library bookmarks move existing cards, preserve thumbnails, persist and re
   const errors = []; page.on('pageerror', error => errors.push(error.message))
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1400, 1020))
   await page.emulateMedia({ reducedMotion: 'no-preference' })
+  return { app, page, titles, runs, errors }
+}
+
+test('Library bookmarks move existing cards, preserve thumbnails, persist and recover from failed writes', { timeout: 90000 }, async t => {
+  const { app, page, titles, runs, errors } = await setupLibrary(t)
   await page.getByRole('button', { name: 'Library', exact: true }).click()
   await page.waitForFunction(() => document.querySelectorAll('.library-run-slot img').length === 12)
   const card = title => page.locator('article').filter({ has: page.getByRole('button', { name: `Open ${title}`, exact: true }) })
@@ -98,5 +103,95 @@ test('Library bookmarks move existing cards, preserve thumbnails, persist and re
   await page.getByRole('alert').filter({ hasText: 'Bookmark storage is unavailable' }).waitFor()
   await bookmark(titles[2]).waitFor()
   assert.equal(fs.existsSync(path.join(runs[2], '.bridgeclip-favorite')), false)
+  assert.deepEqual(errors, [])
+})
+
+
+test('Library reloads preserve pending bookmarks and ignore stale reads after a save or rollback', { timeout: 90000 }, async t => {
+  const { app, page, titles, runs, errors } = await setupLibrary(t)
+  await page.getByRole('button', { name: 'Library', exact: true }).click()
+  await page.waitForFunction(() => document.querySelectorAll('.library-run-slot img').length === 12)
+  const initial = await page.evaluate(() => window.bridgeclip.history.list())
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  // Control both IPC completions so each ordering is covered without timing sleeps.
+  await app.evaluate(({ ipcMain }, entries) => {
+    globalThis.libraryEntries = entries
+    ipcMain.removeHandler('history:list')
+    ipcMain.handle('history:list', () => {
+      const snapshot = structuredClone(globalThis.libraryEntries)
+      return new Promise(resolve => { globalThis.finishList = () => resolve(snapshot) })
+    })
+    ipcMain.removeHandler('history:setFavorite')
+    ipcMain.handle('history:setFavorite', (_event, dir, favorite) => new Promise((resolve, reject) => {
+      globalThis.finishBookmark = success => {
+        if (!success) return reject(new Error('Bookmark storage is unavailable'))
+        globalThis.libraryEntries = globalThis.libraryEntries.map(entry => entry.outputDir === dir ? { ...entry, favorite } : entry)
+        resolve(favorite)
+      }
+    }))
+  }, initial)
+  const control = page.locator('article').filter({ has: page.getByRole('button', { name: `Open ${titles[0]}`, exact: true }) }).locator('.library-bookmark')
+  for (const [favorite, success, listFirst] of [[true, true, true], [false, true, false], [true, false, true], [true, false, false]]) {
+    await control.click()
+    assert.equal(await control.getAttribute('aria-pressed'), String(favorite))
+    await page.getByRole('button', { name: `Open ${titles[1]}`, exact: true }).click()
+    await page.locator('#page-scroll').getByRole('button', { name: 'Library', exact: true }).click()
+    await control.waitFor()
+    await page.waitForFunction(() => document.querySelector('[aria-label="Refresh"]')?.disabled)
+    // Confirm the reload reached main before releasing either operation.
+    await page.evaluate(() => window.bridgeclip.settings.load())
+    assert.equal(await app.evaluate(() => typeof globalThis.finishList), 'function')
+    if (listFirst) {
+      await app.evaluate(() => { globalThis.finishList(); globalThis.finishList = null })
+      await page.waitForFunction(() => document.querySelector('[aria-label="Refresh"] svg')?.classList.contains('animate-spin') === false)
+      assert.equal(await control.getAttribute('aria-pressed'), String(favorite), 'Reload retains the pending optimistic value')
+    }
+    if (success) {
+      const marker = path.join(runs[0], '.bridgeclip-favorite')
+      if (favorite) fs.writeFileSync(marker, '')
+      else fs.unlinkSync(marker)
+    }
+    await app.evaluate((_electron, success) => globalThis.finishBookmark(success), success)
+    await page.waitForFunction(title => document.querySelector(`[aria-label="Open ${title}"]`)?.disabled === false, titles[0])
+    if (!listFirst) {
+      await app.evaluate(() => { globalThis.finishList(); globalThis.finishList = null })
+      // A renderer IPC round trip lets the previously released list handler finish.
+      await page.evaluate(() => window.bridgeclip.settings.load())
+    }
+    assert.equal(await control.getAttribute('aria-pressed'), String(success ? favorite : !favorite), JSON.stringify({ favorite, success, listFirst, status: await page.getByRole('status').allTextContents(), alert: await page.getByRole('alert').allTextContents() }))
+    assert.equal(fs.existsSync(path.join(runs[0], '.bridgeclip-favorite')), success ? favorite : !favorite)
+    if (!success) await page.getByRole('alert').filter({ hasText: 'Bookmark storage is unavailable' }).waitFor()
+  }
+  assert.deepEqual(errors, [])
+})
+
+test('Library Refresh retries failed previews without resetting healthy images on bookmark changes', { timeout: 90000 }, async t => {
+  const { app, page, titles, runs, errors } = await setupLibrary(t)
+  const thumbnail = await page.evaluate(clip => window.bridgeclip.thumbnails.generate(clip), path.join(runs[0], 'clip.mp4'))
+  assert.ok(thumbnail)
+  await app.evaluate(({ ipcMain }, thumbnail) => {
+    globalThis.thumbnailCalls = 0
+    globalThis.retryPreviews = false
+    ipcMain.removeHandler('thumbnails:generate')
+    ipcMain.handle('thumbnails:generate', () => { globalThis.thumbnailCalls++; return globalThis.retryPreviews ? thumbnail : null })
+  }, thumbnail)
+  await page.getByRole('button', { name: 'Library', exact: true }).click()
+  await page.waitForFunction(() => document.querySelectorAll('.library-run-slot').length === 6)
+  // Poll the controlled main-process counter until all failed requests finish.
+  for (let i = 0; i < 100 && await app.evaluate(() => globalThis.thumbnailCalls) < 6; i++) await page.waitForTimeout(20)
+  assert.equal(await app.evaluate(() => globalThis.thumbnailCalls), 6)
+  assert.equal(await page.locator('.library-run-slot img').count(), 0)
+  await app.evaluate(() => { globalThis.retryPreviews = true })
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click()
+  await page.waitForFunction(() => document.querySelectorAll('.library-run-slot img').length === 12)
+  assert.equal(await app.evaluate(() => globalThis.thumbnailCalls), 12)
+  const image = await page.locator('.library-run-slot img').first().elementHandle()
+  await page.getByRole('button', { name: `Bookmark ${titles[0]}`, exact: true }).click()
+  await page.getByRole('status').filter({ hasText: 'Bookmarked' }).waitFor()
+  assert.equal(await image.evaluate(el => el.isConnected), true)
+  assert.equal(await app.evaluate(() => globalThis.thumbnailCalls), 12, 'Bookmark-only changes do not reload previews')
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click()
+  await page.waitForFunction(() => !document.querySelector('[aria-label="Refresh"]')?.disabled)
+  assert.equal(await image.evaluate(el => el.isConnected), true, 'Refresh keeps a healthy thumbnail visible')
   assert.deepEqual(errors, [])
 })

@@ -37,6 +37,8 @@ export function LibraryPage({ onNavigate, initialRun, initialClipIndex }: { onNa
   const closeConfirm = useCallback(() => setConfirm(null), [])
   const [busy, setBusy] = useState<Set<string>>(new Set())
   const busyRef = useRef(new Set<string>())
+  const pendingBookmarks = useRef(new Map<string, boolean>())
+  const [previewRevision, setPreviewRevision] = useState(0)
   const { gridRef, capture } = useLibraryMotion()
   const [bookmarkMessage, setBookmarkMessage] = useState('')
   const [counts, setCounts] = useState<Record<string, { posted: number; notPosted: number } | null>>({})
@@ -52,7 +54,11 @@ export function LibraryPage({ onNavigate, initialRun, initialClipIndex }: { onNa
     setError(null)
     try {
       const result = await getApi().history.list()
-      if (request === requestId.current) setEntries(result.filter((entry) => entry.status === 'completed'))
+      if (request === requestId.current) {
+        setEntries(result.filter((entry) => entry.status === 'completed').map(entry =>
+          pendingBookmarks.current.has(entry.outputDir) ? { ...entry, favorite: pendingBookmarks.current.get(entry.outputDir)! } : entry))
+        setPreviewRevision(revision => revision + 1)
+      }
     } catch (err) {
       if (request === requestId.current) {
         setEntries((previous) => previous ?? [])
@@ -154,6 +160,7 @@ export function LibraryPage({ onNavigate, initialRun, initialClipIndex }: { onNa
     setError(null)
     const favorite = !entry.favorite
     if (action === 'favorite') {
+      pendingBookmarks.current.set(entry.outputDir, favorite)
       capture(entry.outputDir)
       setEntries(current => current?.map(item => item.outputDir === entry.outputDir ? { ...item, favorite } : item) ?? null)
       setBookmarkMessage('')
@@ -163,7 +170,10 @@ export function LibraryPage({ onNavigate, initialRun, initialClipIndex }: { onNa
       else await getApi().history.setFavorite(entry.outputDir, favorite)
       if (directoryRef.current !== directory) return
       if (action === 'delete') setEntries(current => current?.filter(item => item.outputDir !== entry.outputDir) ?? null)
-      else setBookmarkMessage(favorite ? `Bookmarked “${entry.videoTitle}”.` : `Removed “${entry.videoTitle}” from bookmarks.`)
+      else {
+        setEntries(current => current?.map(item => item.outputDir === entry.outputDir ? { ...item, favorite } : item) ?? null)
+        setBookmarkMessage(favorite ? `Bookmarked “${entry.videoTitle}”.` : `Removed “${entry.videoTitle}” from bookmarks.`)
+      }
     } catch (cause) {
       if (directoryRef.current === directory) {
         if (action === 'favorite') {
@@ -173,6 +183,9 @@ export function LibraryPage({ onNavigate, initialRun, initialClipIndex }: { onNa
         setError(errorMessage(cause, action === 'delete' ? 'Could not delete this run. Refresh the Library to check its files.' : 'Could not save this bookmark. Please try again.'))
       }
     } finally {
+      // A list requested during the write may still contain the old disk value.
+      if (directoryRef.current === directory) { ++requestId.current; setRefreshing(false) }
+      pendingBookmarks.current.delete(entry.outputDir)
       busyRef.current.delete(entry.outputDir)
       setBusy(new Set(busyRef.current))
     }
@@ -296,6 +309,7 @@ export function LibraryPage({ onNavigate, initialRun, initialClipIndex }: { onNa
               ...group.items.map(entry => <div key={entry.outputDir} data-library-layout={entry.outputDir} data-bookmarked={Boolean(entry.favorite)} className="library-run-slot">
               <RunCard
                 entry={entry}
+                previewRevision={previewRevision}
                 counts={counts[entry.outputDir]}
                 busy={busy.has(entry.outputDir)}
                 onFavorite={() => { void changeRun(entry, 'favorite') }}
@@ -319,8 +333,9 @@ export function LibraryPage({ onNavigate, initialRun, initialClipIndex }: { onNa
   )
 }
 
-function RunCard({ entry, counts, busy, onFavorite, onDelete, onOpen, onOpenFolder }: {
+function RunCard({ entry, previewRevision, counts, busy, onFavorite, onDelete, onOpen, onOpenFolder }: {
   entry: HistoryEntry
+  previewRevision: number
   counts: { posted: number; notPosted: number } | null | undefined
   busy: boolean
   onFavorite: () => void
@@ -329,9 +344,10 @@ function RunCard({ entry, counts, busy, onFavorite, onDelete, onOpen, onOpenFold
   onOpenFolder: () => void
 }): React.JSX.Element {
   const failed = entry.status !== 'completed'
-  const { thumb, remaining } = useRunPreview(failed ? null : entry)
+  const { thumb, remaining } = useRunPreview(failed ? null : entry, previewRevision)
   const editing = remaining !== null && remaining > 0
   const [previewFailed, setPreviewFailed] = useState(false)
+  useEffect(() => { setPreviewFailed(false) }, [thumb, previewRevision])
 
   return (
     <article
@@ -406,13 +422,12 @@ function RunCard({ entry, counts, busy, onFavorite, onDelete, onOpen, onOpenFold
 }
 
 /** Saved editing progress and the best clip's thumbnail (or source preview). */
-function useRunPreview(entry: HistoryEntry | null): { thumb: string | null; remaining: number | null } {
+function useRunPreview(entry: HistoryEntry | null, revision: number): { thumb: string | null; remaining: number | null } {
   const [thumb, setThumb] = useState<string | null>(null)
   const [remaining, setRemaining] = useState<number | null>(null)
   const outputDir = entry?.outputDir
   useEffect(() => {
-    setThumb(null); setRemaining(null)
-    if (!outputDir) return
+    if (!outputDir) { setThumb(null); setRemaining(null); return }
     let cancelled = false
     getApi()
       .history.getJob(outputDir)
@@ -423,6 +438,7 @@ function useRunPreview(entry: HistoryEntry | null): { thumb: string | null; rema
           null
         )
         if (cancelled) return null
+        setRemaining(null)
         if (output?.editor_project) {
           try {
             const session = await getApi().editor.open(outputDir)
@@ -437,12 +453,12 @@ function useRunPreview(entry: HistoryEntry | null): { thumb: string | null; rema
         return loadThumbnail(clipFilePath(best.s3_url), best.duration_ms > 0 ? best.duration_ms / 2000 : undefined)
       })
       .then((path) => {
-        if (!cancelled && path) setThumb(path)
+        if (!cancelled) setThumb(path ?? null)
       })
       .catch(() => {})
     return () => {
       cancelled = true
     }
-  }, [outputDir, entry?.clipCount, entry?.candidateCount, entry?.editorProject, entry?.date])
+  }, [outputDir, entry?.clipCount, entry?.candidateCount, entry?.editorProject, entry?.date, revision])
   return { thumb, remaining }
 }
