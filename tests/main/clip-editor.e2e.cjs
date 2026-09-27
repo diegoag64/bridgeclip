@@ -53,6 +53,24 @@ test('review editor refines candidates, restores discards, edits captions and ba
   const stage = page.locator('.editor-stagebar .editor-status')
   assert.equal(await stage.innerText(), 'Refining')
   assert.equal(await page.getByRole('button', { name: 'Bake captions', exact: true }).isDisabled(), true)
+  // Clicking a cut seeks to the actual location, including later retained cuts.
+  // Keyboard activation still provides a useful jump to the cut's start.
+  const clickCut = async (index, fraction) => {
+    const [a, b] = project.candidates[0].ranges[index]
+    const piece = page.locator('.editor-timeline-piece').nth(index)
+    const box = await piece.boundingBox()
+    await page.mouse.click(box.x + box.width * fraction, box.y + box.height / 2)
+    const expected = a + (b - a) * fraction
+    await page.waitForFunction(t => Math.abs(document.querySelector('.editor-source-frame video').currentTime * 1000 - t) < 40, expected)
+    assert.equal(await page.locator('.editor-source-frame video').evaluate(v => v.paused), true)
+  }
+  await clickCut(0, .75)
+  await clickCut(1, .5)
+  await page.getByRole('button', { name: 'Full source', exact: true }).click()
+  await clickCut(1, .75)
+  await page.getByRole('button', { name: 'Zoom to clip', exact: true }).click()
+  await page.getByRole('button', { name: 'Seek within cut 1', exact: true }).press('Enter')
+  await page.waitForFunction(() => Math.abs(document.querySelector('.editor-source-frame video').currentTime - 1) < .04)
   // Leaving the editor for Settings saves pending edits and keeps the app mounted.
   const originalTitle = await page.getByLabel('Title', { exact: true }).inputValue()
   await page.getByLabel('Title', { exact: true }).fill('Saved when opening Settings')

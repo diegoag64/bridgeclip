@@ -122,7 +122,7 @@ test('Jobs actions inspect runs and open completed jobs in the shared Library vi
   assert.equal(await download.getAttribute('value'), '25')
   await page.getByText('25.0 MB of 100.0 MB', { exact: true }).waitFor()
   await publish({ ...live, revision: 2, stages: [{ ...live.stages[0], percent: 80 }] })
-  await page.waitForFunction(() => document.querySelector('progress')?.value === 80)
+  await page.waitForFunction(() => document.querySelector('progress[aria-label="Download / read video progress"]')?.value === 80)
   await publish({ ...live, revision: 3, status: 'planning', stages: [
     { ...live.stages[0], state: 'completed', percent: 100, elapsed_ms: 5000 },
     { id: 'planning', state: 'running', percent: null, elapsed_ms: 1000 }
