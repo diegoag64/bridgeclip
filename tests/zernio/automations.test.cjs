@@ -750,7 +750,7 @@ test('held linked clips use fresh post evidence before requeuing or marking subm
   try {
     const library = path.join(dir, 'library'); fs.mkdirSync(library)
     const clip = path.join(library, 'held.mp4'); fs.writeFileSync(clip, 'test media')
-    const source = `export * as automations from './src/main/automations'; export * as settings from './src/main/settings-store'; export { PostsStore } from './src/main/zernio/posts-store'; export { workspaceId } from './src/main/zernio/workspace-cache'`
+    const source = `export * as automations from './src/main/automations'; export * as posts from './src/main/zernio/posts'; export * as settings from './src/main/settings-store'; export { PostsStore } from './src/main/zernio/posts-store'; export { workspaceId } from './src/main/zernio/workspace-cache'`
     const mocks = { electron: fakeElectron(dir).electron }
     const initial = loadMain(source, mocks)
     initial.settings.replaceApiKey('zernioApiKey', KEY)
@@ -763,20 +763,104 @@ test('held linked clips use fresh post evidence before requeuing or marking subm
     Object.assign(saved.automations[0].content[0], { status: 'needs_review', postId, error: 'All platforms failed', warningsAcknowledged: true })
     const stamp = new Date().toISOString()
     const history = { id: postId, clipPath: clip, clipTitle: 'Held', targets: [{ accountId, platform: 'youtube', handle: null, status: 'failed', error: 'Failed', url: null, inbox: false }], scheduledFor: null, timezone: null, status: 'failed', error: 'All platforms failed', createdAt: stamp, uploadedAt: stamp, refreshedAt: stamp }
-    for (const [status, targetStatus, expected] of [['failed', 'failed', 'queued'], ['published', 'published', 'submitted'], ['publishing', 'processing', 'submitted'], ['partial', 'published', 'held'], ['failed', null, 'held']]) {
-      fs.writeFileSync(file, JSON.stringify(saved))
-      new initial.PostsStore(path.join(dir, 'userData', 'zernio-posts.json'), workspace).save(history)
-      remote = { _id: postId, status, platforms: targetStatus ? [{ accountId, platform: 'youtube', status: targetStatus }] : [] }
-      const main = loadMain(source, mocks)
-      const result = await main.automations.reviewAutomationContent(automation.id, bank.content[0].id, true)
-      assert.equal(result.outcome, expected, `${status}/${targetStatus}`)
-      const item = result.automations[0].content[0]
-      assert.equal(item.status, expected === 'submitted' ? 'posted' : expected === 'queued' ? 'queued' : 'needs_review')
-      assert.equal(item.postId, expected === 'queued' ? null : postId)
-      if (expected === 'queued') assert.ok(item.postingAttemptId && item.postingAttemptId !== item.id)
+    for (const historyState of ['present', 'dismissed', 'evicted']) {
+      for (const [status, targetStatus, expected] of [['failed', 'failed', 'queued'], ['published', 'published', 'submitted'], ['publishing', 'processing', 'submitted'], ['partial', 'published', 'held'], ['failed', null, 'held']]) {
+        fs.writeFileSync(file, JSON.stringify(saved))
+        const store = new initial.PostsStore(path.join(dir, 'userData', 'zernio-posts.json'), workspace)
+        store.clear(); store.save(history)
+        if (historyState === 'evicted') {
+          store.save(...Array.from({ length: 300 }, (_, i) => ({ ...history, id: (i + 1).toString(16).padStart(24, '0'), createdAt: new Date(Date.parse(stamp) + i + 1).toISOString() })))
+          assert.equal(store.get(postId), null, 'finished history is actually evicted')
+        }
+        remote = { _id: postId, status, platforms: targetStatus ? [{ accountId, platform: 'youtube', status: targetStatus }] : [] }
+        const main = loadMain(source, mocks)
+        if (historyState === 'dismissed') main.posts.dismissPost(postId)
+        const requestsBefore = mock.state.requests.length
+        const result = await main.automations.reviewAutomationContent(automation.id, bank.content[0].id, true)
+        assert.equal(mock.state.requests.length, requestsBefore + 1, 'recovery checks Zernio even without local history')
+        assert.equal(result.outcome, expected, `${historyState}/${status}/${targetStatus}`)
+        const item = result.automations[0].content[0]
+        assert.equal(item.status, expected === 'submitted' ? 'posted' : expected === 'queued' ? 'queued' : 'needs_review')
+        assert.equal(item.postId, expected === 'queued' ? null : postId)
+        if (expected === 'queued') assert.ok(item.postingAttemptId && item.postingAttemptId !== item.id)
+      }
     }
     assert.ok(mock.state.requests.every((request) => request.method === 'GET'), 'reviewing never posts or retries')
   } finally {
+    if (previousUrl === undefined) delete process.env.BRIDGECLIP_ZERNIO_API_URL
+    else process.env.BRIDGECLIP_ZERNIO_API_URL = previousUrl
+    await mock.close(); cleanup()
+  }
+})
+
+test('requeued posts cannot also retry, across restarts and overlapping recovery requests', async () => {
+  const { dir, cleanup } = tempDir('bridgeclip-recovery-ownership-')
+  const posting = createPostingMock()
+  const mock = await createMockZernio({ apiKey: KEY, extraRoutes: posting.routes })
+  const previousUrl = process.env.BRIDGECLIP_ZERNIO_API_URL
+  process.env.BRIDGECLIP_ZERNIO_API_URL = mock.apiUrl
+  const source = "export * as automations from './src/main/automations'; export * as posts from './src/main/zernio/posts'; export * as settings from './src/main/settings-store'"
+  const mocks = { electron: fakeElectron(dir).electron }
+  const releases = []
+  function holdRequest(method, postId) {
+    const route = posting.routes.find((route) => route.method === method && route.path instanceof RegExp && route.path.test(`/api/v1/posts/${postId}${method === 'POST' ? '/retry' : ''}`))
+    let release, entered
+    const waiting = new Promise((resolve) => { release = resolve })
+    const started = new Promise((resolve) => { entered = resolve })
+    releases.push(release)
+    mock.route({ method, path: `/api/v1/posts/${postId}${method === 'POST' ? '/retry' : ''}`, handler: async (ctx) => {
+      entered(); await waiting; return route.handler({ ...ctx, params: [postId] })
+    } })
+    return { started, release }
+  }
+  try {
+    const library = path.join(dir, 'library')
+    const clip = makeClip(path.join(library, 'first.mp4'))
+    let main = loadMain(source, mocks)
+    main.settings.replaceApiKey('zernioApiKey', KEY)
+    main.settings.savePublicSettings({ outputDirectory: library, pythonPath: 'python3' })
+    const [profile] = mock.state.profiles
+    const youtube = mock.addAccount('youtube', profile._id)
+    const [bank] = main.automations.createAutomation('Recovery')
+    await main.automations.updateAutomation(bank.id, { name: bank.name, enabled: false, profileId: profile._id,
+      metadataMode: 'manual', timezone: 'UTC', times: [], youtubeVisibility: 'unlisted', youtubeMadeForKids: false,
+      accounts: [{ platform: 'youtube', accountId: youtube._id }] })
+    await main.automations.addAutomationContent(bank.id, [clip])
+    posting.state.nextPublish.youtube = { status: 'failed', errorMessage: 'Unavailable' }
+    const [failed] = await main.automations.runAutomation(bank.id)
+    const item = failed.content[0]
+    assert.equal(item.status, 'needs_review')
+    const get = holdRequest('GET', item.postId)
+    const recovering = main.automations.reviewAutomationContent(bank.id, item.id, true)
+    await get.started
+    await assert.rejects(main.posts.retryPost(item.postId), /already in progress/)
+    assert.throws(() => main.posts.dismissPost(item.postId), /already in progress/)
+    get.release()
+    assert.equal((await recovering).outcome, 'queued')
+    main = loadMain(source, mocks)
+    assert.equal(main.posts.listPosts().find((post) => post.id === item.postId).automationRequeued, true)
+    await assert.rejects(main.posts.retryPost(item.postId), /returned to its automation queue/)
+    assert.equal(mock.requestsTo('POST', `/api/v1/posts/${item.postId}/retry`).length, 0)
+    assert.equal((await main.automations.runAutomation(bank.id))[0].content[0].status, 'posted')
+    assert.equal([...posting.state.posts.values()].filter((post) => post.status === 'published').length, 1)
+
+    // In the opposite ordering, a retry already in flight owns the post.
+    await main.automations.addAutomationContent(bank.id, [makeClip(path.join(library, 'second.mp4'), 'red')])
+    posting.state.nextPublish.youtube = { status: 'failed', errorMessage: 'Unavailable' }
+    const second = (await main.automations.runAutomation(bank.id))[0].content[1]
+    const retry = holdRequest('POST', second.postId)
+    const retrying = main.posts.retryPost(second.postId)
+    await retry.started
+    await assert.rejects(main.automations.reviewAutomationContent(bank.id, second.id, true), /already in progress/)
+    assert.equal(main.automations.listAutomations()[0].content[1].status, 'needs_review')
+    retry.release(); await retrying
+    assert.equal((await main.automations.reviewAutomationContent(bank.id, second.id, true)).outcome, 'submitted')
+    const creates = posting.state.creates.length
+    await main.automations.runAutomation(bank.id)
+    assert.equal(posting.state.creates.length, creates, 'a successful old retry cannot produce a fresh automation post')
+    assert.equal([...posting.state.posts.values()].filter((post) => post.status === 'published').length, 2)
+  } finally {
+    releases.forEach((release) => release())
     if (previousUrl === undefined) delete process.env.BRIDGECLIP_ZERNIO_API_URL
     else process.env.BRIDGECLIP_ZERNIO_API_URL = previousUrl
     await mock.close(); cleanup()

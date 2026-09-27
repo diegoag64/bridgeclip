@@ -46,11 +46,13 @@ export function parsePostRecord(value: unknown): PostRecord | null {
   const r = value as Record<string, unknown>
   const createdAt = iso(r.createdAt)
   const uploadedAt = iso(r.uploadedAt)
+  if (r.automationRequeued !== undefined && typeof r.automationRequeued !== 'boolean') return null
   if (!isZernioId(r.id) || typeof r.clipPath !== 'string' || !STATUSES.includes(r.status as PostStatus) || !createdAt || !uploadedAt) return null
   const targets = Array.isArray(r.targets) ? r.targets.map(parseTarget) : []
   if (targets.length === 0 || targets.some((t) => !t)) return null
   return {
     id: r.id,
+    ...(r.automationRequeued === true ? { automationRequeued: true } : {}),
     clipPath: r.clipPath.slice(0, 4096),
     clipTitle: text(r.clipTitle, 500) ?? '',
     targets: targets as PostRecordTarget[],

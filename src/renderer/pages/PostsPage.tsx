@@ -258,8 +258,8 @@ function PostRow({ post }: { post: PostRecord }): React.JSX.Element {
   } else if (post.status === 'failed' || post.status === 'partial') {
     actions = (
       <>
-        <Button size="sm" icon={<RotateCcw className="h-3.5 w-3.5" />} loading={busy === 'retry'} disabled={Boolean(busy)} onClick={() => void retry(post.id)}>
-          Retry
+        <Button size="sm" icon={<RotateCcw className="h-3.5 w-3.5" />} loading={busy === 'retry'} disabled={Boolean(busy) || post.automationRequeued} title={post.automationRequeued ? 'This clip was returned to its automation queue. Run it from Automations.' : undefined} onClick={() => void retry(post.id)}>
+          {post.automationRequeued ? 'Returned to queue' : 'Retry'}
         </Button>
         <Button size="sm" variant="ghost" iconOnly aria-label={`Remove “${post.clipTitle}” from the list`} title="Remove from list" disabled={Boolean(busy)} onClick={() => void dismiss(post.id)} icon={<X className="h-3.5 w-3.5" />} />
       </>

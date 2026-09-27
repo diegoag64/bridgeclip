@@ -538,7 +538,9 @@ export async function reviewAutomationContent(id: unknown, contentId: unknown, r
   const previous = { ...item }
   const previousReview = reviews.get(item.id)
   try {
-    const post = item.postId ? await inspectAutomationPost(item.postId) : null
+    const post = item.postId ? await inspectAutomationPost(item.postId, {
+      clipPath: join(bankPath(workspace, automation.id), item.fileName), clipTitle: item.title, addedAt: item.addedAt
+    }, returnToQueue) : null
     if (currentWorkspace() !== workspace || !cached.includes(automation)) throw new Error('The Zernio workspace changed. Please try again.')
     let outcome: AutomationReviewResult['outcome'] = 'held'
     let message = 'This clip has no linked Zernio post. Use Return to queue after confirming it was not published.'

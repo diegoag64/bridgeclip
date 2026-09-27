@@ -427,6 +427,8 @@ test('add library clips, review TikTok, and run a mixed-platform automation', { 
   await recoveryPage.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: /Automations/ }).click()
   await recoveryPage.getByRole('navigation', { name: 'Automations', exact: true }).getByRole('button', { name: 'BridgeMind', exact: true }).click()
   const held = recoveryPage.getByRole('region', { name: 'Held clips', exact: true })
+  // Removing local post history must not strand its held automation clip.
+  await recoveryPage.evaluate((id) => window.bridgeclip.zernio.posts.dismiss(id), publishedClip.postId)
   await held.getByRole('button', { name: 'Refresh post status', exact: true }).click()
   await recoveryPage.getByText('Zernio already has this post published or in progress. The clip was moved to Submitted.', { exact: true }).waitFor()
   assert.equal(await held.getByRole('button', { name: 'Return to queue', exact: true }).count(), 1)

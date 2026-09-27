@@ -395,6 +395,8 @@ export interface PostRecordTarget {
 
 /** One post in the local history (userData/zernio-posts.json). Nothing secret. */
 export interface PostRecord {
+  /** Its failed automation clip was returned to the queue; only the new attempt may post. */
+  automationRequeued?: boolean
   id: string
   clipPath: string
   clipTitle: string

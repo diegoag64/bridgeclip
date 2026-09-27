@@ -20,9 +20,9 @@ import {
   parseTikTokCreatorInfo,
   tiktokOptionsError
 } from './posts-payload'
-import { PostsStore } from './posts-store'
+import { parsePostRecord, PostsStore } from './posts-store'
 import { quarantineUnbound, readableCache, workspaceId } from './workspace-cache'
-import { isPostableAccount, isZernioId, type ZernioAccount } from '../../shared/zernio'
+import { isPostableAccount, isZernioId, isZernioPlatform, type ZernioAccount } from '../../shared/zernio'
 import {
   SCHEDULE_SAFETY_MARGIN_MS,
   TIKTOK_LEGAL_LINKS,
@@ -537,16 +537,15 @@ export function listPosts(): PostRecord[] {
   return posts().list()
 }
 
-// A scheduled post must not be deleted and rescheduled at the same time. Both
-// provider requests can succeed in either order, but their local saves would
-// otherwise race and could make a cancelled post appear scheduled again.
-const changingScheduledPosts = new Set<string>()
+// Serialize post changes, including retries and automation recovery. A retry
+// must not publish the old post while recovery authorizes a new attempt.
+const changingPosts = new Set<string>()
 
-async function changeScheduledPost<T>(id: string, change: () => Promise<T>): Promise<T> {
-  if (changingScheduledPosts.has(id)) throw new Error('A change to this post is already in progress. Try again.')
-  changingScheduledPosts.add(id)
+async function changePost<T>(id: string, change: () => Promise<T>): Promise<T> {
+  if (changingPosts.has(id)) throw new Error('A change to this post is already in progress. Try again.')
+  changingPosts.add(id)
   try { return await change() }
-  finally { changingScheduledPosts.delete(id) }
+  finally { changingPosts.delete(id) }
 }
 
 function requirePost(id: unknown): PostRecord {
@@ -627,7 +626,7 @@ export async function cancelPost(id: unknown): Promise<PostRecord[]> {
   const generation = workspaceGeneration
   const post = requirePost(id)
   if (post.status !== 'scheduled') throw new Error('Only scheduled posts can be cancelled.')
-  return changeScheduledPost(post.id, async () => {
+  return changePost(post.id, async () => {
     const client = getClient()
     try {
       await client.deletePost(post.id)
@@ -658,7 +657,7 @@ export async function reschedulePost(id: unknown, scheduledFor: unknown, timezon
   const generation = workspaceGeneration
   const post = requirePost(id)
   if (post.status !== 'scheduled') throw new Error('Only scheduled posts can be rescheduled.')
-  return changeScheduledPost(post.id, async () => {
+  return changePost(post.id, async () => {
     if (typeof scheduledFor !== 'string' || scheduledFor.length > 40 || !isValidTimeZone(timezone)) throw new Error('Choose a valid date and time.')
     const at = Date.parse(scheduledFor)
     const error = scheduleError(at, Date.now(), Date.parse(post.uploadedAt))
@@ -673,38 +672,72 @@ export async function reschedulePost(id: unknown, scheduledFor: unknown, timezon
 export async function retryPost(id: unknown): Promise<PostRecord[]> {
   const generation = workspaceGeneration
   const post = requirePost(id)
-  if (post.status !== 'failed' && post.status !== 'partial') throw new Error('Only failed posts can be retried.')
-  if (Date.now() > Date.parse(post.uploadedAt) + UPLOAD_RETENTION_MS) {
-    throw new Error('Zernio keeps uploads for 7 days, and this one has expired. Post the clip again from the Library.')
-  }
-  const { post: remote, error } = await getClient().retryPost(post.id, PUBLISH_TIMEOUT_MS)
-  assertWorkspace(generation)
-  return posts().save(applyZernioPost(post, remote, { error, now: new Date().toISOString() }))
+  return changePost(post.id, async () => {
+    if (post.automationRequeued) throw new Error('This clip was returned to its automation queue. Run it from Automations instead.')
+    if (post.status !== 'failed' && post.status !== 'partial') throw new Error('Only failed posts can be retried.')
+    if (Date.now() > Date.parse(post.uploadedAt) + UPLOAD_RETENTION_MS) {
+      throw new Error('Zernio keeps uploads for 7 days, and this one has expired. Post the clip again from the Library.')
+    }
+    const { post: remote, error } = await getClient().retryPost(post.id, PUBLISH_TIMEOUT_MS)
+    assertWorkspace(generation)
+    return posts().save(applyZernioPost(post, remote, { error, now: new Date().toISOString() }))
+  })
+}
+
+/** Rebuild missing history from identified remote targets, never today's automation account selection. */
+function restoreAutomationPost(id: string, remote: Record<string, unknown>, clip: { clipPath: string; clipTitle: string; addedAt: string }): PostRecord | null {
+  if ((remote._id ?? remote.id) !== id || !Array.isArray(remote.platforms) || !remote.platforms.length || remote.platforms.length > 20) return null
+  const seen = new Set<string>()
+  const targets = remote.platforms.map((value) => {
+    if (!value || typeof value !== 'object') return null
+    const entry = value as Record<string, unknown>
+    const account = entry.accountId
+    const accountId = account && typeof account === 'object' ? (account as Record<string, unknown>)._id ?? (account as Record<string, unknown>).id : account
+    if (!isZernioId(accountId) || !isZernioPlatform(entry.platform) || seen.has(accountId)) return null
+    seen.add(accountId)
+    return { accountId, platform: entry.platform, handle: null, status: 'pending', error: null, url: null, inbox: false }
+  })
+  if (targets.some((target) => !target)) return null
+  // The clip was added before its upload. Use that conservative date rather
+  // than inventing a fresh upload lifetime for a restored history entry.
+  return parsePostRecord({ id, clipPath: clip.clipPath, clipTitle: clip.clipTitle, targets,
+    status: 'draft', error: null, createdAt: clip.addedAt, uploadedAt: clip.addedAt, refreshedAt: null, scheduledFor: null, timezone: null })
 }
 
 /** Fresh evidence for returning an automation clip; never starts a retry. */
-export async function inspectAutomationPost(id: string): Promise<{ submitted: boolean; fullyFailed: boolean }> {
+export async function inspectAutomationPost(id: string, clip: { clipPath: string; clipTitle: string; addedAt: string }, returnToQueue: boolean): Promise<{ submitted: boolean; fullyFailed: boolean }> {
+  if (!isZernioId(id)) throw new Error('Invalid automation post.')
   const generation = workspaceGeneration
-  const previous = requirePost(id)
-  const remote = await getClient().getPost(id)
-  assertWorkspace(generation)
-  const current = requirePost(id)
-  if (JSON.stringify(current) !== JSON.stringify(previous)) throw new Error('The post changed while checking. Refresh its status again.')
-  const record = applyZernioPost(current, remote, { now: new Date().toISOString() })
-  if (record.id !== id) throw new Error('Zernio returned a different post. Please check Posts.')
-  posts().save(record)
-  // Missing fields must not inherit an old failed status and authorize a duplicate.
-  const fresh = applyZernioPost({ ...current, status: 'draft', targets: current.targets.map((target) => ({ ...target, status: 'pending' })) }, remote)
-  const complete = Array.isArray(remote.platforms) && remote.platforms.length === current.targets.length && current.targets.length > 0
-  return {
-    submitted: fresh.status === 'scheduled' || fresh.status === 'publishing' || (fresh.status === 'published' && complete && fresh.targets.every((target) => target.status === 'published')),
-    fullyFailed: fresh.status === 'failed' && complete && fresh.targets.every((target) => target.status === 'failed' && !target.url)
-  }
+  return changePost(id, async () => {
+    const previous = posts().get(id)
+    const remote = await getClient().getPost(id)
+    assertWorkspace(generation)
+    const current = posts().get(id)
+    if (JSON.stringify(current) !== JSON.stringify(previous)) throw new Error('The post changed while checking. Refresh its status again.')
+    const base = current ?? restoreAutomationPost(id, remote, clip)
+    if (!base) return { submitted: false, fullyFailed: false }
+    const record = applyZernioPost(base, remote, { now: new Date().toISOString() })
+    if (record.id !== id) throw new Error('Zernio returned a different post. Please check Posts.')
+    // Missing fields must not inherit an old failed status and authorize a duplicate.
+    const fresh = applyZernioPost({ ...base, status: 'draft', targets: base.targets.map((target) => ({ ...target, status: 'pending' })) }, remote)
+    const complete = Array.isArray(remote.platforms) && remote.platforms.length === base.targets.length && base.targets.length > 0
+    const result = {
+      submitted: fresh.status === 'scheduled' || fresh.status === 'publishing' || (fresh.status === 'published' && complete && fresh.targets.every((target) => target.status === 'published')),
+      fullyFailed: fresh.status === 'failed' && complete && fresh.targets.every((target) => target.status === 'failed' && !target.url)
+    }
+    // Persist the retry block BEFORE releasing this post lock or allowing the
+    // bank to create a new attempt. A bank-save failure leaves a safe, held clip
+    // which can be returned to the queue again; the old post stays blocked.
+    if (returnToQueue && result.fullyFailed) record.automationRequeued = true
+    posts().save(record)
+    return result
+  })
 }
 
 /** Removes a finished post from the local list; Zernio keeps its own record. */
 export function dismissPost(id: unknown): PostRecord[] {
   const post = requirePost(id)
+  if (changingPosts.has(post.id)) throw new Error('A change to this post is already in progress. Try again.')
   if (post.status === 'scheduled' || post.status === 'publishing') throw new Error('Cancel the post before removing it.')
   return posts().remove(post.id)
 }
