@@ -267,6 +267,8 @@ def validate_candidate(c, duration, transcript_count=100000):
                 raise ValueError('Invalid crop')
     if not number(c['video_speed'], 1, 2) or type(c['captions']) is not bool:
         raise ValueError('Invalid export settings')
+    if c.get('caption_y') is not None and not number(c['caption_y'], .1, .9):
+        raise ValueError('Invalid caption position')
     if c.get('status', 'refining') not in ('refining', 'ready', 'baked', 'discarded'):
         raise ValueError('Invalid clip status')
     suppressed = c.get('caption_suppression_ranges', [])
@@ -451,6 +453,7 @@ async def run_editor(config, progress=None):
                 start_time_ms=a, end_time_ms=b, source_width=project['width'], source_height=project['height'],
                 transcript_segments=render_transcript, include_captions=c['captions'], caption_style=get_caption_preset(c['caption_preset']),
                 caption_suppression_ranges_ms=[tuple(interval) for interval in c.get('caption_suppression_ranges', [])],
+                caption_y=c.get('caption_y'),
                 apply_padding=False, aspect_ratio=project['aspect_ratio'], pacing='natural', video_speed=c['video_speed'],
                 manual_ranges_ms=[tuple(interval) for interval in c['ranges']], manual_plan=manual_plan(project, c)))
             os.replace(result.output_path, path)

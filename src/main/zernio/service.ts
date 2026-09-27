@@ -30,7 +30,8 @@ import {
   type ZernioPendingConnect,
   type ZernioPlatform,
   type ZernioProfile,
-  type ZernioSyncResult
+  type ZernioSyncResult,
+  type ZernioStatusCheck
 } from '../../shared/zernio'
 
 type GetWindow = () => BrowserWindow | null
@@ -177,6 +178,15 @@ function removeCachedAccount(accountId: string): void {
 }
 
 // ---- Overview ---------------------------------------------------------------
+
+export async function checkZernioStatus(): Promise<ZernioStatusCheck> {
+  const startedIn = generation
+  const key = loadSettings().zernioApiKey
+  // Do not substitute cached health or swallow failures for an explicit check.
+  const health = await getClient().getAccountsHealth()
+  if (startedIn !== generation || loadSettings().zernioApiKey !== key) throw new Error('The Zernio workspace changed. Please check again.')
+  return { checkedAt: Date.now(), accounts: Array.from(health, ([accountId, status]) => ({ accountId, ...status })) }
+}
 
 export async function getZernioOverview(): Promise<ZernioOverview> {
   const startedIn = generation

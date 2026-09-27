@@ -275,3 +275,36 @@ class TestRenderingIntegration:
     def test_captions_unchanged_without_faces(self, service, tmp_path):
         plan = ClipLayoutPlan([ShotLayout(0, 10_000, LayoutType.SCREEN)], SRC_W, SRC_H)
         assert self._captions(service, tmp_path, plan) == {("2", "540", "1560")}
+
+
+@pytest.mark.parametrize('landscape', [False, True])
+@pytest.mark.parametrize('y', [.2, .8])
+def test_manual_caption_position_pins_all_layers_and_burns_at_selected_height(tmp_path, landscape, y):
+    """Exercise real libass output in both shapes, not just generated tags."""
+    import shutil
+    import subprocess
+    import numpy as np
+    if not shutil.which('ffmpeg'):
+        pytest.skip('FFmpeg is required')
+    w, h = (640, 360) if landscape else (360, 640)
+    renderer = RenderingService()
+    style = get_caption_preset('paper')
+    style.font_size = 40
+    shot = talking_head(Box(.4, .2, .2, .4), 2000)
+    plan = plan_with(shot, shot.people)
+    request = RenderRequest(video_path='unused.mp4', output_path=str(tmp_path / 'out.mp4'),
+        start_time_ms=1000, end_time_ms=3000, source_width=SRC_W, source_height=SRC_H,
+        transcript_segments=[TranscriptSegment(1000, 3000, 'Hello world', words=[
+            TranscriptWord('Hello', 1000, 2000), TranscriptWord('world', 2000, 3000)])],
+        caption_style=style, caption_y=y)
+    ass = asyncio.run(renderer._generate_captions(request, w, h, 1000, TimeMap([(0, 2000)]), plan, landscape, plan))
+    text = open(ass).read()
+    positions = POS.findall(text)
+    assert positions and set(positions) == {('5', str(w // 2), str(round(h * y)))}
+    raw = subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', f'color=black:s={w}x{h}:d=1',
+        '-vf', f"ass='{ass}'", '-ss', '0.5', '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'],
+        capture_output=True, check=True, timeout=30)
+    frame = np.frombuffer(raw.stdout, dtype=np.uint8).reshape(h, w, 3)
+    rows = np.nonzero(frame.max(axis=2) > 100)[0]
+    assert len(rows) > 20
+    assert abs((rows.min() + rows.max()) / 2 / h - y) < .06

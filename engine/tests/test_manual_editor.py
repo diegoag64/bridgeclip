@@ -243,7 +243,7 @@ def test_manual_render_never_replans_or_restores_user_cuts(monkeypatch, tmp_path
 def test_export_appends_library_clip_and_preserves_source_and_previous_exports(monkeypatch, tmp_path):
     from dataclasses import asdict
     from clip_engine.services.rendering_service import RenderResult
-    c = {**candidate(), 'status': 'ready', 'caption_edits': [{'segment': 1, 'text': 'The corrected event happened.'}], 'caption_suppression_ranges': [[2000, 4000]]}
+    c = {**candidate(), 'status': 'ready', 'caption_edits': [{'segment': 1, 'text': 'The corrected event happened.'}], 'caption_suppression_ranges': [[2000, 4000]], 'caption_y': .25}
     project = {'version': 1, 'revision': 3, 'width': 1920, 'height': 1080, 'duration_ms': 12000, 'aspect_ratio': '9:16', 'candidates': [c],
         'transcript': [{'start_ms': s.start_time_ms, 'end_ms': s.end_time_ms, 'text': s.text} for s in transcript()]}
     (tmp_path / 'editor-project.json').write_text(json.dumps(project))
@@ -255,6 +255,7 @@ def test_export_appends_library_clip_and_preserves_source_and_previous_exports(m
         assert request.apply_padding is False and request.pacing == 'natural'
         assert request.manual_ranges_ms == [(1000, 5000), (7000, 10000)] and request.include_captions
         assert request.caption_suppression_ranges_ms == [(2000, 4000)]
+        assert request.caption_y == .25
         assert request.transcript_segments[1].text == 'The corrected event happened.'
         assert [w.word for w in request.transcript_segments[1].words] == ['The', 'corrected', 'event', 'happened.']
         Path(request.output_path).write_bytes(b'final clip')
@@ -483,3 +484,9 @@ Dialogue: 0,0:00:00.00,0:01:00.00,Default,CAPTIONS
             assert frame[15, 20, 0] > 200 and frame[15, 20, 1] > 200 and frame[15, 20, 2] < 50
             caption_pixels = np.count_nonzero(frame[40:, :, :].max(axis=2) > 100)
             assert (caption_pixels == 0) if hidden else (caption_pixels > 5), (i, hidden, caption_pixels)
+
+
+@pytest.mark.parametrize('y', [True, '0.5', float('nan'), float('inf'), .09, .91, {}])
+def test_invalid_caption_position_is_rejected(y):
+    with pytest.raises(ValueError, match='caption position'):
+        validate_candidate({**candidate(), 'caption_y': y}, 12000)

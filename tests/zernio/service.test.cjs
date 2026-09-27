@@ -425,6 +425,47 @@ test('sync: caches the overview for offline use and reports why data is stale', 
   assert.equal(cleaned.accounts[0].integrationLane, null)
 })
 
+test('status check: reads fresh health, never posts or substitutes cached success', async (t) => {
+  const { service, mock } = await setup(t)
+  const account = mock.addAccount('youtube', mock.state.profiles[0]._id)
+  await service.syncZernioAccounts()
+  const before = mock.state.requests.length
+  const healthy = await service.checkZernioStatus()
+  assert.equal(healthy.accounts[0].accountId, account._id)
+  assert.equal(healthy.accounts[0].health, 'healthy')
+  assert.equal(healthy.accounts[0].canPost, true)
+  assert.ok(healthy.checkedAt <= Date.now() && healthy.checkedAt > Date.now() - 5000)
+  mock.setHealth(account._id, { status: 'error', canPost: false, issues: ['Account temporarily rate-limited'] })
+  const blocked = await service.checkZernioStatus()
+  assert.equal(blocked.accounts[0].canPost, false)
+  assert.equal(blocked.accounts[0].issue, 'Account temporarily rate-limited')
+  mock.state.healthFails = true
+  await assert.rejects(service.checkZernioStatus())
+  assert.ok(mock.state.requests.slice(before).every((request) => request.method === 'GET' && request.path === '/api/v1/accounts/health'))
+})
+
+test('status check: rejects a result from the previous workspace', async (t) => {
+  const { service, mock } = await setup(t)
+  mock.addAccount('youtube', mock.state.profiles[0]._id)
+  const realFetch = globalThis.fetch
+  let release
+  let started
+  const pending = new Promise((resolve) => { started = resolve })
+  const gate = new Promise((resolve) => { release = resolve })
+  globalThis.fetch = async (...args) => {
+    const response = await realFetch(...args)
+    if (String(args[0]).includes('/accounts/health')) { started(); await gate }
+    return response
+  }
+  t.after(() => { globalThis.fetch = realFetch; release() })
+  const check = service.checkZernioStatus()
+  const rejected = assert.rejects(check, /workspace changed/)
+  await pending
+  service.replaceApiKey('zernioApiKey', 'new-workspace-test-key')
+  release()
+  await rejected
+})
+
 test('sync: a rejected key is an auth error; no key means no cache', async (t) => {
   const { service } = await setup(t, { key: 'wrong-key-000' })
   const result = await service.syncZernioAccounts()

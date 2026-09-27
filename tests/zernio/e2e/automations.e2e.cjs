@@ -89,6 +89,31 @@ test('add library clips, review TikTok, and run a mixed-platform automation', { 
   await page.getByRole('checkbox', { name: /@channel/ }).check()
   await page.getByRole('checkbox', { name: /@creator/ }).check()
   await page.getByRole('checkbox', { name: /@tiktok-creator/ }).check()
+  const healthRequests = mock.state.requests.length
+  const checkStatus = page.getByRole('button', { name: 'Check Zernio status', exact: true })
+  await checkStatus.click()
+  const statusCheck = page.getByRole('status', { name: 'Zernio status check' })
+  await statusCheck.getByText('Upload hold: unconfirmed.', { exact: true }).waitFor()
+  assert.equal(await statusCheck.getByText('Connection and permissions look good.', { exact: true }).count(), 3)
+  assert.equal(posting.state.uploads.length, 0)
+  assert.ok(mock.state.requests.slice(healthRequests).every((request) => request.method === 'GET'), 'checking status never creates a post or upload')
+  const youtubeAccount = mock.state.accounts.find((account) => account.platform === 'youtube')
+  mock.setHealth(youtubeAccount._id, { status: 'error', canPost: false, issues: ['Account temporarily rate-limited'] })
+  await checkStatus.click()
+  await statusCheck.getByText('Account temporarily rate-limited', { exact: true }).waitFor()
+  mock.state.healthFails = true
+  await checkStatus.click()
+  await page.getByRole('alert').filter({ hasText: 'Status check failed:' }).waitFor()
+  assert.equal(await statusCheck.count(), 0, 'a failed refresh removes the previous result')
+  mock.state.healthFails = false
+  mock.setHealth(youtubeAccount._id, { status: 'healthy', canPost: true, issues: [] })
+  await checkStatus.click()
+  await statusCheck.getByText('Upload hold: unconfirmed.', { exact: true }).waitFor()
+  await page.getByRole('checkbox', { name: /@tiktok-creator/ }).uncheck()
+  assert.equal(await statusCheck.count(), 0, 'changing target accounts clears the result')
+  await page.getByRole('checkbox', { name: /@tiktok-creator/ }).check()
+  assert.equal(await page.getByRole('switch', { name: 'Write captions with AI' }).isVisible(), false)
+  await page.getByText('More settings', { exact: true }).click()
   assert.equal(await page.getByRole('switch', { name: 'Write captions with AI' }).getAttribute('aria-checked'), 'false')
   await page.getByRole('radiogroup', { name: 'YouTube visibility' }).getByRole('radio', { name: 'Unlisted' }).click()
   await page.locator('input[type="time"]').fill('23:59')
@@ -136,6 +161,39 @@ test('add library clips, review TikTok, and run a mixed-platform automation', { 
   await page.getByRole('menuitem', { name: 'Edit', exact: true }).click()
   await page.getByRole('textbox', { name: 'Title', exact: true }).waitFor()
   await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+  // Exercise the real IPC boundary without opening the developer's Finder.
+  await app.evaluate(({ shell }) => {
+    globalThis.revealedBankFiles = []
+    shell.showItemInFolder = (file) => { globalThis.revealedBankFiles.push(file) }
+  })
+  const revealLabel = process.platform === 'darwin' ? 'Show in Finder' : 'Show in folder'
+  await page.getByRole('button', { name: 'Actions for First library clip', exact: true }).click()
+  await page.getByRole('menuitem', { name: revealLabel, exact: true }).click()
+  const revealed = await app.evaluate(async () => {
+    for (let attempt = 0; attempt < 50 && !globalThis.revealedBankFiles.length; attempt++) await new Promise((resolve) => setTimeout(resolve, 20))
+    return globalThis.revealedBankFiles
+  })
+  assert.equal(revealed.length, 1)
+  const bankFile = revealed[0]
+  assert.ok(bankFile.startsWith(path.join(work, 'userData', 'automation-bank') + path.sep), 'reveals the saved bank copy')
+  assert.deepEqual(fs.readFileSync(bankFile), fs.readFileSync(clips[0]))
+  const bankIds = await page.evaluate(async () => {
+    const [automation] = await window.bridgeclip.automations.list()
+    return { id: automation.id, contentId: automation.content.find((item) => item.title === 'First library clip').id }
+  })
+  await assert.rejects(page.evaluate(({ id }) => window.bridgeclip.automations.showInFolder(id, '../unrecorded.mp4'), bankIds), /Clip not found/)
+  fs.renameSync(bankFile, `${bankFile}.saved`)
+  try {
+    await page.getByRole('button', { name: 'Actions for First library clip', exact: true }).click()
+    await page.getByRole('menuitem', { name: revealLabel, exact: true }).click()
+    await page.getByText('This clip’s video file is no longer available.', { exact: true }).waitFor()
+    fs.symlinkSync(clips[0], bankFile)
+    assert.equal(await page.evaluate(({ id, contentId }) => window.bridgeclip.automations.showInFolder(id, contentId), bankIds), false, 'does not reveal a substituted symlink')
+    assert.equal(await app.evaluate(() => globalThis.revealedBankFiles.length), 1)
+  } finally {
+    fs.rmSync(bankFile, { force: true })
+    fs.renameSync(`${bankFile}.saved`, bankFile)
+  }
   await page.getByRole('button', { name: 'View First library clip in Library', exact: true }).click()
   await page.getByRole('heading', { name: 'Automation library run', exact: true }).waitFor()
   await page.getByText('From content bank · Clip 1', { exact: true }).waitFor()
@@ -294,6 +352,15 @@ test('add library clips, review TikTok, and run a mixed-platform automation', { 
   await page.reload()
   await page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: /Automations/ }).click()
   await page.getByText(/Metadata enhancement failed:/).first().waitFor()
+  await page.getByRole('button', { name: 'Acknowledge all warnings', exact: true }).click()
+  await page.getByText('Warnings acknowledged across all automations. Held clips remain held.', { exact: true }).waitFor()
+  assert.equal(await page.getByText(/Metadata enhancement failed:/).count(), 0)
+  assert.equal(await page.getByRole('button', { name: 'Acknowledge all warnings', exact: true }).count(), 0)
+  assert.equal(posting.state.creates.length, 1, 'acknowledging never posts a clip')
+  await page.reload()
+  await page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: /Automations/ }).click()
+  await page.getByRole('heading', { name: 'Content bank', exact: true }).waitFor()
+  assert.equal(await page.getByText(/Metadata enhancement failed:/).count(), 0, 'acknowledgement survives a reload')
   await page.getByRole('button', { name: 'Review draft', exact: true }).last().click()
   const guidedReview = page.getByRole('dialog', { name: 'Review enhanced metadata' })
   await guidedReview.getByText('Context & research · complete', { exact: false }).click()
@@ -328,7 +395,51 @@ test('add library clips, review TikTok, and run a mixed-platform automation', { 
   assert.equal(enhancementInputs.at(-1).enhancementGuidance, linkedGuidance)
   assert.equal(enhancementInputs.at(-1).sourceContext.url, 'https://www.youtube.com/watch?v=hqP9fivmBqI')
   assert.equal(posting.state.creates.length, 1)
+  // The per-automation action clears the header flag while retaining its message.
+  await page.evaluate(async () => {
+    const [automation] = await window.bridgeclip.automations.create('Warning history')
+    await window.bridgeclip.automations.run(automation.id) // Empty bank: no upload or post.
+  })
+  await page.reload()
+  await page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: /Automations/ }).click()
+  await page.getByRole('navigation', { name: 'Automations', exact: true }).getByRole('button', { name: 'Warning history', exact: true }).click()
+  await page.getByText('Last run failed · View details', { exact: true }).waitFor()
+  await page.getByRole('button', { name: 'Acknowledge warnings', exact: true }).click()
+  await page.getByText('Previous run issue · Acknowledged', { exact: true }).click()
+  await page.getByText('No queued clips are available.', { exact: true }).waitFor()
+  assert.equal(await page.getByRole('button', { name: 'Acknowledge warnings', exact: true }).count(), 0)
+  assert.equal(posting.state.creates.length, 1)
 
-
-
+  // Reproduce a stale held post that later published, alongside an unlinked held clip.
+  await session.close(); session = null
+  const userData = path.join(work, 'userData')
+  const bankPath = path.join(userData, fs.readdirSync(userData).find((name) => /^automations-.*\.json$/.test(name)))
+  const banks = JSON.parse(fs.readFileSync(bankPath, 'utf8'))
+  const recoveryBank = banks.automations.find((item) => item.name === 'BridgeMind')
+  recoveryBank.enabled = false
+  const [publishedClip, unlinkedClip] = recoveryBank.content
+  assert.ok(publishedClip.postId)
+  Object.assign(publishedClip, { status: 'needs_review', error: 'All platforms failed', warningsAcknowledged: true })
+  Object.assign(unlinkedClip, { status: 'needs_review', postId: null, error: 'Rate limited', warningsAcknowledged: true })
+  fs.writeFileSync(bankPath, JSON.stringify(banks))
+  session = await launchApp({ appDir, userDataDir: userData, mock })
+  const recoveryPage = session.page
+  await recoveryPage.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: /Automations/ }).click()
+  await recoveryPage.getByRole('navigation', { name: 'Automations', exact: true }).getByRole('button', { name: 'BridgeMind', exact: true }).click()
+  const held = recoveryPage.getByRole('region', { name: 'Held clips', exact: true })
+  await held.getByRole('button', { name: 'Refresh post status', exact: true }).click()
+  await recoveryPage.getByText('Zernio already has this post published or in progress. The clip was moved to Submitted.', { exact: true }).waitFor()
+  assert.equal(await held.getByRole('button', { name: 'Return to queue', exact: true }).count(), 1)
+  await held.getByRole('button', { name: 'Return to queue', exact: true }).click()
+  const returnDialog = recoveryPage.getByRole('alertdialog', { name: 'Return this clip to the queue?' })
+  await returnDialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  assert.equal(await held.getByRole('button', { name: 'Return to queue', exact: true }).count(), 1)
+  await held.getByRole('button', { name: 'Return to queue', exact: true }).click()
+  await returnDialog.getByRole('button', { name: 'Return to queue', exact: true }).click()
+  await recoveryPage.getByText('Clip returned to the queue.', { exact: true }).waitFor()
+  assert.equal(await held.count(), 0)
+  const recoveredBank = await recoveryPage.evaluate(async (id) => (await window.bridgeclip.automations.list()).find((item) => item.id === id), recoveryBank.id)
+  assert.equal(recoveredBank.content[0].status, 'posted')
+  assert.equal(recoveredBank.content[1].status, 'queued')
+  assert.equal(posting.state.creates.length, 1, 'recovering held clips never submits another post')
 })

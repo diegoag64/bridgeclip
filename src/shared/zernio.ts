@@ -75,6 +75,12 @@ export interface ZernioOverview {
   syncedAt?: number
 }
 
+/** A fresh connection/permission check, not confirmation that an upload hold has cleared. */
+export interface ZernioStatusCheck {
+  checkedAt: number
+  accounts: (Pick<ZernioAccount, 'health' | 'needsReconnect' | 'issue' | 'canPost'> & { accountId: string })[]
+}
+
 export interface ZernioConnectResult {
   platform: string
   success: boolean

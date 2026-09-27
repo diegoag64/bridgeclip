@@ -1,5 +1,5 @@
 import type { LibraryClipTarget } from '../shared/library-posting'
-import { app } from 'electron'
+import { app, shell } from 'electron'
 import { createHash, randomUUID } from 'crypto'
 import { createWriteStream, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'fs'
 import { open, unlink } from 'fs/promises'
@@ -12,14 +12,15 @@ import { loadSettings } from './settings-store'
 import { assertMediaPath, authorizeMedia, isWithinDirectory, openAuthorizedMedia } from './security'
 import { getJobOutput } from './file-manager'
 import { getZernioOverview, readCachedOverview } from './zernio/service'
-import { getTikTokCreatorInfo, probeClipForPosting, publishClip } from './zernio/posts'
+import { getTikTokCreatorInfo, inspectAutomationPost, probeClipForPosting, publishClip } from './zernio/posts'
+import type { AutomationReviewResult } from '../shared/automations'
 import { parsePostClipRequest, parseTikTokOptions } from './zernio/posts-payload'
 import { workspaceId } from './zernio/workspace-cache'
 import { logger } from './logger'
 import { generateAutomationMetadata, transcribeAutomationClip, researchAutomationTopic, generateAutomationMetadataBatch, metadataFailureCode, type MetadataBatchClip } from './automation-metadata'
 
 import { completeSourceContext, findLibraryClipForClip, parseSourceContext, recoverSourceContext, sourceFromOutput, sourceResearchKey } from './automation-source'
-import { reorderQueuedContent } from '../shared/automations'
+import { hasContentWarnings, reorderQueuedContent } from '../shared/automations'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const TIME = /^(?:[01]\d|2[0-3]):[0-5]\d$/
@@ -130,6 +131,7 @@ function validContent(value: unknown): value is AutomationContent {
     if (!validEnhancement(enhancement)) return false
   }
   return UUID.test(item.id) && (item.postingAttemptId === undefined || (typeof item.postingAttemptId === 'string' && UUID.test(item.postingAttemptId))) && typeof item.fileName === 'string' &&
+    (item.warningsAcknowledged === undefined || typeof item.warningsAcknowledged === 'boolean') &&
     (item.sourceClipPath === undefined || (typeof item.sourceClipPath === 'string' && item.sourceClipPath.length <= 8192 && !item.sourceClipPath.includes('\0'))) &&
     item.fileName === `${item.id}${extname(item.fileName)}` && VIDEO_EXTENSIONS.has(extname(item.fileName)) &&
     (item.metadataError === undefined || item.metadataError === null || (typeof item.metadataError === 'string' && item.metadataError.length <= 500)) &&
@@ -163,6 +165,7 @@ function validAutomation(value: unknown): value is Automation {
     }
   }
   return UUID.test(item.id) && typeof item.name === 'string' && item.name.length <= 80 &&
+    (item.lastErrorAcknowledged === undefined || typeof item.lastErrorAcknowledged === 'boolean') &&
     typeof item.enabled === 'boolean' && (item.profileId === null || isZernioId(item.profileId)) &&
     (item.metadataMode === 'ai' || item.metadataMode === 'manual') &&
     Array.isArray(item.accounts) && item.accounts.length <= 20 &&
@@ -214,6 +217,7 @@ function data(): { workspace: string; automations: Automation[] } {
       if (item.status === 'posting') {
         item.status = 'needs_review'
         item.error = 'BridgeClip closed while posting. Check Zernio before returning this clip to the queue.'
+        item.warningsAcknowledged = false
         recovered = true
       } else if (item.status === 'needs_review' && !item.postId &&
           (item.error === 'The upload was interrupted. Check your connection and try again.' ||
@@ -289,6 +293,40 @@ function checkProfileAccounts(overview: ZernioOverview, profileId: string, accou
 }
 
 export function listAutomations(): Automation[] { return structuredClone(data().automations) }
+
+/** Acknowledge existing messages only; never retry, release, or mark a clip as posted. */
+export function acknowledgeAutomationWarnings(id: unknown): Automation[] {
+  const { workspace, automations } = data()
+  const targets = id === null ? automations : [find(id).automation]
+  if (targets.some((automation) => busy.has(automation.id))) throw new Error('Wait for the current operation to finish before acknowledging warnings.')
+  const previous = structuredClone(automations)
+  try {
+    for (const automation of targets) {
+      if (automation.lastError) automation.lastErrorAcknowledged = true
+      for (const item of automation.content) if (hasContentWarnings(item)) item.warningsAcknowledged = true
+    }
+    save(workspace)
+  } catch (error) {
+    // Preserve existing object identities for operations on unrelated automations.
+    for (const automation of targets) {
+      const old = previous.find((entry) => entry.id === automation.id)!
+      automation.lastErrorAcknowledged = old.lastErrorAcknowledged
+      for (const item of automation.content) item.warningsAcknowledged = old.content.find((entry) => entry.id === item.id)?.warningsAcknowledged
+    }
+    throw error
+  }
+  return listAutomations()
+}
+
+export function showAutomationContentInFolder(id: unknown, contentId: unknown): boolean {
+  const { workspace, automation } = find(id)
+  const item = automation.content.find((entry) => entry.id === contentId)
+  if (!item) throw new Error('Clip not found.')
+  const path = join(bankPath(workspace, automation.id), item.fileName)
+  if (!isAutomationMedia(path)) return false
+  shell.showItemInFolder(path)
+  return true
+}
 
 export async function automationLibraryClip(id: unknown, contentId: unknown): Promise<LibraryClipTarget | null> {
   const { workspace, automation } = find(id)
@@ -491,6 +529,49 @@ export function updateAutomationContent(id: unknown, contentId: unknown, raw: un
   return listAutomations()
 }
 
+export async function reviewAutomationContent(id: unknown, contentId: unknown, returnToQueue: unknown): Promise<AutomationReviewResult> {
+  const { workspace, automation } = find(id)
+  const item = automation.content.find((content) => content.id === contentId)
+  if (!item || item.status !== 'needs_review' || typeof returnToQueue !== 'boolean') throw new Error('Choose a held clip to review.')
+  if (busy.has(automation.id)) throw new Error('Wait for the current operation to finish.')
+  busy.add(automation.id)
+  const previous = { ...item }
+  const previousReview = reviews.get(item.id)
+  try {
+    const post = item.postId ? await inspectAutomationPost(item.postId) : null
+    if (currentWorkspace() !== workspace || !cached.includes(automation)) throw new Error('The Zernio workspace changed. Please try again.')
+    let outcome: AutomationReviewResult['outcome'] = 'held'
+    let message = 'This clip has no linked Zernio post. Use Return to queue after confirming it was not published.'
+    if (post?.submitted) {
+      item.status = 'posted'
+      item.error = null
+      item.warningsAcknowledged = false
+      outcome = 'submitted'
+      message = 'Zernio already has this post published or in progress. The clip was moved to Submitted.'
+    } else if (post && !post.fullyFailed) {
+      message = 'This post may have published to some accounts, or its status is incomplete. Check Posts and retry only failed accounts there.'
+    } else if (returnToQueue) {
+      item.postingAttemptId = randomUUID()
+      item.postId = null
+      item.postedAt = null
+      item.status = 'queued'
+      item.error = null
+      item.warningsAcknowledged = false
+      clearTikTokReview(item)
+      outcome = 'queued'
+      message = 'Clip returned to the queue.'
+    } else {
+      message = 'Zernio confirms this post failed on every account. You can return the clip to the queue.'
+    }
+    save(workspace)
+    return { automations: listAutomations(), outcome, message }
+  } catch (error) {
+    Object.assign(item, previous)
+    if (previousReview) reviews.set(item.id, previousReview)
+    throw error
+  } finally { busy.delete(automation.id) }
+}
+
 export function removeAutomationContent(id: unknown, contentId: unknown): Automation[] {
   const { workspace, automation } = find(id)
   const item = automation.content.find((content) => content.id === contentId)
@@ -580,7 +661,10 @@ export async function enhanceAutomationBatch(id: unknown, rawIds: unknown, rawKe
     ensureCurrent()
     for (const failure of errors) {
       const item = automation.content.find((item) => item.id === failure.contentId)
-      if (item && !item.metadataDraft) item.metadataError = failure.message.slice(0, 500)
+      if (item && !item.metadataDraft) {
+        item.metadataError = failure.message.slice(0, 500)
+        item.warningsAcknowledged = false
+      }
       logger.warn('automation.metadata.clip_failed', { automationId: automation.id, contentId: failure.contentId, code: metadataFailureCode(failure.message) })
     }
     save(workspace)
@@ -871,10 +955,11 @@ export async function runAutomation(id: unknown, slot?: { time: string; date: st
   if (!item) {
     const message = automation.content.some((content) => content.status === 'queued')
       ? 'Review a queued clip for TikTok before it can post automatically.' : 'No queued clips are available.'
-    if (automation.lastError !== message) { automation.lastError = message; save(workspace) }
+    if (automation.lastError !== message) { automation.lastError = message; automation.lastErrorAcknowledged = false; save(workspace) }
     return listAutomations()
   }
   if (item.metadataDraft) {
+    if (automation.lastError !== 'Review the next clip’s enhanced metadata draft: apply or discard it before posting.') automation.lastErrorAcknowledged = false
     automation.lastError = 'Review the next clip’s enhanced metadata draft: apply or discard it before posting.'
     save(workspace)
     return listAutomations()
@@ -884,6 +969,7 @@ export async function runAutomation(id: unknown, slot?: { time: string; date: st
   // grace period can still use the slot; actual attempts reserve it once.
   if (slot) { automation.lastSlots[slot.time] = slot.date; save(workspace) }
   if (!automation.profileId || automation.accounts.length === 0) {
+    if (automation.lastError !== 'Choose one Zernio profile and at least one of its accounts.') automation.lastErrorAcknowledged = false
     automation.lastError = 'Choose one Zernio profile and at least one of its accounts.'
     save(workspace)
     return listAutomations()
@@ -944,6 +1030,8 @@ export async function runAutomation(id: unknown, slot?: { time: string; date: st
       item.status = 'needs_review'
       item.error = result.outcome === 'partial' ? 'Some accounts failed. Check Posts before returning this clip to the queue.' : result.message
       automation.lastError = item.error
+      automation.lastErrorAcknowledged = false
+      item.warningsAcknowledged = false
     }
     save(workspace)
   } catch (error) {
@@ -958,6 +1046,8 @@ export async function runAutomation(id: unknown, slot?: { time: string; date: st
         item.error = message
       } else if (item.status === 'queued') item.error = message
       automation.lastError = message
+      automation.lastErrorAcknowledged = false
+      item.warningsAcknowledged = false
       save(workspace)
     }
     logger.warn('automation.post.failed', { automationId: automation.id, contentId: item.id })

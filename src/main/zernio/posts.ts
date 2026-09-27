@@ -682,6 +682,26 @@ export async function retryPost(id: unknown): Promise<PostRecord[]> {
   return posts().save(applyZernioPost(post, remote, { error, now: new Date().toISOString() }))
 }
 
+/** Fresh evidence for returning an automation clip; never starts a retry. */
+export async function inspectAutomationPost(id: string): Promise<{ submitted: boolean; fullyFailed: boolean }> {
+  const generation = workspaceGeneration
+  const previous = requirePost(id)
+  const remote = await getClient().getPost(id)
+  assertWorkspace(generation)
+  const current = requirePost(id)
+  if (JSON.stringify(current) !== JSON.stringify(previous)) throw new Error('The post changed while checking. Refresh its status again.')
+  const record = applyZernioPost(current, remote, { now: new Date().toISOString() })
+  if (record.id !== id) throw new Error('Zernio returned a different post. Please check Posts.')
+  posts().save(record)
+  // Missing fields must not inherit an old failed status and authorize a duplicate.
+  const fresh = applyZernioPost({ ...current, status: 'draft', targets: current.targets.map((target) => ({ ...target, status: 'pending' })) }, remote)
+  const complete = Array.isArray(remote.platforms) && remote.platforms.length === current.targets.length && current.targets.length > 0
+  return {
+    submitted: fresh.status === 'scheduled' || fresh.status === 'publishing' || (fresh.status === 'published' && complete && fresh.targets.every((target) => target.status === 'published')),
+    fullyFailed: fresh.status === 'failed' && complete && fresh.targets.every((target) => target.status === 'failed' && !target.url)
+  }
+}
+
 /** Removes a finished post from the local list; Zernio keeps its own record. */
 export function dismissPost(id: unknown): PostRecord[] {
   const post = requirePost(id)

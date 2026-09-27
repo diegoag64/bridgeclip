@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Check, FolderOpen, GripVertical, Info, Pencil, Play, Plus, RefreshCw, Sparkles, Trash2, Workflow, X } from 'lucide-react'
-import { canReorderContent, hasEnhancedMetadata } from '../../shared/automations'
+import { canReorderContent, hasAutomationWarnings, hasContentWarnings, hasEnhancedMetadata } from '../../shared/automations'
 import { MAX_ENHANCEMENT_GUIDANCE, AUTOMATION_PLATFORMS, needsTikTokReview, nextAutomationContent, type Automation, type AutomationContent, type AutomationContentStatus, type AutomationUpdate, type AutomationSourceGroup } from '../../shared/automations'
 import { isPostableAccount, isValidProfileName } from '../../shared/zernio'
 import { AutomationTikTokReviewDialog } from '../components/AutomationTikTokReviewDialog'
+import { ZernioStatusCheck } from '../components/ZernioStatusCheck'
 import { AutomationMetadataDialog } from '../components/AutomationMetadataDialog'
 import { PlatformIcon, platformName } from '../components/PlatformIcon'
 import { ActionMenu } from '../components/ui/ActionMenu'
@@ -24,7 +25,7 @@ import { Switch } from '../components/ui/Switch'
 import { useAccountsStore } from '../store/use-accounts-store'
 import { useSettingsStore } from '../store/use-settings-store'
 import { getApi } from '../lib/ipc'
-import { cn, errorMessage, formatRelativeDate } from '../lib/utils'
+import { cn, errorMessage, formatRelativeDate, isMac } from '../lib/utils'
 import type { Page as PageName } from '../components/Sidebar'
 
 function draftFor(automation: Automation): AutomationUpdate {
@@ -279,11 +280,11 @@ export function AutomationsPage({ onNavigate, onViewLibrary }: { onNavigate: (pa
     onNavigate('accounts')
   }
 
-  const saveContent = async (item: AutomationContent, returnToQueue = false): Promise<void> => {
+  const saveContent = async (item: AutomationContent): Promise<void> => {
     if (!selected || !editing || editing.id !== item.id) return
     const result = await mutate('content', () => getApi().automations.updateContent(selected.id, item.id, {
-      title: editing.title, caption: editing.caption, returnToQueue
-    }), returnToQueue ? 'Clip returned to the queue.' : 'Clip details saved.')
+      title: editing.title, caption: editing.caption
+    }), 'Clip details saved.')
     if (result) setEditing(null)
   }
 
@@ -298,11 +299,26 @@ export function AutomationsPage({ onNavigate, onViewLibrary }: { onNavigate: (pa
     await mutate('reorder', () => getApi().automations.reorder(selected.id, id, beforeId), 'Queue order saved.')
   }
 
+  const reviewContent = async (item: AutomationContent, returnToQueue: boolean): Promise<void> => {
+    if (!selected || busy) return
+    setBusy('review-content'); setError(null); setNotice(null)
+    try {
+      const result = await getApi().automations.reviewContent(selected.id, item.id, returnToQueue)
+      setAutomations(result.automations)
+      if (returnToQueue && result.outcome === 'held') setError(result.message)
+      else setNotice(result.message)
+    } catch (cause) { setError(errorMessage(cause, 'Could not review this clip.')) }
+    finally { setBusy(null) }
+  }
+
   const requestReturnToQueue = (item: AutomationContent): void => setConfirm({
     title: 'Return this clip to the queue?',
-    body: 'Check Zernio first. Only return it if it was not posted to any selected account, or it will post twice.',
+    tone: 'primary',
+    body: item.postId
+      ? 'We’ll check its Zernio post first. Published or in-progress posts move to Submitted. Only posts that failed on every account can return to the queue.'
+      : 'Confirm this clip was not published to any selected account before returning it. It will be eligible for the next scheduled run.',
     confirmLabel: 'Return to queue',
-    onConfirm: () => void saveContent(item, true)
+    onConfirm: () => void reviewContent(item, true)
   })
 
   const removeContent = (item: AutomationContent): void => {
@@ -325,6 +341,14 @@ export function AutomationsPage({ onNavigate, onViewLibrary }: { onNavigate: (pa
       else setError('This clip’s source run is no longer in the Library, or it was added from outside the Library.')
     } catch (cause) { setError(errorMessage(cause, 'Could not open the source run.')) }
     finally { setBusy(null) }
+  }
+
+  const showInFolder = async (item: AutomationContent): Promise<void> => {
+    if (!selected || busy) return
+    setError(null); setNotice(null)
+    try {
+      if (!await getApi().automations.showInFolder(selected.id, item.id)) setError('This clip’s video file is no longer available.')
+    } catch (cause) { setError(errorMessage(cause, 'Could not show this clip in its folder.')) }
   }
 
   const addTime = (): void => {
@@ -355,11 +379,12 @@ export function AutomationsPage({ onNavigate, onViewLibrary }: { onNavigate: (pa
     ready: queued.filter((item) => !needsTikTokReview(selected!, item)).length,
     tiktok_review: queued.filter((item) => needsTikTokReview(selected!, item)).length,
     posted: selected?.content.filter((item) => item.status === 'posted').length ?? 0,
-    needs_review: selected?.content.filter((item) => item.status === 'needs_review').length ?? 0
+    needs_review: selected?.content.filter((item) => item.status === 'needs_review' && hasContentWarnings(item)).length ?? 0
   }
   const contentGroups = [
     { label: 'Queued', items: selected?.content.filter((item) => item.status === 'queued' || item.status === 'posting') ?? [], empty: 'No clips waiting to be submitted.' },
-    { label: 'Needs attention', items: selected?.content.filter((item) => item.status === 'needs_review') ?? [], empty: '' },
+    { label: 'Needs attention', items: selected?.content.filter((item) => item.status === 'needs_review' && !item.warningsAcknowledged) ?? [], empty: '' },
+    { label: 'Held clips', items: selected?.content.filter((item) => item.status === 'needs_review' && item.warningsAcknowledged) ?? [], empty: '' },
     { label: 'Submitted', items: selected?.content.filter((item) => item.status === 'posted') ?? [], empty: 'No clips submitted yet.' }
   ]
   const nextSlot = selected ? nextRunLabel(selected.times, selected.timezone) : null
@@ -377,7 +402,10 @@ export function AutomationsPage({ onNavigate, onViewLibrary }: { onNavigate: (pa
       <PageHeader
         title="Automations"
         description="Post the next clip from a content bank at set times each day."
-        actions={automations.length > 0 && <Button size="sm" variant="primary" icon={<Plus className="h-3.5 w-3.5" />} onClick={() => setCreating(true)} disabled={creating}>New automation</Button>}
+        actions={automations.length > 0 && <>
+          {automations.some(hasAutomationWarnings) && <Button size="sm" variant="ghost" icon={<Check className="h-3.5 w-3.5" />} disabled={Boolean(busy)} title="Acknowledge existing warnings across all automations. Held clips stay held; new failures will warn again." onClick={() => void mutate('acknowledge', () => getApi().automations.acknowledgeWarnings(null), 'Warnings acknowledged across all automations. Held clips remain held.')}>Acknowledge all warnings</Button>}
+          <Button size="sm" variant="primary" icon={<Plus className="h-3.5 w-3.5" />} onClick={() => setCreating(true)} disabled={creating}>New automation</Button>
+        </>}
       />
 
       {(error || notice) && (
@@ -426,7 +454,6 @@ export function AutomationsPage({ onNavigate, onViewLibrary }: { onNavigate: (pa
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <h2 className="truncate text-sm font-semibold text-ink">{selected.name}</h2>
-                      <AutomationBadge automation={selected} />
                     </div>
                     {!selected.enabled && setupTodo.length > 0 ? (
                       <p className="text-2xs text-ink-muted">
@@ -437,10 +464,7 @@ export function AutomationsPage({ onNavigate, onViewLibrary }: { onNavigate: (pa
                         <span><span className="tabular text-ink">{counts.ready}</span> ready</span>
                         {counts.tiktok_review > 0 && <><Sep /><span className="text-warning">{counts.tiktok_review} need TikTok review</span></>}
                         {counts.needs_review > 0 && <><Sep /><span className="text-warning">{counts.needs_review} to check</span></>}
-                        <Sep />
-                        {selected.enabled
-                          ? <span>Next run <span className="text-ink">{nextSlot ?? '—'}</span></span>
-                          : <span>Paused</span>}
+                        {selected.enabled && <><Sep /><span>Next run <span className="text-ink">{nextSlot ?? '—'}</span></span></>}
                         <Sep />
                         <span>Last run <span className="text-ink">{selected.lastRunAt ? formatRelativeDate(selected.lastRunAt) : 'never'}</span></span>
                       </p>
@@ -448,7 +472,7 @@ export function AutomationsPage({ onNavigate, onViewLibrary }: { onNavigate: (pa
                   </div>
                   <div className="flex items-center gap-1">
                     <label className={cn('mr-1 flex items-center gap-1.5 text-2xs text-ink-muted', !selected.enabled && !savedReady && 'opacity-60')} title={!selected.enabled && !savedReady ? 'Finish setup and save before turning this on' : undefined}>
-                      {selected.enabled ? 'On' : 'Off'}
+                      {selected.enabled ? 'Scheduled' : 'Paused'}
                       <Switch
                         checked={selected.enabled}
                         disabled={Boolean(busy) || (!selected.enabled && !savedReady)}
@@ -466,11 +490,14 @@ export function AutomationsPage({ onNavigate, onViewLibrary }: { onNavigate: (pa
                     >Run now</Button>
                     <Button size="sm" variant="ghost" iconOnly aria-label={`Delete ${selected.name}`} title="Delete automation" icon={<Trash2 className="h-3.5 w-3.5" />} disabled={Boolean(busy)} onClick={remove} />
                   </div>
-                  {selected.lastError && (
-                    <p role="alert" className="basis-full text-2xs text-danger" data-selectable>
-                      <span className="font-medium">The last run failed:</span> {selected.lastError}
-                    </p>
-                  )}
+                  {(selected.lastError || hasAutomationWarnings(selected)) && <div className="flex basis-full flex-wrap items-start justify-between gap-2">
+                    {selected.lastError && <details className="min-w-0 flex-1 text-2xs">
+                      <summary className={cn('w-fit cursor-pointer', selected.lastErrorAcknowledged ? 'text-ink-subtle' : 'text-warning')}>{selected.lastErrorAcknowledged ? 'Previous run issue · Acknowledged' : 'Last run failed · View details'}</summary>
+                      <p className="mt-1 text-ink-muted" data-selectable>{selected.lastError}</p>
+                      <p className="mt-1 text-ink-subtle">Saved message from that run. Any wait time shown is not a live countdown.</p>
+                    </details>}
+                    {hasAutomationWarnings(selected) && <Button size="sm" variant="ghost" icon={<Check className="h-3 w-3" />} disabled={Boolean(busy)} title="Acknowledge this automation’s existing warnings without retrying held clips" onClick={() => void mutate('acknowledge', () => getApi().automations.acknowledgeWarnings(selected.id), 'Warnings acknowledged. Held clips remain held.')}>Acknowledge warnings</Button>}
+                  </div>}
                 </div>
 
                 <div className="divide-y divide-white/[0.06] border-t border-white/[0.06]">
@@ -550,12 +577,20 @@ export function AutomationsPage({ onNavigate, onViewLibrary }: { onNavigate: (pa
                         <Button size="sm" variant="ghost" iconOnly aria-label="Refresh accounts" title="Refresh accounts" loading={accountsLoading} onClick={() => void loadAccounts()} icon={<RefreshCw className="h-3 w-3" />} />
                       </div>
                     )}
+                    {draft.accounts.length > 0 && <ZernioStatusCheck
+                      key={`${selected.id}:${draft.profileId}:${draft.accounts.map((account) => account.accountId).join(',')}`}
+                      accounts={draft.accounts.map((account) => {
+                        const connectedAccount = accounts.find((item) => item.id === account.accountId)
+                        return { ...account, label: connectedAccount?.username ? `@${connectedAccount.username}` : connectedAccount?.displayName || 'Selected account' }
+                      })}
+                      disabled={Boolean(busy)}
+                    />}
                   </Row>
 
                   <Row
                     label="Schedule"
                     labelId="automation-schedule"
-                    hint="One clip posts at each time, daily. BridgeClip must be open; after sleep, a run can start up to 5 minutes late."
+                    hint="One clip at each time, daily. Keep BridgeClip open."
                   >
                     <div role="group" aria-labelledby="automation-schedule" className="flex flex-wrap items-center gap-1">
                       {draft.times.map((time) => (
@@ -583,37 +618,42 @@ export function AutomationsPage({ onNavigate, onViewLibrary }: { onNavigate: (pa
                     </div>
                   </Row>
 
-                  <Row
-                    label="Captions"
-                    hint="Uses applied enhancement drafts when available. Otherwise OpenRouter writes captions automatically; TikTok captions wait for your review. Use Enhance in the bank to research and review copy first."
-                  >
-                    <label className="flex h-7 items-center gap-2 text-xs text-ink">
-                      <Switch checked={draft.metadataMode === 'ai'} onChange={(on) => setDraft({ ...draft, metadataMode: on ? 'ai' : 'manual' })} label="Write captions with AI" />
-                      Write captions with AI
-                    </label>
-                    {draft.metadataMode === 'ai' && aiKeysMissing && (
-                      <p className="mt-1 flex flex-wrap items-center gap-x-2 text-2xs text-warning">
-                        Add an OpenRouter key before turning this automation on.
-                        <button type="button" className="font-medium text-ink underline-offset-2 hover:underline" onClick={() => onNavigate('settings')}>Open Settings</button>
-                      </p>
-                    )}
-                  </Row>
-
-                  {draft.accounts.some((account) => account.platform === 'youtube') && (
-                    <Row label="YouTube">
-                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
-                        <Segmented size="sm" label="YouTube visibility" value={draft.youtubeVisibility} onChange={(value) => setDraft({ ...draft, youtubeVisibility: value })} options={[{ value: 'public', label: 'Public' }, { value: 'unlisted', label: 'Unlisted' }, { value: 'private', label: 'Private' }]} />
-                        <label className="flex items-center gap-2 text-xs text-ink-muted">
-                          <Switch checked={draft.youtubeMadeForKids} onChange={(value) => setDraft({ ...draft, youtubeMadeForKids: value })} label="Made for kids" />
-                          Made for kids
+                  <details>
+                    <summary className="cursor-pointer px-3.5 py-2.5 text-xs text-ink-muted hover:text-ink">More settings</summary>
+                    <div className="divide-y divide-white/[0.06]">
+                      <Row
+                        label="Captions"
+                        hint={draft.metadataMode === 'ai' ? 'Uses reviewed drafts first; otherwise AI writes the captions. Review TikTok captions before posting.' : undefined}
+                      >
+                        <label className="flex h-7 items-center gap-2 text-xs text-ink">
+                          <Switch checked={draft.metadataMode === 'ai'} onChange={(on) => setDraft({ ...draft, metadataMode: on ? 'ai' : 'manual' })} label="Write captions with AI" />
+                          Write captions with AI
                         </label>
-                      </div>
-                    </Row>
-                  )}
+                        {draft.metadataMode === 'ai' && aiKeysMissing && (
+                          <p className="mt-1 flex flex-wrap items-center gap-x-2 text-2xs text-warning">
+                            Add an OpenRouter key before turning this automation on.
+                            <button type="button" className="font-medium text-ink underline-offset-2 hover:underline" onClick={() => onNavigate('settings')}>Open Settings</button>
+                          </p>
+                        )}
+                      </Row>
 
-                  <Row label="Name" htmlFor="automation-name">
-                    <TextInput id="automation-name" inputSize="sm" className="sm:max-w-[240px]" value={draft.name} maxLength={80} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
-                  </Row>
+                      {draft.accounts.some((account) => account.platform === 'youtube') && (
+                        <Row label="YouTube">
+                          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+                            <Segmented size="sm" label="YouTube visibility" value={draft.youtubeVisibility} onChange={(value) => setDraft({ ...draft, youtubeVisibility: value })} options={[{ value: 'public', label: 'Public' }, { value: 'unlisted', label: 'Unlisted' }, { value: 'private', label: 'Private' }]} />
+                            <label className="flex items-center gap-2 text-xs text-ink-muted">
+                              <Switch checked={draft.youtubeMadeForKids} onChange={(value) => setDraft({ ...draft, youtubeMadeForKids: value })} label="Made for kids" />
+                              Made for kids
+                            </label>
+                          </div>
+                        </Row>
+                      )}
+
+                      <Row label="Name" htmlFor="automation-name">
+                        <TextInput id="automation-name" inputSize="sm" className="sm:max-w-[240px]" value={draft.name} maxLength={80} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
+                      </Row>
+                    </div>
+                  </details>
                 </div>
               </Panel>
 
@@ -643,7 +683,7 @@ export function AutomationsPage({ onNavigate, onViewLibrary }: { onNavigate: (pa
                   </> : <p className="text-sm text-ink-muted">No queued clips need a new draft.</p>}
                 </div>}
                 {bulkProgress && <Callout tone="info" className="mt-3" action={<Button size="sm" onClick={() => { stopBulk.current = true; setBulkProgress('Stopping after the current operation…') }}>Stop after batch</Button>}>{bulkProgress}</Callout>}
-                {contentGroups.filter((group) => group.label !== 'Needs attention' || group.items.length > 0).map((group) => (
+                {contentGroups.filter((group) => !['Needs attention', 'Held clips'].includes(group.label) || group.items.length > 0).map((group) => (
                   <section key={group.label} aria-label={group.label} className="border-t border-white/[0.06]">
                     <div className="flex flex-wrap items-center justify-between gap-2 bg-white/[0.02] px-3.5 py-2.5">
                       <h3 className="flex items-center gap-2 text-xs font-semibold text-ink-muted">{group.label}<span className="tabular rounded-full bg-white/[0.06] px-2 py-0.5 text-2xs">{group.items.length}</span></h3>
@@ -651,6 +691,7 @@ export function AutomationsPage({ onNavigate, onViewLibrary }: { onNavigate: (pa
                         {!nextSlot ? 'No times scheduled' : !selected.enabled ? 'Paused' : <>Next slot <span className="text-ink">{nextSlot}</span><span className="text-ink-subtle"> · {selected.timezone.replace(/_/g, ' ')}</span></>}
                       </span>}
                     </div>
+                    {group.label === 'Held clips' && <p className="px-3.5 py-2 text-2xs text-ink-subtle">Warnings acknowledged. These clips stay out of the queue until you review and return them.</p>}
                     {group.items.length === 0 && <p className="px-3.5 py-4 text-xs text-ink-subtle">{group.empty}</p>}
                     <ul className="divide-y divide-white/[0.06]">
                       {group.items.map((item) => (
@@ -684,9 +725,11 @@ export function AutomationsPage({ onNavigate, onViewLibrary }: { onNavigate: (pa
                           onChange={setEditing}
                           onSave={() => void saveContent(item)}
                           onReturnToQueue={() => requestReturnToQueue(item)}
+                          onRefreshPost={() => void reviewContent(item, false)}
                           onRemove={() => removeContent(item)}
                           onCheckPosts={() => onNavigate('posts')}
                           onViewLibrary={() => void viewLibrary(item)}
+                          onShowInFolder={() => void showInFolder(item)}
                         />
                       ))}
                     </ul>
@@ -722,15 +765,10 @@ export function AutomationsPage({ onNavigate, onViewLibrary }: { onNavigate: (pa
 }
 
 function automationState(automation: Automation): { label: string; tone: 'success' | 'warning' | 'danger' | 'idle' } {
-  if (automation.enabled && automation.lastError) return { label: 'Failing', tone: 'danger' }
+  if (automation.enabled && automation.lastError && !automation.lastErrorAcknowledged) return { label: 'Failing', tone: 'danger' }
   if (automation.enabled) return { label: 'On', tone: 'success' }
   if (missingSetup(automation)) return { label: 'Needs setup', tone: 'warning' }
   return { label: 'Paused', tone: 'idle' }
-}
-
-function AutomationBadge({ automation }: { automation: Automation }): React.JSX.Element {
-  const state = automationState(automation)
-  return <Badge tone={state.tone === 'idle' ? 'neutral' : state.tone}>{state.label}</Badge>
 }
 
 function Sep(): React.JSX.Element {
@@ -804,7 +842,7 @@ function CreateForm({ busy, onCreate, onCancel, autoFocus, size = 'md', classNam
   )
 }
 
-function ContentRow({ item, nextUp, tiktokReviewNeeded, tiktokSelected, onReviewTikTok, reviewDisabled, editing, busy, onEdit, onChange, onSave, onReturnToQueue, onRemove, onCheckPosts, onViewLibrary, onEnhance, enhancementDisabled, enhanced, reorder }: {
+function ContentRow({ item, nextUp, tiktokReviewNeeded, tiktokSelected, onReviewTikTok, reviewDisabled, editing, busy, onEdit, onChange, onSave, onReturnToQueue, onRefreshPost, onRemove, onCheckPosts, onViewLibrary, onShowInFolder, onEnhance, enhancementDisabled, enhanced, reorder }: {
   item: AutomationContent
   nextUp: boolean
   tiktokReviewNeeded: boolean
@@ -817,18 +855,21 @@ function ContentRow({ item, nextUp, tiktokReviewNeeded, tiktokSelected, onReview
   onChange: (value: { id: string; title: string; caption: string }) => void
   onSave: () => void
   onReturnToQueue: () => void
+  onRefreshPost: () => void
   onRemove: () => void
   onCheckPosts: () => void
   onViewLibrary: () => void
+  onShowInFolder: () => void
   onEnhance: () => void
   enhancementDisabled: boolean
   enhanced: boolean
   reorder?: { dragging: boolean; dropPosition: 'before' | 'after' | null; onStart: () => void; onEnd: () => void; onOver: () => void; onDrop: () => void; onMove: (direction: -1 | 1) => void }
 }): React.JSX.Element {
-  const status = tiktokReviewNeeded ? { label: 'Needs TikTok review', tone: 'warning' as const } : CONTENT_STATUS[item.status]
+  const status = item.status === 'needs_review' && item.warningsAcknowledged ? { label: 'Held · Warning acknowledged', tone: 'neutral' as const }
+    : tiktokReviewNeeded ? { label: 'Needs TikTok review', tone: 'warning' as const } : CONTENT_STATUS[item.status]
   const note = item.status === 'queued' && tiktokSelected && !tiktokReviewNeeded && item.tiktokApproval ? 'TikTok approved'
     : item.status === 'posted' && item.tiktokApproval?.options.draft ? 'Sent to TikTok inbox' : null
-  const problem = item.error ?? (item.status === 'needs_review' ? 'Confirm whether this clip posted before running it again.' : null)
+  const problem = item.warningsAcknowledged ? null : item.error ?? (item.status === 'needs_review' ? 'Confirm whether this clip posted before running it again.' : null)
   return (
     <li className={cn('group/row px-3.5 py-2.5 transition-colors', editing && 'bg-white/[0.025]', reorder?.dragging && 'opacity-40', reorder?.dropPosition === 'before' && 'border-t-2 border-accent', reorder?.dropPosition === 'after' && 'border-b-2 border-accent')}
       onDragOver={(event) => { if (reorder && event.dataTransfer.types.includes('application/x-bridgeclip-content')) { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; reorder.onOver() } }}
@@ -847,6 +888,8 @@ function ContentRow({ item, nextUp, tiktokReviewNeeded, tiktokSelected, onReview
         <div className="ml-auto flex shrink-0 items-center gap-1">
           {item.status === 'queued' && !item.postId && (item.metadataDraft || !enhanced) && <Button size="sm" variant="ghost" disabled={busy || (!item.metadataDraft && enhancementDisabled)} onClick={onEnhance}>{item.metadataDraft ? 'Review draft' : 'Enhance'}</Button>}
           {tiktokReviewNeeded && <Button size="sm" variant="secondary" onClick={onReviewTikTok} disabled={busy || reviewDisabled || Boolean(item.metadataDraft)}>Review TikTok</Button>}
+          {item.status === 'needs_review' && <Button size="sm" variant="secondary" onClick={onReturnToQueue} disabled={busy || Boolean(editing)} title={editing ? 'Save or close the editor first' : 'Review and return this clip to the queue'}>Return to queue</Button>}
+          {item.status === 'needs_review' && item.postId && <Button size="sm" variant="ghost" onClick={onRefreshPost} disabled={busy || Boolean(editing)} icon={<RefreshCw className="h-3 w-3" />}>Refresh post status</Button>}
           <HoverCard label={`Info about ${item.title}`} className="rounded-lg p-1.5 text-ink-subtle hover:text-ink" cardClassName="w-80 max-w-[calc(100vw-16px)]" content={
             <div className="space-y-3 p-4 text-xs">
               <p className="line-clamp-3 font-semibold text-ink">{item.title}</p>
@@ -858,6 +901,11 @@ function ContentRow({ item, nextUp, tiktokReviewNeeded, tiktokSelected, onReview
                 {(item.sourceContext?.title || item.metadataEnhancement?.source?.title) && <><dt>Source</dt><dd className="line-clamp-2 text-ink">{item.sourceContext?.title || item.metadataEnhancement?.source?.title}</dd></>}
               </dl>
               {item.caption && <p className="line-clamp-3 whitespace-pre-wrap text-ink-muted">{item.caption}</p>}
+              {item.warningsAcknowledged && (item.error || item.metadataError) && <div className="space-y-1 border-t border-white/[0.08] pt-2 text-ink-subtle">
+                <p className="font-medium">Acknowledged warnings</p>
+                {item.error && <p>{item.error}</p>}
+                {item.metadataError && <p>{item.metadataError}</p>}
+              </div>}
               {Boolean(item.generatedMetadata?.length) && <div className="space-y-1.5 border-t border-white/[0.08] pt-2">
                 <p className="text-ink-muted">Prepared for {item.generatedMetadata?.map((post) => platformName(post.platform)).join(', ')}</p>
                 {item.generatedMetadata?.[0]?.tags.length ? <p className="line-clamp-2 text-ink-subtle">Tags: {item.generatedMetadata[0].tags.join(', ')}</p> : null}
@@ -867,26 +915,29 @@ function ContentRow({ item, nextUp, tiktokReviewNeeded, tiktokSelected, onReview
           <Button size="sm" variant="ghost" icon={<FolderOpen className="h-3.5 w-3.5" />} disabled={busy} onClick={onViewLibrary} aria-label={`View ${item.title} in Library`} title="Show this clip in Library">View in Library</Button>
           <ActionMenu label={`Actions for ${item.title}`} disabled={busy || item.status === 'posting'} actions={[
             { label: editing ? 'Close editor' : 'Edit', icon: <Pencil className="h-3.5 w-3.5" />, disabled: Boolean(item.metadataDraft), onSelect: onEdit },
+            { label: isMac ? 'Show in Finder' : 'Show in folder', icon: <FolderOpen className="h-3.5 w-3.5" />, onSelect: onShowInFolder },
             ...(item.status === 'queued' && tiktokSelected && !tiktokReviewNeeded ? [{ label: 'Edit TikTok', disabled: reviewDisabled || Boolean(item.metadataDraft), onSelect: onReviewTikTok }] : []),
             ...(item.status !== 'posted' && !item.postId ? [{ label: 'Remove from queue', icon: <X className="h-3.5 w-3.5" />, onSelect: onRemove }] : [])
           ]} />
         </div>
       </div>
 
-      {item.metadataError && <Callout tone="warning" className="mt-2">Metadata enhancement failed: {item.metadataError} Use Enhance to retry this clip, or select its source video to retry all remaining clips.</Callout>}
+      {item.metadataError && !item.warningsAcknowledged && <Callout tone="warning" className="mt-2">Metadata enhancement failed: {item.metadataError} Use Enhance to retry this clip, or select its source video to retry all remaining clips.</Callout>}
       {problem && (
         <p role={item.status === 'needs_review' ? 'status' : 'alert'} className={cn('mb-1 ml-4 flex flex-wrap items-baseline gap-x-2 text-2xs', item.status === 'needs_review' ? 'text-warning' : 'text-danger')}>
           <span data-selectable>{problem}</span>
           {item.status === 'needs_review' && <button type="button" className="font-medium text-ink underline-offset-2 hover:underline" onClick={onCheckPosts}>Check posts</button>}
         </p>
       )}
+      {item.warningsAcknowledged && item.status === 'needs_review' && <p className="mb-1 ml-4 text-2xs text-ink-subtle">
+        Held for review · <button type="button" className="text-ink-muted underline-offset-2 hover:underline" onClick={onCheckPosts}>Check posts</button>
+      </p>}
 
       {editing && (
         <div className="mb-1.5 mt-1 space-y-1.5 pl-4">
           <TextInput inputSize="sm" aria-label="Title" placeholder="Title" value={editing.title} maxLength={500} onChange={(event) => onChange({ ...editing, title: event.target.value })} />
           <TextArea aria-label="Caption" placeholder="Caption" className="min-h-[64px] text-xs" value={editing.caption} onChange={(event) => onChange({ ...editing, caption: event.target.value })} />
           <div className="flex flex-wrap justify-end gap-1">
-            {item.status === 'needs_review' && !item.postId && <Button size="sm" variant="secondary" onClick={onReturnToQueue} disabled={busy}>Return to queue</Button>}
             <Button size="sm" variant="ghost" onClick={onEdit} disabled={busy}>Cancel</Button>
             <Button size="sm" variant="primary" onClick={onSave} disabled={busy}>Save clip</Button>
           </div>

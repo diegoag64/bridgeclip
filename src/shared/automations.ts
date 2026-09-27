@@ -77,6 +77,8 @@ export interface MetadataEnhancement {
 }
 
 export interface AutomationContent {
+  /** Suppresses existing warning indicators without changing posting eligibility. */
+  warningsAcknowledged?: boolean
   id: string
   /** Original authorized file, retained when a library clip is copied to the bank. */
   sourceClipPath?: string
@@ -118,6 +120,12 @@ export interface AutomationBatchResult {
   errors: { contentId: string; message: string }[]
 }
 
+export interface AutomationReviewResult {
+  automations: Automation[]
+  outcome: 'queued' | 'submitted' | 'held'
+  message: string
+}
+
 export interface Automation {
   sourceResearch?: { key: string; createdAt: string; source: AutomationSourceContext; research: MetadataResearch }[]
   id: string
@@ -139,6 +147,15 @@ export interface Automation {
   createdAt: string
   lastRunAt: string | null
   lastError: string | null
+  lastErrorAcknowledged?: boolean
+}
+
+export function hasContentWarnings(item: AutomationContent): boolean {
+  return !item.warningsAcknowledged && Boolean(item.error || item.metadataError || item.status === 'needs_review')
+}
+
+export function hasAutomationWarnings(automation: Automation): boolean {
+  return Boolean(automation.lastError && !automation.lastErrorAcknowledged) || automation.content.some(hasContentWarnings)
 }
 
 export interface AutomationUpdate {

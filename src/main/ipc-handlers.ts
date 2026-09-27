@@ -24,7 +24,7 @@ import { getModelCatalog, resolveAdvancedModels } from './openrouter-models'
 import { randomUUID } from 'crypto'
 import { resolveBinary, supportsCaptionFilter } from './tools'
 import { automationEnhancementGroups, enhanceAutomationBatch, automationContentSource, enhanceAutomationContent, resolveAutomationMetadataDraft, addAutomationContent, addLibraryClipsToAutomation, createAutomation, deleteAutomation, isAutomationMedia, listAutomations, removeAutomationContent, runAutomation, updateAutomation, updateAutomationContent, approveAutomationTikTokReview, prepareAutomationTikTokReview } from './automations'
-import { automationLibraryClip, reorderAutomationContent } from './automations'
+import { acknowledgeAutomationWarnings, automationLibraryClip, reorderAutomationContent, reviewAutomationContent, showAutomationContentInFolder } from './automations'
 import { libraryPostingStatus, libraryMetadataSource, enhanceLibraryMetadata } from './library-posting'
 import { deleteLibraryClips, deleteLibraryRun, setLibraryFavorite, setLibraryPosted } from './library-management'
 import {
@@ -36,7 +36,8 @@ import {
   getZernioOverview,
   readCachedOverview,
   resetZernioState,
-  syncZernioAccounts
+  syncZernioAccounts,
+  checkZernioStatus
 } from './zernio/service'
 import {
   cancelPost,
@@ -91,6 +92,7 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
   handle('zernio:overview', () => getZernioOverview())
   handle('zernio:profiles:create', (_event, name: unknown) => createZernioProfile(name))
   handle('zernio:sync', () => syncZernioAccounts())
+  handle('zernio:checkStatus', () => checkZernioStatus())
   handle('zernio:cachedOverview', () => readCachedOverview())
   handle('zernio:pendingConnect', () => getPendingZernioConnect())
   handle('zernio:connect', (_event, platform: unknown, profileId: unknown, options: unknown) => connectZernioAccount(platform, profileId, options, getMainWindow))
@@ -119,7 +121,10 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
   handle('automations:enhance', (_event, id: unknown, contentId: unknown, options: unknown) => enhanceAutomationContent(id, contentId, options))
   handle('automations:resolveDraft', (_event, id: unknown, contentId: unknown, draftId: unknown, apply: unknown) => resolveAutomationMetadataDraft(id, contentId, draftId, apply))
   handle('automations:list', () => listAutomations())
+  handle('automations:acknowledgeWarnings', (_event, id: unknown) => acknowledgeAutomationWarnings(id))
+  handle('automations:reviewContent', (_event, id: unknown, contentId: unknown, returnToQueue: unknown) => reviewAutomationContent(id, contentId, returnToQueue))
   handle('automations:libraryClip', (_event, id: unknown, contentId: unknown) => automationLibraryClip(id, contentId))
+  handle('automations:showInFolder', (_event, id: unknown, contentId: unknown) => showAutomationContentInFolder(id, contentId))
   handle('automations:reorder', (_event, id: unknown, contentId: unknown, beforeId: unknown) => reorderAutomationContent(id, contentId, beforeId))
   handle('automations:create', (_event, name: unknown) => createAutomation(name))
   handle('automations:update', (_event, id: unknown, update: unknown) => updateAutomation(id, update))

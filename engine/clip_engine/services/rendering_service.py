@@ -98,6 +98,8 @@ class RenderRequest:
     caption_style: Optional[CaptionStyle] = None
     # Hide only our caption layer in these source-time intervals.
     caption_suppression_ranges_ms: list[tuple[int, int]] = field(default_factory=list)
+    # Explicit editor placement overrides automatic per-layout caption anchors.
+    caption_y: Optional[float] = None
 
     title_text: Optional[str] = None
     # Planner-chosen punch words highlighted in the captions.
@@ -792,7 +794,11 @@ class RenderingService:
             anchors[-1] = (10**9, anchors[-1][1], anchors[-1][2])
 
         placer = None
-        if anchors and plan is not None:
+        if request.caption_y is not None:
+            if type(request.caption_y) not in (int, float) or not .1 <= request.caption_y <= .9:
+                raise ValueError('Invalid caption position')
+            anchors = [(10**9, 5, round(target_height * request.caption_y))]
+        elif anchors and plan is not None:
             zones = face_zones(plan, time_map, target_width, target_height)
             if zones:
                 placer = CaptionPlacer(anchors, zones, target_width, target_height)

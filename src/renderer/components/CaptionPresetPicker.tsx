@@ -255,10 +255,11 @@ export const CAPTION_PRESET_NAMES: Record<string, string> = Object.fromEntries(P
  * Preset `size` and `stroke` are tuned for an 84px-tall preview. The compact
  * tile is 60px tall, so samples render at this fraction to keep the same fit.
  */
+export const captionPreviewPreset = (id: string): CaptionPreset => PRESETS.find(p => p.id === id) ?? PRESETS[0]
 const SAMPLE_SCALE = 60 / 84
 
 /** Stroke + shadow as stacked text-shadows, scaled to the tile. */
-function textShadow(p: CaptionPreset, scale = SAMPLE_SCALE): string {
+export function textShadow(p: CaptionPreset, scale = SAMPLE_SCALE): string {
   const layers: string[] = []
   const w = p.stroke * 0.28 * scale
   if (w > 0) {

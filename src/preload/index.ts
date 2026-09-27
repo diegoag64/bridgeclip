@@ -1,4 +1,5 @@
 import type { LibraryClipTarget } from '../shared/library-posting'
+import type { AutomationReviewResult } from '../shared/automations'
 import type { CandidateEdit, EditorSession } from '../shared/clip-editor'
 import type { JobOutput } from '../shared/job-output'
 import type { EditAudit } from '../shared/editorial'
@@ -12,7 +13,8 @@ import type {
   ZernioPendingConnect,
   ZernioPlatform,
   ZernioProfile,
-  ZernioSyncResult
+  ZernioSyncResult,
+  ZernioStatusCheck
 } from '../shared/zernio'
 import type { ClipMediaInfo, PostClipRequest, PostClipResult, PostProgress, PostRecord, PostsRefreshResult, TikTokCreatorInfo, TikTokLegalLink } from '../shared/zernio-posts'
 import type { ClipJobRequest, JobSnapshot } from '../shared/jobs'
@@ -80,7 +82,10 @@ export interface BridgeClipAPI {
   framing: { inspect: (outputDir: string, clipIndex: number) => Promise<FramingInspection>; available: (outputDir: string) => Promise<number[]> }
   models: { list: (refresh?: boolean) => Promise<OpenRouterCatalog> }
   automations: {
+    reviewContent: (id: string, contentId: string, returnToQueue: boolean) => Promise<AutomationReviewResult>
+    acknowledgeWarnings: (id: string | null) => Promise<Automation[]>
     libraryClip: (id: string, contentId: string) => Promise<LibraryClipTarget | null>
+    showInFolder: (id: string, contentId: string) => Promise<boolean>
     reorder: (id: string, contentId: string, beforeId: string | null) => Promise<Automation[]>
     enhancementGroups: (id: string) => Promise<AutomationSourceGroup[]>
     enhanceBatch: (id: string, contentIds: string[], key: string, guidance?: string) => Promise<AutomationBatchResult>
@@ -107,6 +112,7 @@ export interface BridgeClipAPI {
     selectOutputDir: () => Promise<string | null>
   }
   zernio: {
+    checkStatus: () => Promise<ZernioStatusCheck>
     overview: () => Promise<ZernioOverview>
     createProfile: (name: string) => Promise<ZernioProfile>
     /** Live accounts from Zernio, or the cached copy with the reason Zernio couldn't be read. Never rejects for Zernio failures. */
@@ -226,7 +232,10 @@ const api: BridgeClipAPI = {
   },
   models: { list: (refresh = false) => ipcRenderer.invoke('models:list', refresh) },
   automations: {
+    reviewContent: (id, contentId, returnToQueue) => ipcRenderer.invoke('automations:reviewContent', id, contentId, returnToQueue),
+    acknowledgeWarnings: (id) => ipcRenderer.invoke('automations:acknowledgeWarnings', id),
     libraryClip: (id, contentId) => ipcRenderer.invoke('automations:libraryClip', id, contentId),
+    showInFolder: (id, contentId) => ipcRenderer.invoke('automations:showInFolder', id, contentId),
     reorder: (id, contentId, beforeId) => ipcRenderer.invoke('automations:reorder', id, contentId, beforeId),
     enhancementGroups: (id) => ipcRenderer.invoke('automations:enhancementGroups', id),
     enhanceBatch: (id, contentIds, key, guidance) => ipcRenderer.invoke('automations:enhanceBatch', id, contentIds, key, guidance),
@@ -253,6 +262,7 @@ const api: BridgeClipAPI = {
     selectOutputDir: () => ipcRenderer.invoke('settings:selectOutputDir')
   },
   zernio: {
+    checkStatus: () => ipcRenderer.invoke('zernio:checkStatus'),
     overview: () => ipcRenderer.invoke('zernio:overview'),
     createProfile: (name) => ipcRenderer.invoke('zernio:profiles:create', name),
     sync: () => ipcRenderer.invoke('zernio:sync'),

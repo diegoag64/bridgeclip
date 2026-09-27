@@ -27,6 +27,8 @@ export interface CandidateEdit {
   caption_edits: { segment: number; text: string }[]
   /** Source-time intervals where our burned-in captions are hidden. */
   caption_suppression_ranges: EditorRange[]
+  /** Caption block center, as a fraction of output height. Null uses layout placement. */
+  caption_y?: number | null
   dismissed_camera_markers?: number[]
 }
 export interface EditorCandidate extends CandidateEdit {
@@ -107,6 +109,7 @@ export function parseCandidateEdit(value: unknown, duration: number, transcriptC
   if (caption_suppression_ranges.some(([a, b], i) => b - a < 100 || (i > 0 && a < caption_suppression_ranges[i - 1][1]))) fail()
   return { id, title, ranges, scenes, captions: v.captions as boolean, caption_preset, video_speed: num(v.video_speed, 1, 2),
     status: status as CandidateEdit['status'], caption_edits, caption_suppression_ranges,
+    caption_y: v.caption_y == null ? null : num(v.caption_y, .1, .9),
     ...(v.dismissed_camera_markers === undefined ? {} : { dismissed_camera_markers: [...new Set(arr(v.dismissed_camera_markers, 5000).map((t) => num(t, 0, duration)))].sort((a, b) => a - b) }) }
 }
 function question(value: unknown): EditorQuestion {
@@ -155,7 +158,7 @@ export function parseEditorProject(value: unknown): EditorProject {
 }
 export function candidateEdit(c: CandidateEdit): CandidateEdit {
   const { id, title, ranges, scenes, captions, caption_preset, video_speed, status, caption_edits, caption_suppression_ranges = [], dismissed_camera_markers } = c
-  return { id, title, ranges, scenes, captions, caption_preset, video_speed, status, caption_edits, caption_suppression_ranges, ...(dismissed_camera_markers ? { dismissed_camera_markers } : {}) }
+  return { id, title, ranges, scenes, captions, caption_preset, video_speed, status, caption_edits, caption_suppression_ranges, caption_y: c.caption_y ?? null, ...(dismissed_camera_markers ? { dismissed_camera_markers } : {}) }
 }
 export function renderEditKey(c: CandidateEdit): string {
   return JSON.stringify({ ...candidateEdit(c), status: undefined, dismissed_camera_markers: undefined })
