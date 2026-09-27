@@ -276,6 +276,19 @@ def test_export_appends_library_clip_and_preserves_source_and_previous_exports(m
     (tmp_path / 'editor-project.json').write_text(json.dumps(saved))
     asyncio.run(run_editor(config))
     assert (tmp_path / 'clip_01.mp4').exists() and (tmp_path / 'editor-source.mp4').read_bytes() == b'original'
+    # Deleting exports must not recycle IDs referenced by posts or bank copies.
+    for path in tmp_path.glob('clip_*.mp4'):
+        path.unlink()
+    output = json.loads((tmp_path / 'job_output.json').read_text())
+    output.update(clips=[], total_clips=0, next_clip_index=2)
+    (tmp_path / 'job_output.json').write_text(json.dumps(output))
+    saved = json.loads((tmp_path / 'editor-project.json').read_text())
+    saved['candidates'][0].update(exports=[], status='ready')
+    (tmp_path / 'editor-project.json').write_text(json.dumps(saved))
+    config['revision'] = saved['revision']
+    asyncio.run(run_editor(config))
+    assert (tmp_path / 'clip_02.mp4').exists() and not (tmp_path / 'clip_00.mp4').exists()
+    assert json.loads((tmp_path / 'job_output.json').read_text())['clips'][0]['clip_index'] == 2
 
 
 def test_short_manual_export_contains_only_the_selected_frames(monkeypatch, tmp_path):

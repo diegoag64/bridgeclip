@@ -1,8 +1,8 @@
 import { parseJobOutput } from '../../shared/job-output'
 import { editorProgress } from '../../shared/clip-editor'
 import { ClipEditor } from './ClipEditor'
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
-import { ArrowLeft, Check, ChevronDown, Clapperboard, Download, FolderOpen, ListPlus, Plus, Scissors, Search, Send, Youtube } from 'lucide-react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
+import { ArrowLeft, Check, ChevronDown, Clapperboard, Download, FolderOpen, ListPlus, Plus, Scissors, Search, Send, Trash2, Youtube } from 'lucide-react'
 import { basename, cn, errorMessage } from '../lib/utils'
 import { getApi } from '../lib/ipc'
 import { clipFilePath } from '../lib/thumbnails'
@@ -19,6 +19,7 @@ import { PostDialog, type PostableClip } from './PostDialog'
 import { Page } from './ui/Page'
 import { PageHeader } from './ui/PageHeader'
 import { Button } from './ui/Button'
+import { ConfirmDialog, type ConfirmRequest } from './ui/ConfirmDialog'
 import { TextInput } from './ui/Field'
 import { Checkbox } from './ui/Checkbox'
 import { EmptyState } from './ui/EmptyState'
@@ -85,11 +86,16 @@ function ClipRun(props: ClipListProps): React.JSX.Element {
     setOutput(fresh); setRemaining(editorProgress(session.project.candidates).remaining)
     setEditorError(null); setEditing(false)
   }} />
-  return <GeneratedClipList {...props} output={output} editor={hasEditor ? { remaining, error: editorError, onOpen: () => setEditing(true) } : undefined} />
+  return <GeneratedClipList {...props} output={output} onOutputChanged={(fresh) => {
+    setOutput(fresh)
+    if (hasEditor) void getApi().editor.open(props.outputDir!).then((session) => setRemaining(editorProgress(session.project.candidates).remaining))
+      .catch((cause) => setEditorError(errorMessage(cause)))
+  }} editor={hasEditor ? { remaining, error: editorError, onOpen: () => setEditing(true) } : undefined} />
 }
 
-function GeneratedClipList({ output, outputDir: runDirectory, leading, onNewClip, onNavigate, initialClipIndex, editor }: ClipListProps & {
+function GeneratedClipList({ output, outputDir: runDirectory, leading, onNewClip, onNavigate, initialClipIndex, editor, onOutputChanged }: ClipListProps & {
   editor?: { remaining: number | null; error: string | null; onOpen: () => void }
+  onOutputChanged: (output: JobOutput) => void
 }): React.JSX.Element {
   const [query, setQuery] = useState('')
   const [focusedClip, setFocusedClip] = useState(initialClipIndex)
@@ -108,8 +114,14 @@ function GeneratedClipList({ output, outputDir: runDirectory, leading, onNewClip
   const [weights, setWeights] = useState({ ...defaultWeights })
   const hasEditorial = output.clips.some((c) => c.editorial?.status === 'success')
   const [inspecting, setInspecting] = useState<ClipArtifact | null>(null)
+  const [framingAvailable, setFramingAvailable] = useState<Set<number>>(new Set())
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [exporting, setExporting] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+  const deletingRef = useRef(false)
+  const [confirm, setConfirm] = useState<ConfirmRequest | null>(null)
+  const closeConfirm = useCallback(() => setConfirm(null), [])
   const [posting, setPosting] = useState<PostableClip[] | null>(null)
   const [bankClips, setBankClips] = useState<number[] | null>(null)
   const [addedToBank, setAddedToBank] = useState(false)
@@ -146,6 +158,18 @@ function GeneratedClipList({ output, outputDir: runDirectory, leading, onNewClip
   const [inspectEdits, setInspectEdits] = useState(false)
   const firstClip = output.clips[0]
   const outputDir = runDirectory ?? (firstClip ? clipFilePath(firstClip.s3_url).replace(/[\\/][^\\/]+$/, '') : '')
+
+  useEffect(() => {
+    let active = true
+    setFramingAvailable(new Set())
+    // A renderer hot reload can precede the new preload in development.
+    if (outputDir && getApi().framing.available) {
+      void getApi().framing.available(outputDir).then((indices) => {
+        if (active) setFramingAvailable(new Set(indices))
+      }).catch(() => {})
+    }
+    return () => { active = false }
+  }, [outputDir, output])
 
   const asPostable = (clip: ClipArtifact): PostableClip => ({ ...toPostable(clip), library: { outputDir, clipIndex: clip.clip_index } })
 
@@ -196,6 +220,7 @@ function GeneratedClipList({ output, outputDir: runDirectory, leading, onNewClip
   const allSelected = visibleClips.length > 0 && visibleClips.every((clip) => selected.has(clip.clip_index))
 
   const toggle = (index: number): void => {
+    if (deletingRef.current) return
     setSelected((prev) => {
       const next = new Set(prev)
       if (next.has(index)) next.delete(index)
@@ -204,9 +229,38 @@ function GeneratedClipList({ output, outputDir: runDirectory, leading, onNewClip
     })
   }
 
+  const deleteSelected = async (indices: number[]): Promise<void> => {
+    if (deletingRef.current || exportingRef.current) return
+    deletingRef.current = true; setDeleting(true); setDeleteError(null)
+    try {
+      if (typeof getApi().history.deleteClips !== 'function') throw new Error('Restart BridgeClip to enable deleting selected clips.')
+      const fresh = await getApi().history.deleteClips(outputDir, indices)
+      onOutputChanged(fresh)
+      setSelected(new Set()); setStatusRetry((value) => value + 1)
+    } catch (cause) {
+      // A cleanup failure can happen after the manifest was committed. Refresh
+      // from disk so removed clips are never left available for posting/export.
+      try {
+        const fresh = parseJobOutput(await getApi().history.getJob(outputDir))
+        if (fresh && JSON.stringify(fresh.clips) !== JSON.stringify(output.clips)) onOutputChanged(fresh)
+      } catch { /* Keep the original deletion error visible. */ }
+      setDeleteError(errorMessage(cause, 'Could not delete the selected clips. Please try again.'))
+    } finally { deletingRef.current = false; setDeleting(false) }
+  }
+  const confirmDelete = (): void => {
+    const picked = clips.filter((clip) => selected.has(clip.clip_index)).map((clip) => clip.clip_index)
+    if (!picked.length || deletingRef.current || exportingRef.current) return
+    setConfirm({
+      title: `Delete ${picked.length === 1 ? 'this clip' : `these ${picked.length} clips`}?`,
+      body: <>Permanently delete {picked.length === 1 ? 'the selected clip' : `the ${picked.length} selected clips`} and their local video files? This cannot be undone. Your source video, transcript and editor edits will be kept. Published posts and copies in automation banks or other folders will remain.</>,
+      confirmLabel: picked.length === 1 ? 'Delete clip' : 'Delete clips',
+      onConfirm: () => { void deleteSelected(picked) }
+    })
+  }
+
   const exportSelected = async (): Promise<void> => {
     const picked = clips.filter((c) => selected.has(c.clip_index))
-    if (picked.length === 0 || exportingRef.current) return
+    if (picked.length === 0 || exportingRef.current || deletingRef.current) return
     exportingRef.current = true
     setExporting(true)
     setExportError(null)
@@ -255,8 +309,15 @@ function GeneratedClipList({ output, outputDir: runDirectory, leading, onNewClip
               onToggleSelect={() => toggle(clip.clip_index)}
               onAspect={aspect == null ? setAspect : undefined}
               onPost={() => setPosting([asPostable(clip)])}
-              onInspectFraming={() => setInspecting(clip)}
+              onInspectFraming={framingAvailable.has(clip.clip_index) ? () => setInspecting(clip) : undefined}
               onAddToAutomation={outputDir ? () => setBankClips([clip.clip_index]) : undefined}
+              onSetPosted={outputDir ? async (posted) => {
+                if (!getApi().history.setPosted) throw new Error('Restart BridgeClip to enable manual posted marks.')
+                await getApi().history.setPosted(outputDir, clip.clip_index, posted)
+                setStatusRetry((value) => value + 1)
+                if (posted) setPostedExpanded(true)
+                else setUnpostedExpanded(true)
+              } : undefined}
             />
           ))}
         </div>
@@ -271,7 +332,7 @@ function GeneratedClipList({ output, outputDir: runDirectory, leading, onNewClip
         description={editor?.remaining ? `${editor.remaining} clip${editor.remaining === 1 ? '' : 's'} left to finish` : undefined}
         actions={
           <>
-            {editor && <Button variant={editor.remaining ? 'primary' : 'ghost'} icon={<Scissors className="h-4 w-4" />} onClick={editor.onOpen}>
+            {editor && <Button disabled={deleting} variant={editor.remaining ? 'primary' : 'ghost'} icon={<Scissors className="h-4 w-4" />} onClick={editor.onOpen}>
               {editor.remaining ? 'Continue editing' : 'Open editor'}
             </Button>}
             {outputDir && <Button onClick={() => setInspectEdits(true)}>Inspect transcript & edits</Button>}
@@ -297,9 +358,9 @@ function GeneratedClipList({ output, outputDir: runDirectory, leading, onNewClip
         <p className="mt-3 text-xs text-ink-muted">All clips exported at {videoSpeed}× speed · Original voice pitch</p>
       )}
 
-      {exportError && (
-        <Callout tone="danger" className="mt-3" onDismiss={() => setExportError(null)}>
-          {exportError}
+      {(deleteError || exportError) && (
+        <Callout tone="danger" className="mt-3" onDismiss={() => { setExportError(null); setDeleteError(null) }}>
+          {deleteError || exportError}
         </Callout>
       )}
 
@@ -331,6 +392,7 @@ function GeneratedClipList({ output, outputDir: runDirectory, leading, onNewClip
       <div className="glass-thick sticky top-0 z-20 mt-4 flex items-center justify-between gap-3 rounded-2xl py-1.5 pl-3 pr-1.5">
         <div className="flex min-w-0 items-center gap-3">
           <Checkbox
+            disabled={deleting}
             checked={allSelected}
             indeterminate={selected.size > 0 && !allSelected}
             onChange={() => setSelected(allSelected ? new Set() : new Set(visibleClips.map((c) => c.clip_index)))}
@@ -356,13 +418,13 @@ function GeneratedClipList({ output, outputDir: runDirectory, leading, onNewClip
         <div className="flex shrink-0 items-center gap-2">
           {selected.size > 0 && (
             <div className="flex items-center gap-1.5 animate-fade-in">
-              <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>
+              <Button variant="ghost" size="sm" disabled={deleting} onClick={() => setSelected(new Set())}>
                 Clear
               </Button>
               <Button
                 size="sm"
                 icon={<Send className="h-3.5 w-3.5" />}
-                disabled={selected.size > MAX_POST_BATCH}
+                disabled={deleting || selected.size > MAX_POST_BATCH}
                 title={selected.size > MAX_POST_BATCH ? `Post up to ${MAX_POST_BATCH} clips at a time` : undefined}
                 onClick={() => setPosting(clips.filter((c) => selected.has(c.clip_index)).map(asPostable))}
               >
@@ -371,7 +433,7 @@ function GeneratedClipList({ output, outputDir: runDirectory, leading, onNewClip
               {outputDir && <Button
                 size="sm"
                 icon={<ListPlus className="h-3.5 w-3.5" />}
-                disabled={selected.size > MAX_BANK_BATCH}
+                disabled={deleting || selected.size > MAX_BANK_BATCH}
                 title={selected.size > MAX_BANK_BATCH ? `Add up to ${MAX_BANK_BATCH} clips at a time` : 'Copy selected clips to an automation content bank'}
                 onClick={() => setBankClips(clips.filter((clip) => selected.has(clip.clip_index)).map((clip) => clip.clip_index))}
               >
@@ -381,11 +443,14 @@ function GeneratedClipList({ output, outputDir: runDirectory, leading, onNewClip
                 size="sm"
                 variant="primary"
                 loading={exporting}
+                disabled={deleting}
                 icon={<Download className="h-3.5 w-3.5" />}
                 onClick={exportSelected}
               >
                 Export {selected.size}
               </Button>
+              {outputDir && <Button variant="danger" size="sm" iconOnly aria-label="Delete selected clips" title="Delete selected clips"
+                icon={<Trash2 className="h-3.5 w-3.5" />} loading={deleting} disabled={exporting} onClick={confirmDelete} />}
               <span aria-hidden className="mx-1 h-5 w-px bg-white/10" />
             </div>
           )}
@@ -413,7 +478,7 @@ function GeneratedClipList({ output, outputDir: runDirectory, leading, onNewClip
           className="mt-4"
           icon={<Clapperboard />}
           title="No clips in this run"
-          description="The run completed without saved clips. Check the run log for details."
+          description={editor ? 'No saved exports remain. Open the editor to bake more clips.' : 'There are no saved clips in this run.'}
         />
       ) : (
         <>
@@ -432,6 +497,7 @@ function GeneratedClipList({ output, outputDir: runDirectory, leading, onNewClip
         </>
       )}
 
+      {confirm && <ConfirmDialog request={confirm} onClose={closeConfirm} />}
       {posting && <PostDialog clips={posting} onClose={() => setPosting(null)} onNavigate={onNavigate} />}
       {inspectEdits && <EditInspector outputDir={outputDir} onClose={() => setInspectEdits(false)} />}
       {inspecting && <FramingInspector outputDir={outputDir} clip={inspecting} onClose={() => setInspecting(null)} />}

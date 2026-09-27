@@ -41,6 +41,28 @@ test('favorites persist across reloads and are returned in Library history', asy
   } finally { f.cleanup() }
 })
 
+test('manual posted marks persist, undo independently, and validate clip IDs and run state', async () => {
+  const f = fixture()
+  try {
+    const manifest = fs.readFileSync(path.join(f.run, 'job_output.json'), 'utf8')
+    await f.main.setLibraryPosted(f.run, 0, true)
+    await f.main.setLibraryPosted(f.run, 0, true)
+    assert.equal(f.reload().files.isManuallyPosted(f.run, 0), true)
+    assert.equal(fs.readFileSync(path.join(f.run, 'job_output.json'), 'utf8'), manifest)
+    assert.equal(fs.readFileSync(f.clip, 'utf8'), 'clip bytes')
+    for (const id of [-1, 1000, 0.5, '0', null, 1]) await assert.rejects(f.main.setLibraryPosted(f.run, id, true))
+    await assert.rejects(f.main.setLibraryPosted(f.run, 0, 'true'))
+    await assert.rejects(f.main.setLibraryPosted(f.library, 0, true))
+    f.active.add('completed-run')
+    await assert.rejects(f.main.setLibraryPosted(f.run, 0, false), /finish/)
+    assert.equal(f.main.files.isManuallyPosted(f.run, 0), true)
+    f.active.clear()
+    await f.main.setLibraryPosted(f.run, 0, false)
+    await f.main.setLibraryPosted(f.run, 0, false)
+    assert.equal(f.reload().files.isManuallyPosted(f.run, 0), false)
+  } finally { f.cleanup() }
+})
+
 test('deletion removes every run file and its cached previews, preserving other runs and external sources', async () => {
   const f = fixture()
   try {
@@ -123,5 +145,124 @@ test('a favorite marker symlink cannot overwrite a file outside the run', async 
     assert.equal(fs.readFileSync(outside, 'utf8'), 'keep')
     await f.main.setLibraryFavorite(f.run, false)
     assert.equal(fs.readFileSync(outside, 'utf8'), 'keep')
+  } finally { f.cleanup() }
+})
+
+function clipFixture(mocks = {}) {
+  const f = fixture(mocks)
+  const first = f.output.clips[0]
+  fs.unlinkSync(f.clip)
+  f.output.clips = [0, 2, 9].map(clip_index => ({ ...first, clip_index, s3_url: path.join(f.run, `clip_${String(clip_index).padStart(2, '0')}.mp4`) }))
+  for (const clip of f.output.clips) {
+    fs.writeFileSync(clip.s3_url, `clip ${clip.clip_index}`)
+    fs.writeFileSync(clip.s3_url.replace('.mp4', '.framing.json'), '{}')
+  }
+  f.output.editor_project = true
+  f.output.custom_metadata = { keep: 'complete raw metadata' }
+  f.output.total_clips = 3
+  fs.writeFileSync(path.join(f.run, 'job_output.json'), JSON.stringify(f.output))
+  const project = structuredClone(require('../fixtures/editor/project.json'))
+  project.candidates = ['baked', 'baked', 'refining', 'discarded'].map((status, i) => ({
+    ...structuredClone(project.candidates[0]), id: `candidate-${i}`, status, exports: i === 0 ? [0, 2] : i === 1 ? [2] : [9]
+  }))
+  fs.writeFileSync(path.join(f.run, 'editor-project.json'), JSON.stringify(project))
+  for (const name of ['editor-source.mp4', 'editor-preview.mp4', 'framing-source.mp4', 'transcript.json']) fs.writeFileSync(path.join(f.run, name), 'preserved')
+  return { ...f, project }
+}
+
+test('selected clip deletion preserves sources, unselected files, metadata, posting copies and stable IDs', async () => {
+  const f = clipFixture()
+  try {
+    const copy = path.join(f.dir, 'automation-copy.mp4')
+    fs.copyFileSync(f.output.clips[1].s3_url, copy)
+    await f.main.setLibraryPosted(f.run, 0, true)
+    await f.main.setLibraryPosted(f.run, 2, true)
+    const output = await f.main.deleteLibraryClips(f.run, [2, 9])
+    assert.equal(f.main.files.isManuallyPosted(f.run, 0), true)
+    assert.equal(fs.existsSync(path.join(f.run, '.bridgeclip-posted-2')), false)
+    assert.deepEqual(output.clips.map(c => c.clip_index), [0])
+    assert.equal(output.total_clips, 1)
+    assert.equal(fs.existsSync(path.join(f.run, 'clip_02.mp4')), false)
+    assert.equal(fs.existsSync(path.join(f.run, 'clip_09.framing.json')), false)
+    assert.equal(fs.readFileSync(path.join(f.run, 'clip_00.mp4'), 'utf8'), 'clip 0')
+    assert.ok(fs.existsSync(path.join(f.run, 'clip_00.framing.json')))
+    assert.equal(fs.readFileSync(copy, 'utf8'), 'clip 2')
+    for (const name of ['editor-source.mp4', 'editor-preview.mp4', 'framing-source.mp4', 'transcript.json']) assert.equal(fs.readFileSync(path.join(f.run, name), 'utf8'), 'preserved')
+    const raw = JSON.parse(fs.readFileSync(path.join(f.run, 'job_output.json')))
+    assert.deepEqual(raw.custom_metadata, f.output.custom_metadata)
+    assert.equal(raw.next_clip_index, 10)
+    const project = JSON.parse(fs.readFileSync(path.join(f.run, 'editor-project.json')))
+    assert.equal(project.revision, f.project.revision + 1)
+    assert.deepEqual(project.candidates.map(c => c.status), ['ready', 'ready', 'refining', 'discarded'])
+    assert.deepEqual(project.candidates.map(c => c.exports), [[0], [], [], []])
+    assert.deepEqual(project.candidates[1].ranges, f.project.candidates[1].ranges)
+    assert.deepEqual(project.transcript, f.project.transcript)
+    assert.deepEqual(f.dismissed, [])
+    await f.main.deleteLibraryClips(f.run, [0])
+    assert.equal((await f.reload().files.getJobHistory(f.library))[0].clipCount, 0)
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.run, 'job_output.json'))).next_clip_index, 10)
+    assert.ok(fs.existsSync(path.join(f.run, 'editor-source.mp4')))
+    assert.equal(fs.readdirSync(f.run).some(name => name.startsWith('.delete-clips-')), false)
+  } finally { f.cleanup() }
+})
+
+test('clip deletion rejects invalid selections and unsafe media without removing any files', async () => {
+  const f = clipFixture()
+  try {
+    for (const ids of [[], null, '0', [0, 0], [1], [-1], [0.1], [1000], ['0']]) await assert.rejects(f.main.deleteLibraryClips(f.run, ids))
+    for (const run of [f.library, f.dir, 'relative']) await assert.rejects(f.main.deleteLibraryClips(run, [0]))
+    const keep = path.join(f.dir, 'clip_00.mp4')
+    fs.writeFileSync(keep, 'outside')
+    for (const file of [keep, path.join(f.run, 'editor-source.mp4')]) {
+      const altered = structuredClone(f.output); altered.clips[0].s3_url = file
+      fs.writeFileSync(path.join(f.run, 'job_output.json'), JSON.stringify(altered))
+      await assert.rejects(f.main.deleteLibraryClips(f.run, [0]), /outside/)
+      assert.ok(fs.existsSync(file))
+    }
+    fs.writeFileSync(path.join(f.run, 'job_output.json'), JSON.stringify(f.output))
+    if (directoryLinkType) {
+      const clip = path.join(f.run, 'clip_00.mp4')
+      fs.unlinkSync(clip); fs.symlinkSync(keep, clip)
+      await assert.rejects(f.main.deleteLibraryClips(f.run, [0]), /unsafe/)
+      assert.equal(fs.readFileSync(keep, 'utf8'), 'outside')
+    }
+    assert.ok(fs.existsSync(path.join(f.run, 'clip_02.mp4')))
+  } finally { f.cleanup() }
+})
+
+test('clip deletion restores media and both manifests if committing the output fails', async () => {
+  let failed = false
+  const f = clipFixture({ fs: { ...fs, renameSync: (from, to) => {
+    if (!failed && path.basename(from) === 'new-job_output.json') { failed = true; throw new Error('disk failure') }
+    fs.renameSync(from, to)
+  } } })
+  try {
+    await assert.rejects(f.main.deleteLibraryClips(f.run, [0, 2]), /disk failure/)
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.run, 'job_output.json'))), f.output)
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.run, 'editor-project.json'))), f.project)
+    for (const clip of f.output.clips) assert.ok(fs.existsSync(clip.s3_url))
+    assert.equal(fs.readdirSync(f.run).some(name => name.startsWith('.delete-clips-')), false)
+  } finally { f.cleanup() }
+})
+
+test('overlapping deletions re-read current metadata and tolerate already missing video files', async () => {
+  const f = clipFixture()
+  try {
+    fs.unlinkSync(path.join(f.run, 'clip_02.mp4'))
+    await Promise.all([f.main.deleteLibraryClips(f.run, [2]), f.main.deleteLibraryClips(f.run, [9])])
+    assert.deepEqual((await f.main.files.getJobOutput(f.run)).clips.map(c => c.clip_index), [0])
+    await assert.rejects(f.main.deleteLibraryClips(f.run, [2]), /no longer/)
+  } finally { f.cleanup() }
+})
+
+test('clip deletion refuses active jobs and editor operations', async () => {
+  let busy = false
+  const f = clipFixture({ './clip-editor': { editorBusy: () => busy } })
+  try {
+    busy = true
+    await assert.rejects(f.main.deleteLibraryClips(f.run, [0]), /editor to finish/)
+    busy = false; f.active.add('completed-run')
+    await assert.rejects(f.main.deleteLibraryClips(f.run, [0]), /run to finish/)
+    assert.ok(fs.existsSync(path.join(f.run, 'clip_00.mp4')))
   } finally { f.cleanup() }
 })

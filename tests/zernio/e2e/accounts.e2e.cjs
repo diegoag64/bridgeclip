@@ -209,7 +209,7 @@ test('accounts: set up, connect, reconnect, disconnect, recover and work offline
   await t.test('a 429 keeps the accounts on screen and says when to retry', async () => {
     mock.failNext('GET', '/api/v1/profiles', 429, { error: 'Rate limit exceeded. Please retry after 2 seconds.', details: { retryAfterSeconds: 2 } }, { 'Retry-After': '2' })
     await click('Refresh accounts')
-    await page.getByText(/Zernio's rate limit was reached\. Try again in \ds\./).waitFor({ timeout: TIMEOUT })
+    await page.getByText(/Zernio: Rate limit exceeded\. Please retry after 2 seconds\. Retry after at least 2s\./).waitFor({ timeout: TIMEOUT })
     await expectRowState('tiktok', 'connected')
     await shot('08-rate-limited')
     await new Promise((resolve) => setTimeout(resolve, 2_500))

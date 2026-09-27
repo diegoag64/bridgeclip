@@ -5,7 +5,7 @@ import { createWriteStream, existsSync, lstatSync, mkdirSync, readFileSync, rena
 import { open, unlink } from 'fs/promises'
 import { basename, extname, join } from 'path'
 import { pipeline } from 'stream/promises'
-import { AUTOMATION_PLATFORMS, dueSlots, type Automation, type AutomationAccount, type AutomationContent, type AutomationUpdate, type GeneratedPlatformMetadata, type AutomationSourceContext, type MetadataEnhancement, type MetadataResearch, type AutomationSourceGroup, type AutomationBatchResult, nextAutomationContent, type AutomationTikTokReview, type AutomationTikTokReviewUpdate } from '../shared/automations'
+import { MAX_ENHANCEMENT_GUIDANCE, AUTOMATION_PLATFORMS, dueSlots, type Automation, type AutomationAccount, type AutomationContent, type AutomationUpdate, type GeneratedPlatformMetadata, type AutomationSourceContext, type MetadataEnhancement, type MetadataResearch, type AutomationSourceGroup, type AutomationBatchResult, nextAutomationContent, type AutomationTikTokReview, type AutomationTikTokReviewUpdate } from '../shared/automations'
 import { isPostableAccount, isZernioId, type ZernioOverview } from '../shared/zernio'
 import { checkCaption, checkClip, defaultFacebookFormat, isValidTimeZone, tiktokOptionsError, youtubeTitleFor, type PostClipRequest } from '../shared/zernio-posts'
 import { loadSettings } from './settings-store'
@@ -110,6 +110,7 @@ function validEnhancement(value: MetadataEnhancement): boolean {
         (post.title === null || (typeof post.title === 'string' && post.title.length <= 500)) &&
         (post.categoryId === null || typeof post.categoryId === 'string') && (post.topicTag === null || typeof post.topicTag === 'string') &&
         Array.isArray(post.tags) && post.tags.length <= 8 && post.tags.every((tag) => typeof tag === 'string' && tag.length <= 100))) return false
+  if (value.guidance !== undefined && (typeof value.guidance !== 'string' || value.guidance.length > MAX_ENHANCEMENT_GUIDANCE)) return false
   try { parseSourceContext(value.source) } catch { return false }
   return validResearch(value.research)
 }
@@ -509,16 +510,17 @@ async function completeBankSource(automation: Automation, source: AutomationSour
   return previous ? { ...source, description: previous.description, channel: source.channel || previous.channel } : completeSourceContext(source)
 }
 
-async function sharedSourceResearch(workspace: string, automation: Automation, source: AutomationSourceContext | null, transcript = ''): Promise<MetadataResearch> {
-  const key = sourceResearchKey(source)
-  if (!key || !source) return researchAutomationTopic(transcript, source)
+async function sharedSourceResearch(workspace: string, automation: Automation, source: AutomationSourceContext | null, transcript = '', guidance = ''): Promise<MetadataResearch> {
+  const sourceKey = sourceResearchKey(source)
+  const key = sourceKey && guidance ? createHash('sha256').update(JSON.stringify([sourceKey, guidance])).digest('hex') : sourceKey
+  if (!key || !source) return researchAutomationTopic(transcript, source, 'clip', guidance)
   const previous = automation.sourceResearch?.find((entry) => entry.key === key)
   // Source terminology is stable; retry unavailable searches after a short cooldown.
   const ttl = previous?.research.status === 'complete' ? 7 * 86400000 : 5 * 60000
   if (previous && Date.now() - Date.parse(previous.createdAt) >= 0 && Date.now() - Date.parse(previous.createdAt) < ttl) {
     return { ...previous.research, scope: 'source', reused: true, researchedAt: previous.createdAt }
   }
-  const research = await researchAutomationTopic('', source, 'source')
+  const research = await researchAutomationTopic('', source, 'source', guidance)
   if (currentWorkspace() !== workspace || cachedWorkspace !== workspace || !cached.includes(automation)) throw new Error('The Zernio workspace changed. Please try again.')
   const createdAt = new Date().toISOString()
   const result = { ...research, scope: 'source' as const, reused: false, researchedAt: createdAt }
@@ -543,7 +545,7 @@ export async function automationEnhancementGroups(id: unknown): Promise<Automati
   for (const item of candidates) {
     if (!needsDraft(item)) continue
     const key = sourceResearchKey(item.sourceContext ?? null) ?? `clip:${item.id}`
-    const group = groups.get(key) ?? { key, title: item.sourceContext?.title || `Source unknown · ${item.title}`, contentIds: [] }
+    const group = groups.get(key) ?? { key, sourceType: item.sourceContext?.url ? 'linked' as const : 'file' as const, title: item.sourceContext?.title || item.title, contentIds: [] }
     group.contentIds.push(item.id)
     groups.set(key, group)
   }
@@ -551,8 +553,10 @@ export async function automationEnhancementGroups(id: unknown): Promise<Automati
 }
 
 /** Keep a whole writing batch reserved, so scheduled publishing cannot race draft preparation. */
-export async function enhanceAutomationBatch(id: unknown, rawIds: unknown, rawKey: unknown): Promise<AutomationBatchResult> {
+export async function enhanceAutomationBatch(id: unknown, rawIds: unknown, rawKey: unknown, rawGuidance: unknown = ''): Promise<AutomationBatchResult> {
   const { workspace, automation } = find(id)
+  if (typeof rawGuidance !== 'string' || rawGuidance.length > MAX_ENHANCEMENT_GUIDANCE) throw new Error(`Use a prompt of up to ${MAX_ENHANCEMENT_GUIDANCE} characters.`)
+  const guidance = rawGuidance.trim()
   if (!Array.isArray(rawIds) || !rawIds.length || rawIds.length > 5 || new Set(rawIds).size !== rawIds.length || !rawIds.every((id) => typeof id === 'string' && UUID.test(id)) || typeof rawKey !== 'string') throw new Error('Choose up to five clips from one video.')
   if (busy.has(automation.id)) throw new Error('Wait for the current operation to finish.')
   const selected: AutomationContent[] = []
@@ -600,9 +604,9 @@ export async function enhanceAutomationBatch(id: unknown, rawIds: unknown, rawKe
     }
     if (!clips.length) { recordErrors(); return { automations: listAutomations(), completed: 0, skipped, errors } }
     const source = selected[0].sourceContext ?? null
-    const research = await sharedSourceResearch(workspace, automation, source, clips[0].transcript)
+    const research = await sharedSourceResearch(workspace, automation, source, clips[0].transcript, guidance)
     ensureCurrent()
-    const result = await generateAutomationMetadataBatch(clips, platforms, { source, research })
+    const result = await generateAutomationMetadataBatch(clips, platforms, { source, research, guidance })
     ensureCurrent()
     let completed = 0
     for (const item of selected) {
@@ -611,7 +615,7 @@ export async function enhanceAutomationBatch(id: unknown, rawIds: unknown, rawKe
         if (result.errors.has(item.id)) errors.push({ contentId: item.id, message: result.errors.get(item.id)! })
         continue
       }
-      item.metadataDraft = { id: randomUUID(), createdAt: new Date().toISOString(), platforms, posts, source, research }
+      item.metadataDraft = { id: randomUUID(), createdAt: new Date().toISOString(), platforms, posts, source, research, guidance }
       item.metadataError = null
       try { save(workspace); completed++ } catch (error) { item.metadataDraft = null; throw error }
     }

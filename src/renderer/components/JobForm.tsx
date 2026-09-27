@@ -496,6 +496,7 @@ function CaptionsStep({ draft, update }: { draft: ClipDraft; update: Update }): 
         aria-disabled={!draft.includeCaptions}
       >
         <CaptionPresetPicker
+          showPreview
           value={draft.captionPreset}
           onChange={(captionPreset) => update({ captionPreset })}
           disabled={!draft.includeCaptions}

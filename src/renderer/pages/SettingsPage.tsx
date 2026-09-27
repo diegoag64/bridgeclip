@@ -17,6 +17,7 @@ import { Badge, StatusDot } from '../components/ui/Badge'
 import { IconTile } from '../components/ui/IconTile'
 import { Callout } from '../components/ui/Callout'
 import { UpdatesRow } from '../components/Updates'
+import { OutputStorage } from '../components/OutputStorage'
 
 type SectionId = 'keys' | 'vocabulary' | 'output' | 'system' | 'about'
 type SectionTone = 'success' | 'warning' | 'danger' | 'idle'
@@ -283,6 +284,7 @@ export function SettingsPage({ showUpdates = 0 }: { showUpdates?: number }): Rea
               </div>
             </div>
             <UpdatesRow />
+            <OutputStorage outputDirectory={outputDirectory} />
           </Section>
         </div>
       </div>

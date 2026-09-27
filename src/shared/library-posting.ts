@@ -5,6 +5,7 @@ export interface LibraryClipTarget { outputDir: string; clipIndex: number }
 
 export type LibraryPostingState = 'not_posted' | 'posted' | 'partial' | 'scheduled' | 'publishing' | 'draft' | 'failed'
 export interface LibraryClipPostingStatus {
+  manuallyPosted?: boolean
   clipIndex: number
   state: LibraryPostingState
   platforms: string[]

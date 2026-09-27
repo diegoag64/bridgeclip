@@ -145,6 +145,8 @@ def test_unavailable_judgment_never_accepts_or_pays_for_repairs(monkeypatch):
 def test_repair_can_cross_both_preferred_edges_but_requires_fresh_jev_pass(monkeypatch):
     r, calls = reviewer(lambda state, q: 'setup' in state['retained_dialogue'] and 'qualification' in state['retained_dialogue'])
     async def completion(_client, payload):
+        from clip_engine.services.sponsor_policy import SPONSOR_DISCOVERY_RULE
+        assert SPONSOR_DISCOVERY_RULE in payload['messages'][0]['content']
         assert payload['model'] == 'fixture/cheap'
         assert payload['reasoning'] == {'effort': 'low', 'exclude': True}
         assert payload['max_tokens'] == 4096
@@ -400,6 +402,16 @@ def test_sponsored_or_uncertain_segment_is_rejected_without_disguising_it(probab
     assert audit['coherence']['reason'] == 'sponsored_or_uncertain_promotion'
     with pytest.raises(CoherenceRejected):
         asyncio.run(r.audit_edit('Enterprise authentication', TimeMap([(0, 5000)], 5000), 2000, 5000, report(), None))
+
+
+def test_review_uses_the_same_product_demo_boundary_as_discovery():
+    from clip_engine.services.sponsor_policy import SPONSOR_ALLOWED, SPONSOR_EXCLUDED
+    from clip_engine.services.coherence_review import POLICY_QUESTIONS
+    criteria = POLICY_QUESTIONS['not_sponsored']['criteria']
+    assert criteria == {'true': SPONSOR_ALLOWED, 'false': SPONSOR_EXCLUDED}
+    assert 'software demo' in criteria['true']
+    assert 'Do not require proof that the presenter is independent' in criteria['true']
+    assert 'disclosed sponsor read' in criteria['false']
 
 
 def test_opening_reference_is_repaired_even_when_general_context_passes(monkeypatch):

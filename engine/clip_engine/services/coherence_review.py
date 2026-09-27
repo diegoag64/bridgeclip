@@ -15,6 +15,7 @@ from clip_engine.services.clip_editor import TimeMap, preserve_intervals
 from clip_engine.services.jev_service import choice, noul
 from clip_engine.services.editorial_evidence import transcript_row
 from clip_engine.services.openrouter import chat_completion, json_schema_format, message_text
+from clip_engine.services.sponsor_policy import SPONSOR_ALLOWED, SPONSOR_EXCLUDED, SPONSOR_DISCOVERY_RULE
 
 # Clip eligibility and destructive omissions have different risk thresholds.
 # Every content check must pass independently; good titles cannot offset bad cuts.
@@ -31,7 +32,7 @@ REPAIR_TOKEN_LIMITS = (4096, 8192)
 # Judge a standalone excerpt, not whether it reproduces the entire talk or proves
 # the speaker objectively correct. Further elaboration is not a missing payoff.
 CLIP_QUESTIONS = {
-    'not_sponsored': noul('Is `retained_dialogue` free of sponsor reads, paid promotions, affiliate pitches or advertising segments, considering disclosures in `before` and `after`?', 'This is ordinary editorial discussion, criticism, education or an independent product example, with no evidence that the retained material belongs to an advertising segment. A brand name or price alone is not advertising. A completed sponsor segment elsewhere in before does not make the following editorial topic sponsored.', 'Any retained material is part of a sponsor read or promotional pitch: sponsor acknowledgment, sales benefits followed by a signup/link/discount call to action, affiliate offer or paid endorsement. A disclosure just before the excerpt still applies to the ad even when the clip omits the disclosure. Informative technical details inside a sponsor read are still advertising.'),
+    'not_sponsored': noul('Is `retained_dialogue` free of sponsor reads, paid promotions, affiliate pitches or advertising segments, considering disclosures in `before` and `after`?', SPONSOR_ALLOWED, SPONSOR_EXCLUDED),
     'opening_context': noul('Does the opening of `retained_dialogue` establish its own setup, without relying on an example, demonstration, explanation or event shown only in `before`?', 'The excerpt introduces its subject and supplies the specific setup it relies on. And/so/but alone are fine. A reference is acceptable when the actual example or premise is explained inside the retained excerpt.', 'The opening refers back to missing material, for example "the reason I gave you this example is because", "as you just saw", or "that is why this works", but the referenced example or demonstration itself is absent. Understanding the broad topic or a later application does not replace that missing setup. Do not use before to mentally fill the gap for a new viewer.'),
     'self_contained': noul('Can a viewer identify the subject and understand the main point from `retained_dialogue` alone?', 'The main point and its essential referents are understandable. Ordinary discourse openings (and, so, but), rhetorical questions and references explained inside the excerpt are acceptable. Background or a full lecture is not required.', 'An unidentified person, object, event or premise is essential to understanding the main point and is only explained outside the excerpt.'),
     'complete_ending': noul('Does the main point in `retained_dialogue` reach a completed statement, answer or reaction?', 'The point lands before the excerpt ends. A following elaboration, example, transition or separate question in after does not invalidate a completed point.', 'The excerpt ends mid-sentence or with an unfinished explanation, unanswered central question or promised payoff that is essential to this excerpt.'),
@@ -291,7 +292,8 @@ class CoherenceReviewer:
                 'Include that material in the excerpt. If a context or ending check failed, merely changing the title does not repair it. '
                 'Previous proposals did not pass; avoid repeating them unless no better supported excerpt exists, in which case omit it. '
                 'You cannot invent speech, facts or footage. Return omit=true if no supported complete excerpt exists. '
-                'Otherwise return the inclusive first/last segment IDs and a factual short title. Jev independently reviews your proposal.'},
+                'Otherwise return the inclusive first/last segment IDs and a factual short title. Jev independently reviews your proposal.'
+                + SPONSOR_DISCOVERY_RULE},
                 {'role': 'user', 'content': json.dumps(state)}],
             'response_format': json_schema_format('coherent_clip_repair', REPAIR_SCHEMA)}
         record['request_messages'] = copy.deepcopy(payload['messages'])

@@ -157,7 +157,52 @@ class TestSentenceHelpers:
 
 
 class TestEmptyPlan:
-    def test_no_speech_fails_with_clear_message(self, monkeypatch, tmp_path):
+    @pytest.mark.parametrize('workflow', ['automatic', 'review'])
+    def test_empty_model_plan_preserves_explanation_and_never_starts_review_or_render(self, monkeypatch, tmp_path, workflow):
+        from unittest.mock import AsyncMock
+        from clip_engine.error_policy import NoClipCandidatesError, safe_processing_error, safe_job_error_text
+        from clip_engine.services.sponsor_policy import SPONSOR_DISCOVERY_RULE
+        monkeypatch.setattr(RenderingService, '_verify_ffmpeg', lambda self: None)
+        settings = pipeline_module.get_settings()
+        monkeypatch.setattr(settings, 'local_mode', True)
+        monkeypatch.setattr(settings, 'local_output_dir', str(tmp_path / 'out'))
+        monkeypatch.setattr(type(settings), 'temp_directory', property(lambda self: str(tmp_path / 'work')))
+        pipeline = AIClippingPipeline()
+        tr = make_transcript(12)
+        model_response = json.dumps({'insights': 'The source was classified as a promotional showcase.', 'clips': []})
+        async def complete(**kwargs):
+            # The actual outgoing discovery request must explain the demo/advertising distinction.
+            system = kwargs['messages'][0]['content']
+            assert SPONSOR_DISCOVERY_RULE in system
+            assert 'Do not require proof that the presenter is independent' in system
+            return {'choices': [{'message': {'content': model_response}, 'finish_reason': 'stop'}]}, {'prompt_tokens': 100, 'completion_tokens': 20, 'total_tokens': 120, 'cost': .001}
+        planner_call = AsyncMock(side_effect=complete)
+        render = AsyncMock()
+        review = AsyncMock()
+        monkeypatch.setattr(pipeline.intelligence_planner, '_call_openrouter', planner_call)
+        monkeypatch.setattr(pipeline.source_context_service, 'build', AsyncMock(return_value={'status': 'unavailable', 'source': {}, 'brief': None, 'research_status': 'disabled', 'citations': [], 'cost_usd': 0, 'requests': [], 'cost_incomplete': False}))
+        monkeypatch.setattr(pipeline.video_downloader, 'download_video', AsyncMock(return_value=SimpleNamespace(
+            video_path='fixture.mp4', file_size_bytes=1, metadata=SimpleNamespace(title='Product walkthrough', duration_seconds=60, width=1920, height=1080))))
+        monkeypatch.setattr(pipeline.transcription_service, 'transcribe', AsyncMock(return_value=TranscriptionResult(segments=tr, full_text='A product demo.')))
+        monkeypatch.setattr(pipeline.rendering_service, 'render_clip', render)
+        monkeypatch.setattr(pipeline_module, 'CoherenceReviewer', review)
+        result = asyncio.run(pipeline.process_video(ClippingJobRequest(video_url='fixture.mp4', job_id='empty', workflow=workflow)))
+        assert result.status == JobStatus.FAILED
+        assert result.error == 'The planner returned no clip candidates'
+        assert result.failure_code == 'planning.no_candidates' and result.failure_stage == 'planning'
+        assert planner_call.await_count == 1
+        review.assert_not_called()
+        render.assert_not_called()
+        audit = json.loads((tmp_path / 'out/empty/edit_audit.json').read_text())
+        assert audit['outcome'] == 'no_candidates' and audit['candidates'] == []
+        assert audit['planner']['requests'][0]['response'] == model_response
+        assert len(audit['transcript']) == len(tr)
+        # Public errors stay fixed even if an exception carries private provider details.
+        assert safe_processing_error(NoClipCandidatesError('private-provider-detail')) == result.error
+        assert safe_job_error_text(result.error) == result.error
+
+    @pytest.mark.parametrize('workflow', ['automatic', 'review'])
+    def test_no_speech_fails_with_clear_message(self, monkeypatch, tmp_path, workflow):
         monkeypatch.setattr(RenderingService, "_verify_ffmpeg", lambda self: None)
         settings = pipeline_module.get_settings()
         monkeypatch.setattr(settings, "local_mode", True)
@@ -175,9 +220,13 @@ class TestEmptyPlan:
 
         monkeypatch.setattr(pipeline.video_downloader, "download_video", download)
         monkeypatch.setattr(pipeline.transcription_service, "transcribe", transcribe)
-        result = asyncio.run(pipeline.process_video(ClippingJobRequest(video_url="x", job_id="j1")))
+        result = asyncio.run(pipeline.process_video(ClippingJobRequest(video_url="x", job_id="j1", workflow=workflow)))
         assert result.status == JobStatus.FAILED
-        assert "No clips passed the coherence review" in result.error
+        assert result.error == 'The planner returned no clip candidates'
+        assert result.failure_code == 'planning.no_candidates'
+        assert result.failure_stage == 'planning'
+        audit = json.loads((tmp_path / 'out/j1/edit_audit.json').read_text())
+        assert audit['outcome'] == 'no_candidates'
 
     def test_short_preference_keeps_full_transcript_and_can_extend(self, monkeypatch):
         tr = make_transcript(10)

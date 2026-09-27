@@ -189,7 +189,7 @@ function setup(overrides = {}) {
   fs.writeFileSync(path.join(run, 'editor-project.json'), JSON.stringify(fixture))
   fs.writeFileSync(path.join(run, 'job_output.json'), JSON.stringify({ job_id: 'review-run', clips: [], editor_project: true }))
   const mocks = { electron: fakeElectron(temp.dir).electron, ...overrides }
-  const source = "export * from './src/main/clip-editor'; export * as settings from './src/main/settings-store'"
+  const source = "export * from './src/main/clip-editor'; export * as settings from './src/main/settings-store'; export { authorizeMedia } from './src/main/security'"
   const main = loadMain(source, mocks)
   main.settings.savePublicSettings({ outputDirectory: library, pythonPath: 'python3' })
   return { ...temp, run, library, main, reload: () => loadMain(source, mocks) }
@@ -356,7 +356,7 @@ function batchSetup() {
     child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.stdin = new PassThrough()
     child.stdin.end = (data) => {
       const config = JSON.parse(data)
-      workers.push({ config, finish(ok = true) {
+      workers.push({ config, write: (data) => child.stdout.write(data), close: (code) => child.emit('close', code), finish(ok = true) {
         if (ok) {
           const file = path.join(f.run, 'editor-project.json')
           const project = JSON.parse(fs.readFileSync(file))
@@ -381,7 +381,8 @@ function batchSetup() {
   return { ...f, workers }
 }
 const nextWorker = async (workers, count) => {
-  for (let i = 0; workers.length < count && i < 100; i++) await new Promise(r => setImmediate(r))
+  const deadline = Date.now() + 5000
+  while (workers.length < count && Date.now() < deadline) await new Promise(r => setTimeout(r, 5))
   assert.equal(workers.length, count)
   return workers[count - 1]
 }
@@ -448,5 +449,185 @@ test('cancelling between batch clips never starts the next worker', async () => 
     await rejected
     assert.equal(f.workers.length, 1)
     assert.equal((await f.main.openEditor(f.run)).project.candidates[4].status, 'ready')
+  } finally { f.cleanup() }
+})
+
+test('source generations cannot supply arbitrary media paths', () => {
+  for (const source_id of ['../private', '/outside', 'a'.repeat(31), 123, null]) {
+    assert.throws(() => schema.parseEditorProject({ ...clone(), source_id }))
+  }
+  assert.equal(schema.parseEditorProject({ ...clone(), source_id: 'a'.repeat(32) }).source_id, 'a'.repeat(32))
+})
+
+for (const outcome of ['success', 'failure', 'cancelled', 'committed-before-exit']) test(`source replacement ${outcome} preserves the correct media pair and edits`, async () => {
+  const { EventEmitter } = require('node:events')
+  const { PassThrough } = require('node:stream')
+  let complete, config, started
+  const entered = new Promise(r => { started = r })
+  const f = setup({ child_process: { ...require('node:child_process'), spawn: () => {
+    const child = new EventEmitter()
+    child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.stdin = new PassThrough()
+    child.stdin.end = data => {
+      config = JSON.parse(data)
+      complete = () => {
+        const preview = path.join(f.run, `editor-preview-${config.source_id}.mp4`)
+        fs.writeFileSync(preview, 'new preview')
+        if (outcome === 'success' || outcome === 'committed-before-exit') {
+          const project = JSON.parse(fs.readFileSync(path.join(f.run, 'editor-project.json')))
+          project.source_id = config.source_id; project.revision++; project.width = 3840; project.height = 2160
+          fs.writeFileSync(path.join(f.run, 'editor-project.json'), JSON.stringify(project))
+        }
+        child.stdout.write(JSON.stringify({ ok: outcome === 'success', error: outcome === 'failure' ? 'duration' : undefined }))
+        child.emit('close', outcome === 'success' ? 0 : 1)
+      }
+      started()
+    }
+    return child
+  } } })
+  try {
+    const replacement = path.join(f.dir, 'higher-quality.mp4')
+    fs.writeFileSync(replacement, 'higher resolution source')
+    await assert.rejects(f.main.replaceEditorSource(f.run, 0, replacement), /outside/)
+    f.main.authorizeMedia(replacement)
+    await assert.rejects(f.main.replaceEditorSource(f.run, 999, replacement), /changed/)
+    await assert.rejects(f.main.runEditor(f.run, 0, '', 'replace-source'), /Invalid/)
+    const pending = f.main.replaceEditorSource(f.run, 0, replacement)
+    const result = outcome === 'success' ? pending : assert.rejects(pending, outcome === 'failure' ? /different duration/ : /replacement stopped/)
+    await entered
+    assert.equal(config.action, 'replace-source')
+    assert.equal(fs.readFileSync(path.join(f.run, `editor-source-${config.source_id}.mp4`), 'utf8'), 'higher resolution source')
+    assert.equal((await f.main.openEditor(f.run)).operation, 'replace-source')
+    assert.equal((await f.main.openEditor(f.run)).sourcePath, fs.realpathSync(path.join(f.run, 'editor-source.mp4')))
+    await assert.rejects(f.main.saveEditor(f.run, 0, fixture.candidates), /Wait/)
+    await assert.rejects(f.main.replaceEditorSource(f.run, 0, replacement), /already running/)
+    if (outcome === 'cancelled') f.main.cancelEditor(f.run)
+    complete(); await result
+    const reopened = await f.main.openEditor(f.run)
+    assert.equal(reopened.operation, null)
+    const committed = ['success', 'committed-before-exit'].includes(outcome)
+    assert.equal(reopened.project.source_id, committed ? config.source_id : undefined)
+    assert.equal(fs.existsSync(path.join(f.run, 'editor-source.mp4')), !committed)
+    assert.equal(fs.existsSync(path.join(f.run, `editor-source-${config.source_id}.mp4`)), committed)
+    assert.equal(fs.existsSync(path.join(f.run, `editor-preview-${config.source_id}.mp4`)), committed)
+    const saved = await f.main.saveEditor(f.run, reopened.project.revision, reopened.project.candidates)
+    assert.equal(saved.project.source_id, reopened.project.source_id)
+    assert.deepEqual(saved.project.candidates, reopened.project.candidates)
+    assert.equal(fs.readFileSync(replacement, 'utf8'), 'higher resolution source')
+  } finally { f.cleanup() }
+})
+
+test('camera markers retain exact frame times and dismissals do not invalidate baked clips or reviews', () => {
+  const p = clone(), c = p.candidates[0]
+  c.status = 'baked'
+  c.camera_scan = { start_ms: 1000, end_ms: 12000, frames: [1001, 1042.708, 1084.417, 2002, 2043.708], markers: [{ at_ms: 1042.708, score: .1 }, { at_ms: 2002, score: .04 }] }
+  c.scenes[1].at_ms = 1042.708
+  p.preview_id = 'a'.repeat(32); p.frame_preview = true
+  const parsed = schema.parseEditorProject(p)
+  assert.equal(parsed.candidates[0].scenes[1].at_ms, 1042.708)
+  assert.deepEqual(parsed.candidates[0].camera_scan, c.camera_scan)
+  const before = schema.renderEditKey(c), signature = schema.editSignature(c)
+  const dismissed = schema.refineEdit(c, { dismissed_camera_markers: [1042.708] })
+  assert.equal(dismissed.status, 'baked')
+  assert.equal(schema.renderEditKey(dismissed), before)
+  assert.equal(schema.editSignature(dismissed), signature)
+  assert.equal(schema.cameraMarkers(c, .08).length, 1)
+  assert.equal(schema.cameraMarkers(dismissed, .08).length, 0)
+  assert.equal(schema.cameraMarkers(dismissed, .025).length, 1)
+  assert.ok(!schema.candidateEdit(c).camera_scan)
+  for (const mutate of [p => { p.preview_id = '../outside' }, p => { p.candidates[0].camera_scan.frames = [1001, 1001] },
+    p => { p.candidates[0].camera_scan.markers[0].at_ms = 1100 }, p => { p.candidates[0].camera_scan.markers[0].score = NaN },
+    p => { p.candidates[0].dismissed_camera_markers = [-1] }]) {
+    const bad = structuredClone(p); mutate(bad); assert.throws(() => schema.parseEditorProject(bad))
+  }
+})
+
+test('frame stepping and layout snapping use presentation timestamps including variable frame durations', () => {
+  const frames = [0, 41.708, 83.417, 125.125, 208.542, 250.25]
+  assert.equal(schema.stepFrame(frames, 83.417, -1), 41.708)
+  assert.equal(schema.stepFrame(frames, 83.416999, 1), 125.125)
+  assert.equal(schema.stepFrame(frames, 170, -1), 125.125)
+  assert.equal(schema.stepFrame(frames, 170, 1), 208.542)
+  assert.equal(schema.snapFrame(frames, 202), 208.542)
+  assert.equal(schema.snapFrame(frames, 900), 900)
+  const scenes = [{ at_ms: 0, layout: 'fit', crops: [[0, 0, 1, 1]] }, { at_ms: 125.125, layout: 'fit', crops: [[0, 0, 1, 1]] }]
+  assert.equal(schema.retimeScene(scenes, 1, 202, 1000, frames)[1].at_ms, 208.542)
+  assert.equal(schema.retimeScene(scenes, 1, 0, 1000, frames), scenes)
+})
+
+test('saved camera dismissals persist while scan results and preview paths stay main-owned', async () => {
+  const f = setup()
+  try {
+    const p = clone(), c = p.candidates[0]
+    c.status = 'baked'
+    c.camera_scan = { start_ms: 0, end_ms: 12000, frames: [0, 1001, 1042.708], markers: [{ at_ms: 1042.708, score: .3 }] }
+    p.preview_id = 'b'.repeat(32); p.frame_preview = true
+    fs.writeFileSync(path.join(f.run, `editor-preview-${p.preview_id}.mp4`), 'precise preview')
+    fs.writeFileSync(path.join(f.run, 'editor-project.json'), JSON.stringify(p))
+    const opened = await f.main.openEditor(f.run)
+    assert.ok(opened.previewPath.endsWith(`editor-preview-${p.preview_id}.mp4`))
+    const edits = structuredClone(opened.project.candidates)
+    edits[0].dismissed_camera_markers = [1042.708]
+    edits[0].camera_scan = { arbitrary: 'forged' }
+    const saved = await f.main.saveEditor(f.run, opened.project.revision, edits)
+    assert.deepEqual(saved.project.candidates[0].camera_scan, c.camera_scan)
+    assert.equal(saved.project.candidates[0].status, 'baked')
+    assert.deepEqual((await f.reload().openEditor(f.run)).project.candidates[0].dismissed_camera_markers, [1042.708])
+  } finally { f.cleanup() }
+})
+
+test('camera scan locks edits, needs no provider key, and cancellation cleans only the uncommitted preview', async () => {
+  const f = batchSetup()
+  try {
+    const before = fs.readFileSync(path.join(f.run, 'editor-project.json'), 'utf8')
+    const pending = f.main.runEditor(f.run, 0, 'candidate-1', 'scan-cameras')
+    const rejected = assert.rejects(pending, /Camera scan stopped/)
+    const worker = await nextWorker(f.workers, 1)
+    assert.equal(worker.config.action, 'scan-cameras')
+    assert.match(worker.config.preview_id, /^[a-f0-9]{32}$/)
+    assert.equal((await f.main.openEditor(f.run)).operation, 'scan-cameras')
+    await assert.rejects(f.main.saveEditor(f.run, 0, []), /Wait/)
+    const pendingPreview = path.join(f.run, `editor-preview-${worker.config.preview_id}.mp4.partial.mp4`)
+    fs.writeFileSync(pendingPreview, 'partial')
+    f.main.cancelEditor(f.run); worker.finish(false); await rejected
+    assert.equal(fs.readFileSync(path.join(f.run, 'editor-project.json'), 'utf8'), before)
+    assert.equal(fs.existsSync(pendingPreview), false)
+    assert.equal(fs.existsSync(path.join(f.run, 'editor-preview.mp4')), true)
+    assert.equal((await f.main.openEditor(f.run)).operation, null)
+  } finally { f.cleanup() }
+})
+
+
+test('camera progress streams across chunks, reconnects, stays monotonic, and clears on completion', async () => {
+  const f = batchSetup()
+  try {
+    const pending = f.main.runEditor(f.run, 0, 'candidate-1', 'scan-cameras')
+    const worker = await nextWorker(f.workers, 1)
+    const progress = async () => (await f.main.openEditor(f.run)).progress
+    assert.deepEqual(await progress(), { phase: 'scan', percent: 0 })
+    worker.write('{"type":"progress","phase":"scan","per')
+    assert.equal((await progress()).percent, 0)
+    worker.write('cent":43}\n{"type":"progress","phase":"scan","percent":60}\n')
+    assert.deepEqual(await progress(), { phase: 'scan', percent: 60 })
+    for (const percent of [20, -1, 101, '90', null]) worker.write(JSON.stringify({ type: 'progress', phase: 'scan', percent }) + '\n')
+    assert.equal((await progress()).percent, 60)
+    worker.write('{"type":"progress","phase":"preview","percent":0}\n')
+    worker.write('{"type":"progress","phase":"scan","percent":100}\n')
+    worker.write('{"type":"progress","phase":"preview","percent":24}\n')
+    assert.deepEqual(await progress(), { phase: 'preview', percent: 24 })
+    worker.write('{"ok":true}\n'); worker.close(0)
+    await pending
+    assert.equal(await progress(), undefined)
+  } finally { f.cleanup() }
+})
+
+for (const output of ['malformed\n', 'x'.repeat(16385)]) test('invalid editor progress protocol fails safely: ' + output.length, async () => {
+  const f = batchSetup()
+  try {
+    const pending = f.main.runEditor(f.run, 0, 'candidate-1', 'scan-cameras')
+    const rejected = assert.rejects(pending, /Camera scan stopped/)
+    const worker = await nextWorker(f.workers, 1)
+    worker.write(output); worker.write('\n{"ok":true}\n'); worker.close(0)
+    await rejected
+    assert.equal((await f.main.openEditor(f.run)).progress, undefined)
   } finally { f.cleanup() }
 })

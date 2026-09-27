@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Check, FolderOpen, GripVertical, Info, Pencil, Play, Plus, RefreshCw, Sparkles, Trash2, Workflow, X } from 'lucide-react'
 import { canReorderContent, hasEnhancedMetadata } from '../../shared/automations'
-import { AUTOMATION_PLATFORMS, needsTikTokReview, nextAutomationContent, type Automation, type AutomationContent, type AutomationContentStatus, type AutomationUpdate, type AutomationSourceGroup } from '../../shared/automations'
+import { MAX_ENHANCEMENT_GUIDANCE, AUTOMATION_PLATFORMS, needsTikTokReview, nextAutomationContent, type Automation, type AutomationContent, type AutomationContentStatus, type AutomationUpdate, type AutomationSourceGroup } from '../../shared/automations'
 import { isPostableAccount, isValidProfileName } from '../../shared/zernio'
 import { AutomationTikTokReviewDialog } from '../components/AutomationTikTokReviewDialog'
 import { AutomationMetadataDialog } from '../components/AutomationMetadataDialog'
@@ -102,6 +102,8 @@ export function AutomationsPage({ onNavigate, onViewLibrary }: { onNavigate: (pa
   const stopBulk = useRef(false)
   const [sourceGroups, setSourceGroups] = useState<AutomationSourceGroup[] | null>(null)
   const [sourceGroupKey, setSourceGroupKey] = useState('')
+  const [sourceGuidance, setSourceGuidance] = useState<Record<string, string>>({})
+  const activeSourceGroup = sourceGroups?.find((group) => group.key === sourceGroupKey)
   const [tiktokReview, setTiktokReview] = useState<AutomationContent | null>(null)
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null)
   const closeConfirm = useCallback(() => setConfirm(null), [])
@@ -144,7 +146,7 @@ export function AutomationsPage({ onNavigate, onViewLibrary }: { onNavigate: (pa
     setSelectedId(automation?.id ?? null)
     rememberSelection(automation?.id ?? null)
     setDraft(automation ? draftFor(automation) : null)
-    setSourceGroups(null); setSourceGroupKey('');
+    setSourceGroups(null); setSourceGroupKey(''); setSourceGuidance({});
     setEditing(null); setTiktokReview(null); setNewProfileOpen(false)
   }
 
@@ -166,6 +168,7 @@ export function AutomationsPage({ onNavigate, onViewLibrary }: { onNavigate: (pa
     setBusy('group-sources'); setError(null); setSourceGroups(null)
     try {
       const groups = await getApi().automations.enhancementGroups(selected.id)
+      if (groups.some((group) => !group.sourceType)) throw new Error('Restart BridgeClip to use source enhancement prompts.')
       setSourceGroups(groups); setSourceGroupKey(groups[0]?.key ?? '')
     } catch (cause) { setError(errorMessage(cause, 'Could not group clips by source.')) }
     finally { setBusy(null) }
@@ -176,6 +179,7 @@ export function AutomationsPage({ onNavigate, onViewLibrary }: { onNavigate: (pa
     const group = sourceGroups?.find((group) => group.key === sourceGroupKey)
     if (!group) return
     const ids = group.contentIds.slice(0, 30)
+    const guidance = sourceGuidance[group.key] ?? ''
     setBusy('enhance-bulk'); setError(null); setNotice(null); stopBulk.current = false
     let completed = 0
     let skipped = 0
@@ -186,7 +190,7 @@ export function AutomationsPage({ onNavigate, onViewLibrary }: { onNavigate: (pa
         if (stopBulk.current) break
         setBulkProgress(`${group.title} · preparing clips ${offset + 1}–${Math.min(offset + 5, ids.length)} of ${ids.length}`)
         try {
-          const result = await getApi().automations.enhanceBatch(selected.id, ids.slice(offset, offset + 5), group.key)
+          const result = await getApi().automations.enhanceBatch(selected.id, ids.slice(offset, offset + 5), group.key, guidance)
           setAutomations(result.automations)
           completed += result.completed
           skipped += result.skipped
@@ -358,6 +362,7 @@ export function AutomationsPage({ onNavigate, onViewLibrary }: { onNavigate: (pa
     { label: 'Needs attention', items: selected?.content.filter((item) => item.status === 'needs_review') ?? [], empty: '' },
     { label: 'Submitted', items: selected?.content.filter((item) => item.status === 'posted') ?? [], empty: 'No clips submitted yet.' }
   ]
+  const nextSlot = selected ? nextRunLabel(selected.times, selected.timezone) : null
   const savedReady = selected ? !missingSetup(selected) && !(selected.metadataMode === 'ai' && aiKeysMissing) : false
   const setupTodo = draft ? [
     !draft.profileId && 'choose a profile',
@@ -434,7 +439,7 @@ export function AutomationsPage({ onNavigate, onViewLibrary }: { onNavigate: (pa
                         {counts.needs_review > 0 && <><Sep /><span className="text-warning">{counts.needs_review} to check</span></>}
                         <Sep />
                         {selected.enabled
-                          ? <span>Next run <span className="text-ink">{nextRunLabel(selected.times, selected.timezone) ?? '—'}</span></span>
+                          ? <span>Next run <span className="text-ink">{nextSlot ?? '—'}</span></span>
                           : <span>Paused</span>}
                         <Sep />
                         <span>Last run <span className="text-ink">{selected.lastRunAt ? formatRelativeDate(selected.lastRunAt) : 'never'}</span></span>
@@ -619,19 +624,33 @@ export function AutomationsPage({ onNavigate, onViewLibrary }: { onNavigate: (pa
                 </div>
                 {selected.content.some((item) => item.status === 'queued' && !hasEnhancedMetadata(item, selected.accounts.length ? selected.accounts.map((account) => account.platform) : ['youtube'])) && <div className="border-t border-white/[0.06] px-3.5 py-3 flex flex-wrap items-center gap-3">
                   <Button size="sm" icon={<Sparkles className="h-3.5 w-3.5" />} disabled={Boolean(busy) || dirty || !writingConfigured} loading={busy === 'group-sources'} onClick={() => void prepareEnhancementGroups()}>Enhance by source video</Button>
-                  <span className="text-xs text-ink-subtle">Shared description & research · up to 5 clips per writing request · uses OpenRouter credits{!selected.accounts.length ? ' · drafts for YouTube until accounts are selected' : ''}</span>
+                  <span className="text-xs text-ink-subtle">Linked videos & attached files · shared context and research · uses OpenRouter credits{!selected.accounts.length ? ' · drafts for YouTube until accounts are selected' : ''}</span>
                 </div>}
                 {sourceGroups && <div className="glass-well mt-3 space-y-3 rounded-xl p-3">
                   {sourceGroups.length ? <>
-                    <Field label="Original video" htmlFor="enhancement-source-video"><Select id="enhancement-source-video" value={sourceGroupKey} disabled={Boolean(busy)} onChange={setSourceGroupKey} options={sourceGroups.map((group) => ({ value: group.key, label: `${group.title} · ${group.contentIds.length} clips` }))} /></Field>
-                    <p className="text-xs text-ink-muted">Research is shared across this video’s clips and reused for 7 days. Each clip keeps its own transcript and reviewable draft. Already reviewed metadata is skipped. Up to 30 clips per batch.</p>
-                    <Button size="sm" disabled={Boolean(busy) || dirty} onClick={() => void enhanceQueued()}>Enhance {Math.min(30, sourceGroups.find((group) => group.key === sourceGroupKey)?.contentIds.length ?? 0)} clips from this video</Button>
+                    <Field label="Original video" htmlFor="enhancement-source-video"><Select id="enhancement-source-video" value={sourceGroupKey} disabled={Boolean(busy)} onChange={setSourceGroupKey} options={sourceGroups.map((group) => ({ value: group.key, label: `${group.title} · ${group.contentIds.length} ${group.contentIds.length === 1 ? 'clip' : 'clips'}` }))} /></Field>
+                    <p className="text-xs text-ink-muted">{activeSourceGroup?.sourceType === 'linked'
+                      ? 'Linked video · We’ll use the original description. Add a prompt to guide the enhancements.'
+                      : 'Attached file · Tell us what the video is about and how you’d like to enhance its clips. No link is needed.'}</p>
+                    <Field label="Enhancement prompt (optional)" htmlFor="enhancement-guidance">
+                      <TextArea id="enhancement-guidance" rows={3} maxLength={MAX_ENHANCEMENT_GUIDANCE} disabled={Boolean(busy)} value={sourceGuidance[sourceGroupKey] ?? ''}
+                        onChange={(event) => setSourceGuidance((previous) => ({ ...previous, [sourceGroupKey]: event.target.value }))}
+                        placeholder="e.g. A workshop on building reliable AI tools. Focus on practical tips for developers, with clear, conversational titles." />
+                    </Field>
+                    <p className="text-xs text-ink-subtle">Describe the topic, audience, tone, or points to emphasize. Each draft stays grounded in what its clip actually says. Up to {MAX_ENHANCEMENT_GUIDANCE.toLocaleString()} characters.</p>
+                    <p className="text-xs text-ink-muted">Research is shared across this video’s clips and reused for 7 days when the context and prompt match. Each clip keeps its own transcript and reviewable draft. Already reviewed metadata is skipped. Up to 30 clips per batch.</p>
+                    <Button size="sm" disabled={Boolean(busy) || dirty} onClick={() => void enhanceQueued()}>Enhance {Math.min(30, activeSourceGroup?.contentIds.length ?? 0)} {activeSourceGroup?.contentIds.length === 1 ? 'clip' : 'clips'} from this video</Button>
                   </> : <p className="text-sm text-ink-muted">No queued clips need a new draft.</p>}
                 </div>}
                 {bulkProgress && <Callout tone="info" className="mt-3" action={<Button size="sm" onClick={() => { stopBulk.current = true; setBulkProgress('Stopping after the current operation…') }}>Stop after batch</Button>}>{bulkProgress}</Callout>}
                 {contentGroups.filter((group) => group.label !== 'Needs attention' || group.items.length > 0).map((group) => (
                   <section key={group.label} aria-label={group.label} className="border-t border-white/[0.06]">
-                    <h3 className="flex items-center gap-2 bg-white/[0.02] px-3.5 py-2.5 text-xs font-semibold text-ink-muted">{group.label}<span className="tabular rounded-full bg-white/[0.06] px-2 py-0.5 text-2xs">{group.items.length}</span></h3>
+                    <div className="flex flex-wrap items-center justify-between gap-2 bg-white/[0.02] px-3.5 py-2.5">
+                      <h3 className="flex items-center gap-2 text-xs font-semibold text-ink-muted">{group.label}<span className="tabular rounded-full bg-white/[0.06] px-2 py-0.5 text-2xs">{group.items.length}</span></h3>
+                      {group.label === 'Queued' && <span role="status" aria-label="Next posting slot" className="ml-auto text-right text-2xs text-ink-muted">
+                        {!nextSlot ? 'No times scheduled' : !selected.enabled ? 'Paused' : <>Next slot <span className="text-ink">{nextSlot}</span><span className="text-ink-subtle"> · {selected.timezone.replace(/_/g, ' ')}</span></>}
+                      </span>}
+                    </div>
                     {group.items.length === 0 && <p className="px-3.5 py-4 text-xs text-ink-subtle">{group.empty}</p>}
                     <ul className="divide-y divide-white/[0.06]">
                       {group.items.map((item) => (

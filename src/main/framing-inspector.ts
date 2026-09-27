@@ -1,9 +1,26 @@
 import { constants, realpathSync, statSync } from 'fs'
-import { open } from 'fs/promises'
+import { lstat, open } from 'fs/promises'
 import { join } from 'path'
 import { getJobOutput } from './file-manager'
 import { assertAbsolutePath, assertMediaPath, isWithinDirectory } from './security'
 import { parseFramingTrace, type FramingInspection } from '../shared/framing-trace'
+
+/** Cheap presence check for cards; the inspector validates the contents on open. */
+export async function availableFraming(outputDir: string, libraryDir: string): Promise<number[]> {
+  assertAbsolutePath(outputDir)
+  if (!isWithinDirectory(outputDir, libraryDir)) throw new Error('Invalid framing request')
+  const run = realpathSync(outputDir)
+  const output = await getJobOutput(run, libraryDir)
+  const available: number[] = []
+  for (const clip of output?.clips ?? []) {
+    if (!Number.isSafeInteger(clip.clip_index) || clip.clip_index < 0 || clip.clip_index > 999) continue
+    try {
+      const stat = await lstat(join(run, `clip_${String(clip.clip_index).padStart(2, '0')}.framing.json`))
+      if (stat.isFile() && stat.size > 0 && stat.size <= 32 * 1024 * 1024) available.push(clip.clip_index)
+    } catch { /* Missing diagnostics do not offer an inspection action. */ }
+  }
+  return available
+}
 
 export async function inspectFraming(outputDir: string, clipIndex: number, libraryDir: string): Promise<FramingInspection> {
   assertAbsolutePath(outputDir)

@@ -113,3 +113,26 @@ test('Library enhancement uses automation generators and returns a reviewable dr
     assert.deepEqual(calls.slice(before).map((call) => call[0]), ['transcribe', 'generate'])
   } finally { f.cleanup() }
 })
+
+test('manual marks work without an account and undo reveals provider status without altering history', async () => {
+  const f = fixture()
+  try {
+    f.posts.push({ id: 'published', clipPath: f.clips[0].s3_url.slice(7), status: 'published', targets: [{ platform: 'youtube', status: 'published' }] })
+    f.posts.push({ id: 'failed', clipPath: f.clips[1].s3_url.slice(7), status: 'failed', targets: [] })
+    const original = JSON.stringify(f.posts)
+    for (const id of [0, 1]) fs.writeFileSync(path.join(f.run, `.bridgeclip-posted-${id}`), '')
+    let statuses = await f.main.libraryPostingStatus(f.run)
+    assert.deepEqual(statuses.map(s => s.state), ['posted', 'posted', 'not_posted'])
+    assert.equal(statuses[0].manuallyPosted, true)
+    assert.deepEqual(statuses[0].platforms, ['youtube'])
+    f.main.settings.replaceApiKey('zernioApiKey', '')
+    statuses = await f.main.libraryPostingStatus(f.run)
+    assert.deepEqual(statuses[1], { clipIndex: 1, state: 'posted', platforms: [], manuallyPosted: true })
+    f.main.settings.replaceApiKey('zernioApiKey', 'test-key')
+    for (const id of [0, 1]) fs.unlinkSync(path.join(f.run, `.bridgeclip-posted-${id}`))
+    statuses = await f.main.libraryPostingStatus(f.run)
+    assert.deepEqual(statuses.map(s => s.state), ['posted', 'failed', 'not_posted'])
+    assert.equal(statuses[0].manuallyPosted, undefined)
+    assert.equal(JSON.stringify(f.posts), original)
+  } finally { f.cleanup() }
+})

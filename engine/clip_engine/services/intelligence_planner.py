@@ -22,6 +22,7 @@ import httpx
 
 from clip_engine.config import DURATION_RANGES, get_settings, is_longform, resolve_clip_duration_bounds
 from clip_engine.services.editorial_evidence import parse_moment, overlaps
+from clip_engine.services.sponsor_policy import SPONSOR_DISCOVERY_RULE
 from clip_engine.services.openrouter import (
     OpenRouterError,
     apply_reasoning,
@@ -510,10 +511,8 @@ class IntelligencePlannerService:
             f' to {end_time_seconds if end_time_seconds is not None else "source end"} seconds. '
             'Prioritize ideas around this range but extend either boundary to preserve meaning. '
             'Length and clip count are preferences, never quotas. Return no clips rather than force one.'
-            ' Exclude sponsor reads, paid promotions, affiliate pitches and advertising segments entirely, '
-            'even if they teach something useful or their sponsor disclosure is outside the proposed excerpt. '
-            'Ordinary independent product discussion is allowed; use the surrounding narrative to distinguish it from advertising.'
         )
+        system_prompt += SPONSOR_DISCOVERY_RULE
         if transcript:
             system_prompt += (
                 '\nMOMENT DISCOVERY AND BOUNDARIES: First identify distinct topic episodes in the source. '

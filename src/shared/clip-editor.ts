@@ -2,6 +2,12 @@
 export type Crop = [number, number, number, number]
 export type CropCorner = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
 export type EditorRange = [number, number]
+export interface CameraScan {
+  start_ms: number; end_ms: number
+  /** Presentation times from every decoded source frame, never a guessed FPS. */
+  frames: number[]
+  markers: { at_ms: number; score: number }[]
+}
 export interface EditorScene {
   at_ms: number; layout: 'fill' | 'split' | 'fit'; crops: Crop[]
   /** Incoming eased movement, in source milliseconds. Absent/zero is a cut. */
@@ -21,16 +27,30 @@ export interface CandidateEdit {
   caption_edits: { segment: number; text: string }[]
   /** Source-time intervals where our burned-in captions are hidden. */
   caption_suppression_ranges: EditorRange[]
+  dismissed_camera_markers?: number[]
 }
 export interface EditorCandidate extends CandidateEdit {
+  camera_scan?: CameraScan
   requires_visual_context?: boolean; score: number; reason: string; review: EditorReview | null; exports: number[]
 }
 export interface EditorProject {
   version: 1; revision: number; title: string; duration_ms: number; width: number; height: number
+  /** Main-owned media generation; absent on projects using the original source. */
+  source_id?: string
+  preview_id?: string
+  frame_preview?: boolean
   aspect_ratio: '9:16' | '16:9'; candidates: EditorCandidate[]
   transcript: { start_ms: number; end_ms: number; text: string }[]
 }
-export interface EditorSession { project: EditorProject; sourcePath: string; previewPath: string; operation?: 'save' | 'review' | 'export' | 'export-all' | null; batch?: { completed: number; total: number } }
+export interface EditorProgress { phase: 'scan' | 'preview'; percent: number }
+export interface EditorSession { progress?: EditorProgress; project: EditorProject; sourcePath: string; previewPath: string; operation?: 'save' | 'review' | 'export' | 'export-all' | 'replace-source' | 'scan-cameras' | null; batch?: { completed: number; total: number } }
+
+export const sourceReplacementErrors: Record<string, string> = {
+  duration: 'The replacement has a different duration. Choose the exact same video with the same timing.',
+  geometry: 'The replacement has different framing or orientation. Choose the same video and aspect ratio.',
+  audio: 'The replacement has different audio availability. Choose the same video with the same audio.',
+  invalid: 'Could not read the replacement video. Choose a playable video file.'
+}
 
 export function editorProgress(candidates: Pick<CandidateEdit, 'status'>[]): { remaining: number; initialCandidate: number } {
   const unfinished = (c: Pick<CandidateEdit, 'status'>): boolean => c.status !== 'baked' && c.status !== 'discarded'
@@ -62,7 +82,7 @@ export function parseCandidateEdit(value: unknown, duration: number, transcriptC
     if (crops.length !== (x.layout === 'split' ? 2 : 1)) fail()
     const transition = x.transition_ms === undefined ? 0 : num(x.transition_ms, 0, 5000)
     if (transition > 0 && (transition < 100 || !Number.isInteger(transition))) fail()
-    return { at_ms: Math.round(num(x.at_ms, 0, duration)), layout: x.layout as EditorScene['layout'], crops,
+    return { at_ms: num(x.at_ms, 0, duration), layout: x.layout as EditorScene['layout'], crops,
       ...(transition ? { transition_ms: transition } : {}) }
   })
   if (!scenes.length || scenes[0].at_ms !== 0 || scenes.some((s, i) => i > 0 && s.at_ms <= scenes[i - 1].at_ms)) fail()
@@ -86,7 +106,8 @@ export function parseCandidateEdit(value: unknown, duration: number, transcriptC
   })
   if (caption_suppression_ranges.some(([a, b], i) => b - a < 100 || (i > 0 && a < caption_suppression_ranges[i - 1][1]))) fail()
   return { id, title, ranges, scenes, captions: v.captions as boolean, caption_preset, video_speed: num(v.video_speed, 1, 2),
-    status: status as CandidateEdit['status'], caption_edits, caption_suppression_ranges }
+    status: status as CandidateEdit['status'], caption_edits, caption_suppression_ranges,
+    ...(v.dismissed_camera_markers === undefined ? {} : { dismissed_camera_markers: [...new Set(arr(v.dismissed_camera_markers, 5000).map((t) => num(t, 0, duration)))].sort((a, b) => a - b) }) }
 }
 function question(value: unknown): EditorQuestion {
   const v = record(value)
@@ -95,6 +116,8 @@ function question(value: unknown): EditorQuestion {
 }
 export function parseEditorProject(value: unknown): EditorProject {
   const v = record(value)
+  if (v.source_id !== undefined && (typeof v.source_id !== 'string' || !/^[a-f0-9]{32}$/.test(v.source_id))) fail()
+  if (v.preview_id !== undefined && (typeof v.preview_id !== 'string' || !/^[a-f0-9]{32}$/.test(v.preview_id))) fail()
   if (v.version !== 1 || !['9:16', '16:9'].includes(v.aspect_ratio as string)) fail()
   const duration = num(v.duration_ms, 100, 24 * 3600000)
   const transcript = arr(v.transcript, 100000).map((row) => { const t = record(row); return { start_ms: num(t.start_ms, 0, duration), end_ms: num(t.end_ms, 0, duration), text: str(t.text, 20000) } })
@@ -112,20 +135,30 @@ export function parseEditorProject(value: unknown): EditorProject {
           return { interval: [num(t[0], 0, duration), num(t[1], 0, duration)], questions: arr(x.questions, 16).map(question) }
         }) }
     }
-    return { ...edit, requires_visual_context: c.requires_visual_context === true, score: num(c.score, 0, 100), reason: str(c.reason, 4000), review,
+    let camera_scan: CameraScan | undefined
+    if (c.camera_scan !== undefined) {
+      const scan = record(c.camera_scan), start_ms = num(scan.start_ms, 0, duration), end_ms = num(scan.end_ms, start_ms, duration)
+      const frames = arr(scan.frames, 120000).map((t) => num(t, start_ms, end_ms))
+      if (!frames.length || frames.some((t, i) => i > 0 && t <= frames[i - 1])) fail()
+      const times = new Set(frames)
+      const markers = arr(scan.markers, 5000).map((m) => { const x = record(m); return { at_ms: num(x.at_ms, start_ms, end_ms), score: num(x.score, 0, 1) } })
+      if (markers.some((m, i) => !times.has(m.at_ms) || (i > 0 && m.at_ms <= markers[i - 1].at_ms))) fail()
+      camera_scan = { start_ms, end_ms, frames, markers }
+    }
+    return { ...edit, ...(camera_scan ? { camera_scan } : {}), requires_visual_context: c.requires_visual_context === true, score: num(c.score, 0, 100), reason: str(c.reason, 4000), review,
       exports: arr(c.exports, 1000).map((n) => num(n, 0, 999)) }
   })
   if (!candidates.length) fail()
   return { version: 1, revision: num(v.revision, 0, Number.MAX_SAFE_INTEGER), title: str(v.title, 1024), duration_ms: duration,
     width: num(v.width, 2, 16384), height: num(v.height, 2, 16384), aspect_ratio: v.aspect_ratio as EditorProject['aspect_ratio'], candidates,
-    transcript }
+    transcript, ...(v.preview_id ? { preview_id: v.preview_id as string } : {}), ...(v.frame_preview === true ? { frame_preview: true } : {}), ...(v.source_id ? { source_id: v.source_id as string } : {}) }
 }
 export function candidateEdit(c: CandidateEdit): CandidateEdit {
-  const { id, title, ranges, scenes, captions, caption_preset, video_speed, status, caption_edits, caption_suppression_ranges = [] } = c
-  return { id, title, ranges, scenes, captions, caption_preset, video_speed, status, caption_edits, caption_suppression_ranges }
+  const { id, title, ranges, scenes, captions, caption_preset, video_speed, status, caption_edits, caption_suppression_ranges = [], dismissed_camera_markers } = c
+  return { id, title, ranges, scenes, captions, caption_preset, video_speed, status, caption_edits, caption_suppression_ranges, ...(dismissed_camera_markers ? { dismissed_camera_markers } : {}) }
 }
 export function renderEditKey(c: CandidateEdit): string {
-  return JSON.stringify({ ...candidateEdit(c), status: undefined })
+  return JSON.stringify({ ...candidateEdit(c), status: undefined, dismissed_camera_markers: undefined })
 }
 export function refineEdit<T extends CandidateEdit>(c: T, patch: Partial<CandidateEdit>): T {
   const next = { ...c, ...patch }
@@ -140,12 +173,14 @@ export function sceneAt(c: CandidateEdit, t: number): EditorScene {
   return [...c.scenes].reverse().find((s) => s.at_ms <= t) ?? c.scenes[0]
 }
 /** Move a layout boundary without reordering scenes or changing their framing. */
-export function retimeScene(scenes: EditorScene[], index: number, time: number, duration: number): EditorScene[] {
+export function retimeScene(scenes: EditorScene[], index: number, time: number, duration: number, frames?: number[]): EditorScene[] {
   if (index <= 0 || index >= scenes.length || !Number.isFinite(time)) return scenes
   const lo = scenes[index - 1].at_ms + 1
   const hi = Math.min(scenes[index + 1]?.at_ms ?? duration, duration) - 1
   if (hi < lo) return scenes
-  const at_ms = Math.max(lo, Math.min(hi, Math.round(time)))
+  const bounded = Math.max(lo, Math.min(hi, time))
+  const at_ms = frames?.length ? snapFrame(frames, bounded) : Math.round(bounded)
+  if (at_ms < lo || at_ms > hi) return scenes
   return at_ms === scenes[index].at_ms ? scenes : scenes.map((s, i) => i === index ? { ...s, at_ms } : s)
 }
 export function canAnimateScene(scenes: EditorScene[], index: number): boolean {
@@ -197,3 +232,24 @@ export function resizeCrop(crop: Crop, corner: CropCorner, dx: number, dy: numbe
   return [Math.max(0, Math.min(1 - nw, sx > 0 ? ax : ax - nw)), Math.max(0, Math.min(1 - nh, sy > 0 ? ay : ay - nh)), nw, nh]
 }
 export function editDuration(c: CandidateEdit): number { return c.ranges.reduce((n, [a, b]) => n + b - a, 0) / c.video_speed }
+
+/** Lower bound with a small tolerance for browser media timestamps. */
+function frameIndex(frames: number[], time: number): number {
+  let lo = 0, hi = frames.length
+  while (lo < hi) { const mid = (lo + hi) >>> 1; if (frames[mid] < time - .01) lo = mid + 1; else hi = mid }
+  return lo
+}
+export function snapFrame(frames: number[], time: number): number {
+  if (!frames.length || time < frames[0] || time > frames[frames.length - 1]) return time
+  const i = frameIndex(frames, time)
+  return i && time - frames[i - 1] < frames[i] - time ? frames[i - 1] : frames[i]
+}
+export function stepFrame(frames: number[], time: number, direction: -1 | 1): number {
+  const i = frameIndex(frames, time)
+  if (direction < 0) return frames[Math.max(0, i - 1)] ?? time
+  return frames[Math.min(frames.length - 1, i + (Math.abs((frames[i] ?? Infinity) - time) < .01 ? 1 : 0))] ?? time
+}
+export function cameraMarkers(c: EditorCandidate, threshold: number): CameraScan['markers'] {
+  const dismissed = new Set(c.dismissed_camera_markers ?? [])
+  return (c.camera_scan?.markers ?? []).filter((m) => m.score >= threshold && !dismissed.has(m.at_ms) && c.ranges.some(([a, b]) => m.at_ms > a && m.at_ms < b))
+}

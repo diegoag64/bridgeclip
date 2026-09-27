@@ -21,7 +21,8 @@ export class ZernioApiError extends Error {
     /** Zernio's stable error code (`PAYMENT_REQUIRED`, `invalid_credentials`…), when it sent one. */
     readonly code: string | null = null,
     /** Minimum delay from Zernio's Retry-After on a 429 or 503. */
-    readonly retryAfterSeconds: number | null = null
+    readonly retryAfterSeconds: number | null = null,
+    readonly rateLimitScope: 'api' | 'request' | null = null
   ) {
     super(message)
   }
@@ -99,16 +100,19 @@ function clampWait(seconds: number): number {
 }
 
 /** Seconds to wait from Retry-After (seconds or an HTTP date), the 429 body, or X-RateLimit-Reset. */
-function retryAfterSeconds(headers: Headers | string | null, body: JsonRecord): number | null {
+function retryAfterSeconds(headers: Headers | string | null, body: JsonRecord, apiWindow = true): number | null {
+  const wait = (seconds: number): number => apiWindow ? clampWait(seconds) : Math.min(Math.max(1, Math.ceil(seconds)), 7 * 86400)
   const retryAfter = typeof headers === 'string' || headers === null ? headers : headers.get('retry-after')
   if (retryAfter) {
     const seconds = Number(retryAfter)
-    if (Number.isFinite(seconds) && seconds >= 0) return clampWait(seconds)
+    if (Number.isFinite(seconds) && seconds >= 0) return wait(seconds)
     const date = Date.parse(retryAfter)
-    if (Number.isFinite(date)) return clampWait((date - Date.now()) / 1000)
+    if (Number.isFinite(date)) return wait((date - Date.now()) / 1000)
   }
   const fromBody = Number(asRecord(body.details).retryAfterSeconds)
-  if (Number.isFinite(fromBody) && fromBody > 0) return clampWait(fromBody)
+  if (Number.isFinite(fromBody) && fromBody > 0) return wait(fromBody)
+  // The API request window resets even when a channel's daily cap does not.
+  if (!apiWindow) return null
   const reset = headers && typeof headers !== 'string' ? Number(headers.get('x-ratelimit-reset')) : NaN
   if (Number.isFinite(reset) && reset * 1000 > Date.now()) return clampWait(reset - Date.now() / 1000)
   return null
@@ -116,6 +120,7 @@ function retryAfterSeconds(headers: Headers | string | null, body: JsonRecord): 
 
 function waitText(seconds: number | null): string {
   if (!seconds) return 'a minute'
+  if (seconds >= 3600) return `${Math.ceil(seconds / 3600)} hr`
   return seconds < 90 ? `${seconds}s` : `${Math.ceil(seconds / 60)} min`
 }
 
@@ -139,7 +144,16 @@ export function paymentMessage(reason: string | null | undefined): string {
 let rateLimitedUntil = 0
 
 function rateLimitError(seconds: number | null): ZernioApiError {
-  return new ZernioApiError(`Zernio's rate limit was reached. Try again in ${waitText(seconds)}.`, 429, 'rate_limited', seconds)
+  return new ZernioApiError(`Zernio's API request limit was reached. Try again in ${waitText(seconds)}.`, 429, 'rate_limited', seconds, 'api')
+}
+
+/** The legacy API-key 429 differs from typed endpoint/platform restrictions. */
+function isApiRateLimit(body: JsonRecord, headers: Headers | string | null): boolean {
+  if (body.type || body.code || body.platform) return false
+  const remaining = headers && typeof headers !== 'string' ? headers.get('x-ratelimit-remaining') : null
+  if (remaining !== null && remaining.trim() !== '' && Number.isFinite(Number(remaining))) return Number(remaining) <= 0
+  // A bare 429 with no scope or budget information remains a conservative API cooldown.
+  return true
 }
 
 /** Throws while Zernio's last answer said the key is out of requests, instead of spending another. */
@@ -165,15 +179,20 @@ export function noteRateLimit(headers: Headers): void {
 /**
  * Friendly text for Zernio's documented stable codes (docs.zernio.com
  * guides/error-handling). Unmapped 4xx errors show Zernio's own message,
- * sanitised; provider payloads (`platformError`) are never shown. A 429 also
- * closes the shared rate-limit gate. `headers` may be the raw Retry-After value.
+ * sanitised; provider payloads (`platformError`) are never shown. Only an API
+ * request limit closes the shared gate. `headers` may be the raw Retry-After value.
  */
 function errorFor(status: number, body: JsonRecord, headers: Headers | string | null): ZernioApiError {
   const code = stableCode(body.code)
   if (status === 429) {
-    const seconds = retryAfterSeconds(headers, body)
-    rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + (seconds ?? 60) * 1000)
-    return rateLimitError(seconds)
+    const apiWindow = isApiRateLimit(body, headers)
+    const seconds = retryAfterSeconds(headers, body, apiWindow)
+    const detail = sanitizeProviderText(body.error ?? body.message, 500)
+    if (apiWindow) rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + (seconds ?? 60) * 1000)
+    else if (headers && typeof headers !== 'string') noteRateLimit(headers)
+    if (!detail && apiWindow) return rateLimitError(seconds)
+    const message = detail ? `Zernio: ${detail}` : 'Zernio temporarily limited this request.'
+    return new ZernioApiError(`${message}${seconds ? ` Retry after at least ${waitText(seconds)}.` : ''}`, status, code ?? 'rate_limited', seconds, apiWindow ? 'api' : 'request')
   }
   if (status === 401) return new ZernioApiError('Zernio rejected your API key. Check the key in Settings.', status, code ?? 'invalid_credentials')
   if (status === 402) return new ZernioApiError(paymentMessage(str(body.reason)), status, code ?? 'PAYMENT_REQUIRED')
@@ -334,7 +353,7 @@ export class ZernioClient {
       logger.warn('zernio.request.failed', { ...context, status: 0, category: 'network', durationMs: Date.now() - startedAt })
       throw new ZernioApiError('Could not reach Zernio. Check your internet connection and try again.', 0, 'network_error')
     }
-    noteRateLimit(response.headers)
+    if (response.status !== 429) noteRateLimit(response.headers)
     const parsed = raw ? safeJson(raw) : {}
     if (!response.ok) {
       const error = errorFor(response.status, asRecord(parsed), response.headers)
@@ -494,7 +513,15 @@ export class ZernioClient {
     path: string,
     options: { body?: unknown; requestId?: string; timeoutMs?: number } = {}
   ): Promise<{ status: number; body: JsonRecord }> {
-    throwIfRateLimited()
+    const startedAt = Date.now()
+    const labels = new Set(['posts', 'retry', 'media', 'presign', 'accounts', 'tiktok', 'creator-info'])
+    const operation = path.split('?')[0].split('/').filter(Boolean).map((part) => labels.has(part) ? part : 'item').join('.')
+    const context = { traceId: this.traceId, requestId: randomUUID(), method, operation }
+    logger.info('zernio.post.request.start', context)
+    try { throwIfRateLimited() } catch (error) {
+      logger.warn('zernio.post.request.blocked', { ...context, status: 429, scope: 'api' })
+      throw error
+    }
     let response: Response
     let raw: string
     try {
@@ -513,13 +540,17 @@ export class ZernioClient {
       raw = await readResponseText(response, 2 * 1024 * 1024)
     } catch (error) {
       const timedOut = error instanceof Error && error.name === 'TimeoutError'
+      logger.warn('zernio.post.request.failed', { ...context, status: 0, category: timedOut ? 'timeout' : 'network', durationMs: Date.now() - startedAt })
       throw timedOut
         ? new ZernioApiError('Zernio took too long to answer.', 0, 'timeout')
         : new ZernioApiError('Could not reach Zernio. Check your internet connection and try again.', 0, 'network_error')
     }
-    noteRateLimit(response.headers)
+    if (response.status !== 429) noteRateLimit(response.headers)
     const body = asRecord(raw ? safeJson(raw) : {})
-    if (response.ok) return { status: response.status, body }
+    if (response.ok) {
+      logger.info('zernio.post.request.completed', { ...context, status: response.status, durationMs: Date.now() - startedAt })
+      return { status: response.status, body }
+    }
     if (response.status === 409 && method === 'POST' && path === '/posts') {
       const details = asRecord(body.details)
       const explicitDuplicate = body.code === 'duplicate_post' ||
@@ -532,7 +563,12 @@ export class ZernioClient {
         )
       }
     }
-    throw errorFor(response.status, body, response.headers)
+    const error = errorFor(response.status, body, response.headers)
+    const remaining = response.headers.get('x-ratelimit-remaining')
+    logger.warn('zernio.post.request.failed', { ...context, status: response.status, scope: error.rateLimitScope,
+      retryAfterSeconds: error.retryAfterSeconds, remaining: remaining !== null && Number.isFinite(Number(remaining)) ? Number(remaining) : null,
+      durationMs: Date.now() - startedAt })
+    throw error
   }
 
   /**

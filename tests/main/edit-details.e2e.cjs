@@ -57,9 +57,11 @@ test('Details keeps navigation visible and makes nested JSON readable without ch
   const auditFile = path.join(run, 'edit_audit.json'), saved = JSON.stringify(audit)
   fs.writeFileSync(auditFile, saved)
   fs.writeFileSync(path.join(run, 'job_output.json'), JSON.stringify({ job_id: id, source_video_title: audit.title,
-    source_video_url: 'source.mp4', source_video_duration_seconds: 16, total_clips: 1,
+    source_video_url: 'source.mp4', source_video_duration_seconds: 16, total_clips: 2,
     clips: [{ clip_index: 0, s3_url: path.join(run, 'clip_00.mp4'), duration_ms: 10500,
-      start_time_ms: 2300, end_time_ms: 13500, virality_score: .8 }] }))
+      start_time_ms: 2300, end_time_ms: 13500, virality_score: .8, summary: 'Recorded framing' },
+      { clip_index: 1, s3_url: path.join(run, 'clip_01.mp4'), duration_ms: 5000,
+        start_time_ms: 0, end_time_ms: 5000, virality_score: .7, summary: 'No framing recorded' }] }))
   const session = await launchApp({ appDir: buildApp(path.join(root, 'app')), userDataDir })
   t.after(async () => { await session.close(); fs.rmSync(root, { recursive: true, force: true }) })
   const { page, app } = session
@@ -156,7 +158,11 @@ test('Details keeps navigation visible and makes nested JSON readable without ch
   assert.equal(await dialog.count(), 0)
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1300, 900))
   await page.getByTitle('Open in Library', { exact: true }).click()
-  await page.getByRole('button', { name: 'Inspect framing', exact: true }).click()
+  await page.getByRole('button', { name: 'Actions for “No framing recorded”', exact: true }).click()
+  assert.equal(await page.getByRole('menuitem', { name: 'Inspect framing', exact: true }).count(), 0)
+  await page.getByRole('menu').press('Escape')
+  await page.getByRole('button', { name: 'Actions for “Recorded framing”', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Inspect framing', exact: true }).click()
   const frame = page.getByRole('dialog', { name: 'Inspect framing', exact: true })
   await frame.getByRole('region', { name: 'Recorded editorial review', exact: true }).waitFor()
   await openDetails(frame)

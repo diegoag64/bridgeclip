@@ -514,21 +514,32 @@ def video_frame_pieces(plan: ClipLayoutPlan, keeps: Optional[list[tuple[int, int
         raise ValueError("Frame rate must be positive")
 
     def frame_at(ms: int) -> int:
-        return int(Fraction(ms, 1000) * rate + Fraction(1, 2))
+        return int(Fraction(str(ms)) / 1000 * rate + Fraction(1, 2))
 
-    # Use differences of rounded totals, never a sum of rounded durations.
-    # Sub-frame layout slivers may contribute no frame but retain their audio.
+    # Allocate frames to contiguous kept footage first. Layout changes must
+    # never alter that allocation: rounding each layout's *output* boundary
+    # shifts a camera cut when removed time has a different fractional phase.
+    groups = []
+    for piece in pieces:
+        if not groups or groups[-1][-1][2] != piece[1]:
+            groups.append([])
+        groups[-1].append(piece)
     video_pieces = []
     elapsed_ms = frame_end = 0
-    for i, start, end in pieces:
-        # Quantize the removed time once. Independently rounding source and
-        # destination starts can shift a frame twice at the same edit.
+    for group in groups:
+        start, end = group[0][1], group[-1][2]
         start_frame = frame_at(start - elapsed_ms) + frame_end
         elapsed_ms += end - start
         next_frame = frame_at(elapsed_ms)
-        count = next_frame - frame_end
-        if count:
-            video_pieces.append((i, start_frame, count))
+        source_end = start_frame + next_frame - frame_end
+        cursor = start_frame
+        for j, (i, _, boundary) in enumerate(group):
+            # Match the source FPS filter's grid, even after a removed section.
+            # Only the keep's tail absorbs cumulative duration rounding.
+            until = source_end if j == len(group) - 1 else min(source_end, max(cursor, frame_at(boundary)))
+            if until > cursor:
+                video_pieces.append((i, cursor, until - cursor))
+            cursor = until
         frame_end = next_frame
     if not video_pieces:
         raise ValueError("The edit is shorter than one video frame")

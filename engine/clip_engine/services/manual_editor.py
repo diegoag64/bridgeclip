@@ -3,11 +3,14 @@ import asyncio
 import json
 import math
 import os
+import re
 import shutil
 import tempfile
+from uuid import uuid4
 from datetime import datetime, timezone
 from dataclasses import replace
 from pathlib import Path
+from clip_engine.error_policy import NoClipCandidatesError
 
 from clip_engine.services.coherence_review import CLIP_QUESTIONS, CUT_QUESTIONS, CUT_PASS, CoherenceReviewer, check_threshold, dialogue
 from clip_engine.services.jev_service import JevService
@@ -15,6 +18,70 @@ from clip_engine.services.layout_analyzer import ClipLayoutPlan, ShotLayout, Lay
 from clip_engine.services.layout_renderer import shot_views
 from clip_engine.services.rendering_service import RenderRequest, RenderingService
 from clip_engine.services.transcription_service import TranscriptSegment, TranscriptWord
+from clip_engine.services.media_process import MEDIA_INPUT_OPTIONS, PROBE_TIMEOUT_SECONDS, run_media, validate_video_dimensions
+
+
+class SourceReplacementError(ValueError):
+    def __init__(self, code):
+        self.code = code
+        super().__init__('Source replacement rejected')
+
+
+def media_name(kind, source_id=None):
+    if source_id is not None and (not isinstance(source_id, str) or not re.fullmatch(r'[a-f0-9]{32}', source_id)):
+        raise ValueError('Invalid source generation')
+    return f'editor-{kind}{"-" + source_id if source_id else ""}.mp4'
+
+
+def source_info(path):
+    try:
+        result = run_media(['ffprobe', '-v', 'error', *MEDIA_INPUT_OPTIONS, '-show_streams', '-show_format',
+                            '-of', 'json', str(path)], timeout=PROBE_TIMEOUT_SECONDS, check=True)
+        data = json.loads(result.stdout)
+        video = next(s for s in data['streams'] if s['codec_type'] == 'video')
+        width, height = int(video['width']), int(video['height'])
+        validate_video_dimensions(width, height)
+        if min(width, height) < 2:
+            raise ValueError('Invalid editor dimensions')
+        duration = float(video.get('duration', data['format'].get('duration', 0))) * 1000
+        if not math.isfinite(duration) or duration < 100:
+            raise ValueError('Invalid duration')
+        rotation = next((s['rotation'] for s in video.get('side_data_list', []) if 'rotation' in s), 0)
+        return {'width': width, 'height': height, 'duration': duration, 'rotation': rotation,
+                'sar': video.get('sample_aspect_ratio') if video.get('sample_aspect_ratio') not in (None, 'N/A', '0:1') else '1:1',
+                'audio': any(s['codec_type'] == 'audio' for s in data['streams'])}
+    except Exception as error:
+        raise SourceReplacementError('invalid') from error
+
+
+async def replace_source(run, project, source_id):
+    """Prepare immutable media, then switch the project's pointer in one atomic write."""
+    source = local_file(run, media_name('source', source_id))
+    original = local_file(run, media_name('source', project.get('source_id')))
+    old, new = await asyncio.gather(asyncio.to_thread(source_info, original), asyncio.to_thread(source_info, source))
+    if abs(old['duration'] - new['duration']) > 100:
+        raise SourceReplacementError('duration')
+    if (abs((new['width'] / new['height']) / (project['width'] / project['height']) - 1) > .005
+            or old['rotation'] != new['rotation'] or old['sar'] != new['sar']):
+        raise SourceReplacementError('geometry')
+    if old['audio'] != new['audio']:
+        raise SourceReplacementError('audio')
+    preview = run / media_name('preview', source_id)
+    if preview.exists() or preview.is_symlink():
+        raise ValueError('Replacement preview already exists')
+    await RenderingService().capture_framing_source(str(source), str(preview))
+    # Recheck immediately before committing. Failed/cancelled generation never touches the project.
+    if read_json(run, 'editor-project.json')['revision'] != project['revision']:
+        raise ValueError('Editor project changed')
+    project.pop('preview_id', None)
+    project['frame_preview'] = True
+    project.update(source_id=source_id, width=new['width'], height=new['height'], revision=project['revision'] + 1)
+    for candidate in project['candidates']:
+        candidate.pop('camera_scan', None)
+        candidate.pop('dismissed_camera_markers', None)
+        if candidate.get('status') == 'baked':
+            candidate['status'] = 'ready'
+    atomic_json(run / 'editor-project.json', project)
 
 
 def signature(c):
@@ -63,7 +130,7 @@ def default_crop(w, h, aspect, cx=.5):
 
 async def prepare_project(request, segments, transcript, download, renderer, reviewer, output_dir, progress):
     if not segments:
-        raise ValueError('No clip-worthy moments')
+        raise NoClipCandidatesError()
     w, h = await renderer._get_video_dimensions(download.video_path)
     duration = round(download.metadata.duration_seconds * 1000)
     aspect = 9 / 16 if request.aspect_ratio == '9:16' else 16 / 9
@@ -107,13 +174,14 @@ async def prepare_project(request, segments, transcript, download, renderer, rev
         await review_candidate(c, reviewer)
         project['candidates'].append(c)
     if not project['candidates']:
-        raise ValueError('No clip-worthy moments')
+        raise NoClipCandidatesError()
     progress('Saving source video and editor preview…')
     destination = os.path.join(output_dir, 'editor-source.mp4')
     # A real copy also isolates local inputs from later changes to the original file.
     await asyncio.to_thread(shutil.copyfile, download.video_path, destination)
     os.chmod(destination, 0o600)
     await renderer.capture_framing_source(destination, os.path.join(output_dir, 'editor-preview.mp4'))
+    project['frame_preview'] = True
     atomic_json(Path(output_dir) / 'editor-project.json', project)
     return project
 
@@ -270,7 +338,7 @@ def manual_plan(project, c):
     return ClipLayoutPlan(shots, project['width'], project['height'])
 
 
-async def run_editor(config):
+async def run_editor(config, progress=None):
     from clip_engine.config import get_settings, get_caption_preset
     from clip_engine.services.editorial_vision import EditorialVision
     settings = get_settings()
@@ -281,9 +349,46 @@ async def run_editor(config):
     project = read_json(run, 'editor-project.json')
     if project['version'] != 1 or project['revision'] != config['revision']:
         raise ValueError('The editor project changed. Reopen it and retry.')
+    if config['action'] == 'replace-source':
+        source_id = config['source_id']
+        if not source_id or source_id == project.get('source_id'):
+            raise ValueError('Invalid source generation')
+        await replace_source(run, project, source_id)
+        return
     c = next(c for c in project['candidates'] if c['id'] == config['candidate_id'])
     validate_candidate(c, project['duration_ms'], len(project['transcript']))
-    source = str(local_file(run, 'editor-source.mp4'))
+    source = str(local_file(run, media_name('source', project.get('source_id'))))
+    if config['action'] == 'scan-cameras':
+        from clip_engine.services.camera_scan import scan_camera_changes
+        def report(phase, percent):
+            if progress:
+                progress({'phase': phase, 'percent': percent})
+        scan = await asyncio.to_thread(scan_camera_changes, source, c['ranges'][0][0], c['ranges'][-1][1],
+                                       lambda percent: report('scan', percent))
+        preview = None
+        try:
+            # Upgrade old 30-fps proxies once. A new name avoids browser caching
+            # and leaves an open preview untouched until the atomic commit.
+            if not project.get('frame_preview'):
+                preview_id = config.get('preview_id') or uuid4().hex
+                preview = run / media_name('preview', preview_id)
+                await RenderingService().capture_framing_source(source, str(preview),
+                    progress=lambda percent: report('preview', percent), duration_ms=project['duration_ms'])
+                project.update(preview_id=preview_id, frame_preview=True)
+            if read_json(run, 'editor-project.json')['revision'] != project['revision']:
+                raise ValueError('Editor project changed')
+            c['camera_scan'] = scan
+            c['dismissed_camera_markers'] = [t for t in c.get('dismissed_camera_markers', [])
+                                             if any(abs(t - m['at_ms']) < .01 for m in scan['markers'])]
+            project['revision'] += 1
+            if len(json.dumps(project).encode('utf8')) > 32 * 1024 * 1024:
+                raise ValueError('Editor project is too large')
+            atomic_json(run / 'editor-project.json', project)
+            preview = None
+        finally:
+            if preview is not None:
+                preview.unlink(missing_ok=True)
+        return
     rows = read_json(run, 'transcript.json')['segments']
     def timing(item):
         return {**item, 'start_time_ms': round(item['start_time_ms']), 'end_time_ms': round(item['end_time_ms'])}
@@ -307,7 +412,10 @@ async def run_editor(config):
             raise ValueError('Caption source changed')
         render_transcript = caption_transcript(transcript, c.get('caption_edits', []))
         output = read_json(run, 'job_output.json')
-        index = max((x['clip_index'] for x in output['clips']), default=-1) + 1
+        next_index = output.get('next_clip_index', 0)
+        if type(next_index) is not int or not 0 <= next_index <= 1000:
+            raise ValueError('Invalid export sequence')
+        index = max(next_index, max((x['clip_index'] for x in output['clips']), default=-1) + 1)
         while (run / f'clip_{index:02d}.mp4').exists() or (run / f'clip_{index:02d}.mp4').is_symlink():
             index += 1
         if index > 999:

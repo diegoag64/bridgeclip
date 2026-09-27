@@ -2,6 +2,51 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Use the engine's bundled caption faces in previews, including offline builds. */
+@font-face {
+  font-family: 'Montserrat';
+  src: url('../../engine/assets/fonts/Montserrat-Black.ttf') format('truetype');
+  font-weight: 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Montserrat';
+  src: url('../../engine/assets/fonts/Montserrat-ExtraBold.ttf') format('truetype');
+  font-weight: 800;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Poppins';
+  src: url('../../engine/assets/fonts/Poppins-Black.ttf') format('truetype');
+  font-weight: 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Poppins';
+  src: url('../../engine/assets/fonts/Poppins-ExtraBold.ttf') format('truetype');
+  font-weight: 800;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Anton';
+  src: url('../../engine/assets/fonts/Anton-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Archivo Black';
+  src: url('../../engine/assets/fonts/ArchivoBlack-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Instrument Serif';
+  src: url('../../engine/assets/fonts/InstrumentSerif-Italic.ttf') format('truetype');
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+
 /* Geist is vendored (SIL OFL 1.1, see assets/fonts/Geist-OFL.txt) so the app
    renders identically offline. */
 @font-face {

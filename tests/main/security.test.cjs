@@ -181,6 +181,7 @@ test('the native picker authorizes media and shell opening rejects aliased appli
       },
       './settings-store': { loadSettings: () => ({ outputDirectory: library }) },
       './file-manager': {},
+      './output-storage': { measureOutputStorage: async (directory) => ({ outputDirectory: directory, bytes: 0 }) },
       './clip-editor': {},
       './edit-inspector': { inspectEdits: async () => ({}) },
     './framing-inspector': {},
@@ -200,6 +201,9 @@ test('the native picker authorizes media and shell opening rejects aliased appli
       './library-management': {}
     })
     ipc.registerIpcHandlers(() => window)
+    const storage = handlers.get('settings:storageUsage')
+    assert.throws(() => storage({ sender: contents, senderFrame: {} }), /Unauthorized application request/)
+    assert.equal((await storage({ sender: contents, senderFrame: frame }, root)).outputDirectory, library)
     const sourceUrl = 'https://www.youtube.com/watch?v=hqP9fivmBqI'
     assert.equal(await handlers.get('shell:openPath')({ sender: contents, senderFrame: frame }, sourceUrl), true)
     assert.deepEqual(openedLinks, [sourceUrl])

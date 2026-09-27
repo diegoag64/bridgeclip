@@ -45,11 +45,18 @@
 .editor-crop-corner.bottom-left { bottom:-10px; left:-10px; cursor:nesw-resize; }
 .editor-crop-corner.bottom-right { bottom:-10px; right:-10px; cursor:nwse-resize; }
 .editor-crop span { position:absolute; top:3px; left:4px; font-size:10px; color:white; text-shadow:0 1px 3px black; }
-.editor-transport { padding:8px 16px; display:flex; align-items:center; gap:8px; border-top:1px solid #ffffff0c; border-bottom:1px solid #ffffff0c; }
+.editor-transport { flex-wrap:wrap; padding:8px 16px; display:flex; align-items:center; gap:8px; border-top:1px solid #ffffff0c; border-bottom:1px solid #ffffff0c; }
 .editor-timeline { padding:12px 16px 16px; background:#15161b; }
 .clip-editor input[type=range] { cursor:pointer; width:100%; }
-.editor-source-scrub { display:block; height:4px; margin-bottom:15px; opacity:.6; }
-.editor-fine-scrub { display:block; margin:6px 0 12px; height:3px; }
+/* Native range thumb centers stop half a thumb-width inside the input. The
+   timeline lanes use the same inset so every timestamp shares one x position. */
+.editor-source-scrub, .editor-fine-scrub { appearance:none; display:block; padding:0; border:0; height:16px; background:transparent; }
+.editor-source-scrub { margin:0 0 15px; opacity:.6; }
+.editor-fine-scrub { margin:6px 0 12px; }
+.editor-source-scrub::-webkit-slider-runnable-track, .editor-fine-scrub::-webkit-slider-runnable-track { height:3px; border-radius:2px; background:#ffffff30; }
+.editor-source-scrub::-webkit-slider-thumb, .editor-fine-scrub::-webkit-slider-thumb { appearance:none; width:16px; height:16px; margin-top:-6.5px; border:0; border-radius:50%; background:rgb(var(--accent)); }
+.editor-source-scrub::-moz-range-track, .editor-fine-scrub::-moz-range-track { height:3px; border-radius:2px; background:#ffffff30; }
+.editor-source-scrub::-moz-range-thumb, .editor-fine-scrub::-moz-range-thumb { width:16px; height:16px; border:0; border-radius:50%; background:rgb(var(--accent)); }
 .editor-track { height:64px; position:relative; background:repeating-linear-gradient(90deg,transparent 0,transparent calc(10% - 1px),#ffffff08 calc(10% - 1px),#ffffff08 10%),#0c0d10; border-radius:5px; }
 .editor-timeline-piece { position:absolute; top:12px; height:40px; display:flex; min-width:6px; background:rgb(var(--accent) / .24); border:1px solid rgb(var(--accent) / .5); border-radius:4px; overflow:hidden; }
 .editor-piece-body { display:flex; gap:8px; align-items:center; padding:0 7px; font-size:11px; flex:1; min-width:0; overflow:hidden; color:rgb(var(--ink)); }
@@ -110,3 +117,28 @@
 .editor-bake-actions { display:flex; align-items:center; flex-shrink:0; }
 .editor-bake-actions > button:first-child { border-radius:999px 0 0 999px; }
 .editor-bake-actions > .editor-bake-toggle { border-radius:0 999px 999px 0; border-left:1px solid #ffffff30; }
+
+.editor-camera-changes { border-top:1px solid #ffffff12; padding:8px 0; margin-bottom:6px; }
+.editor-camera-tools, .editor-camera-selection { display:flex; align-items:center; flex-wrap:wrap; gap:6px; font-size:11px; color:#a8acb8; }
+.editor-camera-tools label { display:flex; align-items:center; gap:6px; }
+.editor-camera-tools select { background:#20232b; border:1px solid #ffffff20; border-radius:4px; padding:4px; }
+.editor-camera-changes p { color:#858995; font-size:11px; margin-top:6px; }
+.editor-camera-track { position:relative; height:25px; margin:6px 0; background:#ffffff04; border-radius:4px; }
+.editor-camera-track button { position:absolute; display:grid; place-items:center; width:22px; height:25px; transform:translateX(-50%); color:#e8b361; border-radius:4px; }
+.editor-camera-track button:hover, .editor-camera-track button.selected { background:#e8b36130; color:#ffe2a5; }
+.editor-camera-selection { padding-top:4px; }
+.editor-time-input { width:90px; }
+
+.editor-track { overflow:hidden; }
+.editor-scene-marker { bottom:0; }
+
+.editor-review-speed { display:flex; align-items:center; gap:6px; color:#9b9eaa; font-size:11px; white-space:nowrap; }
+.editor-review-speed select { color:#e2e4ed; background:#20232b; border:1px solid #ffffff20; border-radius:5px; padding:4px 6px; cursor:pointer; }
+
+.editor-track, .editor-camera-track, .editor-overview, .editor-caption-track { margin-left:8px; margin-right:8px; }
+.editor-playhead { transform:translateX(-50%); }
+.editor-scan-progress { display:flex; flex-direction:column; gap:5px; min-width:260px; }
+.editor-scan-progress progress { display:block; width:100%; height:5px; appearance:none; border:0; border-radius:3px; overflow:hidden; background:#ffffff18; }
+.editor-scan-progress progress::-webkit-progress-bar { background:#ffffff18; }
+.editor-scan-progress progress::-webkit-progress-value { background:rgb(var(--accent)); border-radius:3px; }
+.editor-scan-progress progress::-moz-progress-bar { background:rgb(var(--accent)); border-radius:3px; }

@@ -130,14 +130,77 @@ test('maps Zernio error codes to friendly text without echoing provider payloads
 }))
 
 test('a 429 closes a shared gate so no further requests are spent until Retry-After', () => withMock(async ({ mock, client, api }) => {
-  mock.failNext('GET', '/api/v1/accounts', 429, { error: 'Rate limit exceeded. Please retry after 30 seconds.', details: { retryAfterSeconds: 30 } }, { 'Retry-After': '30' })
-  await assert.rejects(api.listAccounts(), (e) => e.status === 429 && e.retryAfterSeconds === 30 && /Try again in 30s/.test(e.message))
+  mock.failNext('GET', '/api/v1/accounts', 429, { error: 'Rate limit exceeded. Please retry after 30 seconds.', details: { retryAfterSeconds: 30 } }, { 'Retry-After': '30', 'X-RateLimit-Remaining': '0' })
+  await assert.rejects(api.listAccounts(), (e) => e.status === 429 && e.retryAfterSeconds === 30 && e.rateLimitScope === 'api' && /retry after 30 seconds/.test(e.message))
   const before = mock.state.requests.length
   // A different client instance (e.g. the posting code) shares the gate.
   await assert.rejects(new client.ZernioClient(KEY, mock.apiUrl).listProfiles(), (e) => e.status === 429 && e.retryAfterSeconds <= 30)
   assert.equal(mock.state.requests.length, before, 'no request reached Zernio while rate limited')
   client.resetRateLimit()
   assert.equal((await api.listProfiles()).length, 1)
+}))
+
+test('a posting restriction preserves the real reason and does not confuse API reset headers with a channel cooldown', () => withMock(async ({ mock, api }) => {
+  const id = 'a'.repeat(24)
+  mock.route({ method: 'POST', path: `/api/v1/posts/${id}/retry`, handler: (ctx) => ctx.json(200, { post: {} }) })
+  const reason = 'YouTube daily upload limit reached for this channel. Please try again tomorrow.'
+  // This legacy response has no stable code. Its API request budget is still available.
+  mock.failNext('POST', `/api/v1/posts/${id}/retry`, 429, { error: reason }, {
+    'X-RateLimit-Remaining': '599', 'X-RateLimit-Reset': String(Math.ceil(Date.now() / 1000) + 56)
+  })
+  await assert.rejects(api.retryPost(id, 1000), (e) => {
+    assert.equal(e.message, `Zernio: ${reason}`)
+    assert.equal(e.rateLimitScope, 'request')
+    assert.equal(e.retryAfterSeconds, null, 'the 56-second request window says nothing about the daily upload cap')
+    return true
+  })
+  assert.equal((await api.listAccounts()).length, 0, 'an account restriction does not block unrelated requests')
+  mock.failNext('POST', `/api/v1/posts/${id}/retry`, 429, { error: 'Account cooldown. Try again in 2 hours.', type: 'rate_limit_error', code: 'rate_limited' }, { 'Retry-After': '7200' })
+  await assert.rejects(api.retryPost(id, 1000), (e) => e.rateLimitScope === 'request' && e.retryAfterSeconds === 7200 && /Account cooldown/.test(e.message))
+  assert.equal((await api.listProfiles()).length, 1)
+}))
+
+test('typed platform limits without budget headers retain their scope, code and safe message', () => withMock(async ({ mock, api }) => {
+  const id = 'b'.repeat(24)
+  mock.route({ method: 'POST', path: `/api/v1/posts/${id}/retry`, handler: (ctx) => ctx.json(200, { post: {} }) })
+  mock.failNext('POST', `/api/v1/posts/${id}/retry`, 429, {
+    error: 'YouTube limit: see https://example.test/private?token=abc Bearer abc.def token_mockCredential123456',
+    type: 'platform_error', code: 'platform_api_error', platform: 'youtube', platformError: { secret: 'provider-raw-secret' }
+  }, { 'X-RateLimit-Remaining': '', 'X-RateLimit-Reset': '' })
+  await assert.rejects(api.retryPost(id, 1000), (e) => {
+    assert.equal(e.code, 'platform_api_error')
+    assert.equal(e.rateLimitScope, 'request')
+    assert.equal(e.retryAfterSeconds, null)
+    assert.match(e.message, /YouTube limit/)
+    assert.doesNotMatch(e.message, /example\.test|abc\.def|mockCredential|provider-raw-secret|Try again in/)
+    return true
+  })
+  assert.equal((await api.listProfiles()).length, 1)
+}))
+
+test('actual API exhaustion from posting gates both posting and account requests until the reset', () => withMock(async ({ mock, client, api }) => {
+  const id = 'c'.repeat(24)
+  mock.route({ method: 'POST', path: `/api/v1/posts/${id}/retry`, handler: (ctx) => ctx.json(200, { post: {} }) })
+  mock.failNext('POST', `/api/v1/posts/${id}/retry`, 429, { error: 'API request budget exhausted.', details: { currentCount: 601, limit: 600, retryAfterSeconds: 56 } }, {
+    'X-RateLimit-Remaining': '0', 'Retry-After': '56'
+  })
+  await assert.rejects(api.retryPost(id, 1000), (e) => e.rateLimitScope === 'api' && e.retryAfterSeconds === 56 && /budget exhausted/.test(e.message))
+  const before = mock.state.requests.length
+  await assert.rejects(api.listProfiles(), /API request limit/)
+  await assert.rejects(api.retryPost(id, 1000), /API request limit/)
+  assert.equal(mock.state.requests.length, before)
+  client.resetRateLimit()
+  assert.equal((await api.listProfiles()).length, 1)
+}))
+
+test('an upstream restriction can coincide with API exhaustion without borrowing its reset time', () => withMock(async ({ mock, api }) => {
+  mock.failNext('GET', '/api/v1/accounts', 429, { error: 'YouTube daily limit reached.', type: 'platform_error', code: 'platform_api_error' }, {
+    'X-RateLimit-Remaining': '0', 'X-RateLimit-Reset': String(Math.ceil(Date.now() / 1000) + 56)
+  })
+  await assert.rejects(api.listAccounts(), (e) => e.message === 'Zernio: YouTube daily limit reached.' && e.retryAfterSeconds === null)
+  const before = mock.state.requests.length
+  await assert.rejects(api.listProfiles(), /API request limit/)
+  assert.equal(mock.state.requests.length, before)
 }))
 
 test('a 503 exposes Retry-After to callers without closing the rate-limit gate', () => withMock(async ({ mock, api }) => {

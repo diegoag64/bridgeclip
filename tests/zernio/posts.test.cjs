@@ -818,6 +818,25 @@ test('partial and failed inline publishes keep per-platform errors; Retry fixes 
   assert.match(failed.post.targets[0].error, /too long/)
 }))
 
+test('retry shows a channel cooldown without blocking other requests or changing the failed post', () => withPosting(async ({ mock, posting, main, publish }) => {
+  posting.state.nextPublish.youtube = { errorMessage: 'YouTube daily upload limit reached for this channel.' }
+  const failed = await publish()
+  const reason = 'This channel is in a cooldown after reaching its YouTube daily upload limit. Try again tomorrow.'
+  mock.failNext('POST', `/api/v1/posts/${failed.post.id}/retry`, 429, { error: reason }, {
+    'X-RateLimit-Remaining': '599', 'X-RateLimit-Reset': String(Math.ceil(Date.now() / 1000) + 56)
+  })
+  await assert.rejects(main.posts.retryPost(failed.post.id), (error) => {
+    assert.equal(error.message, `Zernio: ${reason}`)
+    assert.equal(error.retryAfterSeconds, null)
+    return true
+  })
+  assert.equal(main.posts.listPosts()[0].status, 'failed')
+  assert.equal(posting.state.creates.length, 1, 'rejected retry must not create a replacement post')
+  const [retried] = await main.posts.retryPost(failed.post.id)
+  assert.equal(retried.status, 'published', 'a later accepted retry reaches the provider instead of a false global gate')
+  assert.equal(posting.state.creates.length, 1, 'retry updates the original post')
+}))
+
 test('after a failed post or a 4xx, trying again keeps the upload but sends a new x-request-id', () => withPosting(async ({ mock, posting, publish }) => {
   posting.state.nextPublish.youtube = { errorMessage: 'Video processing failed' }
   const failed = await publish()

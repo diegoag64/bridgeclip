@@ -26,7 +26,7 @@ from typing import Any, Callable, Optional
 
 from clip_engine.config import CaptionStyle, LayoutStyle, get_settings, is_longform, resolve_clip_duration_bounds
 from clip_engine.services.video_speed import validate_video_speed
-from clip_engine.error_policy import safe_failure_code, safe_processing_error
+from clip_engine.error_policy import NoClipCandidatesError, safe_failure_code, safe_processing_error
 from clip_engine.services.source_context import SourceContextService, context_for_prompt, transcription_terms
 from clip_engine.services.editorial_evidence import discovery_feedback, overlaps
 from clip_engine.services.jev_service import JevService, MODEL as JEV_MODEL
@@ -379,6 +379,9 @@ class AIClippingPipeline:
             edit_audit['planner'] = getattr(self.intelligence_planner, 'audit', {'requests': []})
             stage_timings["planning"] = time.perf_counter() - stage_start
             logger.info(f"Planned {len(clip_plan.segments)} clips")
+            if not clip_plan.segments:
+                edit_audit['outcome'] = 'no_candidates'
+                raise NoClipCandidatesError()
             reviewer = CoherenceReviewer(coherence_service, self.settings, transcription_result.segments, round(video_duration * 1000))
             editorial_vision = EditorialVision(self.settings, download_result.video_path, work_dir, round(video_duration * 1000))
             reviewer.source_context = context_brief
@@ -987,7 +990,8 @@ class AIClippingPipeline:
             public_error = str(e) if isinstance(e, CoherenceRejected) else safe_processing_error(e)
             if edit_audit is not None:
                 edit_audit['planner'] = getattr(self.intelligence_planner, 'audit', {'requests': []})
-                if edit_audit['outcome'] == 'reviewing': edit_audit['outcome'] = 'review_failed'
+                if isinstance(e, NoClipCandidatesError): edit_audit['outcome'] = 'no_candidates'
+                elif edit_audit['outcome'] == 'reviewing': edit_audit['outcome'] = 'review_failed'
                 try: save_edit_audit()
                 except Exception: logger.warning('Edit audit could not be saved')
 

@@ -12,6 +12,12 @@ TWITCH_ERRORS = {
 DISK_FULL_ERRNOS = {errno.ENOSPC, getattr(errno, "EDQUOT", errno.ENOSPC)}
 DISK_FULL_MARKERS = ("no space left on device", "disk quota exceeded")
 
+NO_CLIP_CANDIDATES_MESSAGE = 'The planner returned no clip candidates'
+
+
+class NoClipCandidatesError(Exception):
+    """Discovery completed, but did not provide usable candidates for either workflow."""
+
 
 def is_disk_full(error: BaseException) -> bool:
     """True when the error, or one it was raised from, reports a full disk.
@@ -37,6 +43,8 @@ def safe_processing_error(error: Exception) -> str:
         return "Not enough disk space to save clips"
     if isinstance(error, TimeoutError):
         return "Processing timed out"
+    if isinstance(error, NoClipCandidatesError):
+        return NO_CLIP_CANDIDATES_MESSAGE
     if type(error).__name__ == "VisualPlanningUnsupportedError":
         return "Selected planner requires a video with speech"
     if type(error).__name__ == "VideoDownloadError":
@@ -76,6 +84,8 @@ def safe_failure_code(error: Exception) -> str:
     """Small fixed code suitable for job records and logs; never include raw provider text."""
     if is_disk_full(error):
         return "storage.full"
+    if isinstance(error, NoClipCandidatesError):
+        return 'planning.no_candidates'
     if type(error).__name__ == "VisualPlanningUnsupportedError":
         return "planning.images_unsupported"
     if type(error).__name__ in {"TranscriptionError", "TranscriptionProviderError"}:
@@ -101,6 +111,8 @@ def safe_job_error_text(error: str | None) -> str | None:
     """Only expose known, fixed messages from stored job state."""
     if error is None:
         return None
+    if error == NO_CLIP_CANDIDATES_MESSAGE:
+        return error
     if error in TWITCH_ERRORS.values():
         return error
     if error in {

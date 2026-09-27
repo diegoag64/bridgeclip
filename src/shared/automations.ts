@@ -63,7 +63,11 @@ export interface MetadataResearch {
   sources: { title: string; url: string }[]
 }
 
+export const MAX_ENHANCEMENT_GUIDANCE = 2000
+
 export interface MetadataEnhancement {
+  /** User context and editorial direction used to prepare this draft. */
+  guidance?: string
   id: string
   createdAt: string
   platforms: AutomationAccount['platform'][]
@@ -101,6 +105,7 @@ export interface AutomationContent {
 }
 
 export interface AutomationSourceGroup {
+  sourceType: 'linked' | 'file'
   key: string
   title: string
   contentIds: string[]

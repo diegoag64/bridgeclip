@@ -188,3 +188,23 @@ test('sped-up framing traces map source, cuts and output without changing source
     assert.throws(() => parseFramingTrace(value))
   }
 })
+
+test('card availability includes recorded traces without media and excludes absent or unsafe files', async () => {
+  const { root, run } = library()
+  const { availableFraming } = inspectionModule()
+  const trace = path.join(run, 'clip_00.framing.json')
+  try {
+    assert.deepEqual(await availableFraming(run, root), [0])
+    fs.unlinkSync(path.join(run, 'framing-source.mp4'))
+    fs.unlinkSync(path.join(run, 'clip_00.mp4'))
+    assert.deepEqual(await availableFraming(run, root), [0], 'Trace-only inspection remains useful')
+    fs.unlinkSync(trace)
+    assert.deepEqual(await availableFraming(run, root), [])
+    fs.writeFileSync(trace, '')
+    assert.deepEqual(await availableFraming(run, root), [])
+    fs.unlinkSync(trace)
+    fs.symlinkSync(path.join(run, 'job_output.json'), trace)
+    assert.deepEqual(await availableFraming(run, root), [])
+    await assert.rejects(availableFraming(path.dirname(root), root))
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})

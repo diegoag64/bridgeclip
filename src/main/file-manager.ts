@@ -27,6 +27,14 @@ export interface JobHistoryEntry {
 }
 
 export const LIBRARY_FAVORITE_FILE = '.bridgeclip-favorite'
+export const manualPostedFile = (clipIndex: number): string => `.bridgeclip-posted-${clipIndex}`
+export function isManuallyPosted(outputDir: string, clipIndex: number): boolean {
+  try {
+    const marker = lstatSync(join(outputDir, manualPostedFile(clipIndex)))
+    return marker.isFile() && !marker.isSymbolicLink() && marker.size === 0
+  } catch { return false }
+}
+
 export function isRunFavorite(outputDir: string): boolean {
   try {
     const marker = lstatSync(join(outputDir, LIBRARY_FAVORITE_FILE))

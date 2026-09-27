@@ -108,7 +108,7 @@ async function start(t, { titles, key = true, tiktokLane = null } = {}) {
   }
   const openRun = async () => {
     await app.page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: /Library/ }).click()
-    await app.page.getByRole('button', { name: /E2E source video/ }).click()
+    await app.page.getByRole('button', { name: 'Open E2E source video', exact: true }).click()
   }
   return { ...app, mock, posting, accounts, userDataDir, clipPaths, openRun }
 }
@@ -138,7 +138,8 @@ test('post a Library clip now and on a schedule, then cancel the scheduled one',
   const { tiktok, youtube, instagram } = accounts
   // Library → the run → Post on the clip.
   await openRun()
-  await page.getByRole('button', { name: `Post “${CLIP_TITLE}”` }).click()
+  await page.getByRole('button', { name: `Actions for “${CLIP_TITLE}”` }).click()
+  await page.getByRole('menuitem', { name: 'Post or schedule', exact: true }).click()
   const dialog = page.getByRole('dialog')
   await dialog.getByRole('checkbox', { name: /^TikTok/ }).waitFor()
   await shot(page, '01-dialog-open')
@@ -211,8 +212,10 @@ test('post a Library clip now and on a schedule, then cancel the scheduled one',
   await dialog.getByRole('button', { name: 'Done' }).click()
   await dialog.waitFor({ state: 'detached' })
 
-  // Instagram, scheduled two hours out.
-  await page.getByRole('button', { name: `Post “${CLIP_TITLE}”` }).click()
+  // Instagram, scheduled two hours out. The first publish moved the clip to Posted.
+  await page.getByRole('button', { name: 'Posted 1', exact: true }).click()
+  await page.getByRole('button', { name: `Actions for “${CLIP_TITLE}”` }).click()
+  await page.getByRole('menuitem', { name: 'Post or schedule', exact: true }).click()
   await dialog.getByRole('checkbox', { name: /^Instagram/ }).click()
   await dialog.getByRole('radio', { name: 'Schedule' }).click()
   const at = Math.ceil((Date.now() + 2 * 3_600_000) / 60_000) * 60_000
@@ -262,10 +265,38 @@ test('post a Library clip now and on a schedule, then cancel the scheduled one',
   assert.ok(mock.state.requests.filter((r) => r.path.startsWith('/api/')).every((r) => r.authorized))
 })
 
+test('retry displays a channel restriction instead of an unrelated API countdown', { timeout: 120_000 }, async (t) => {
+  const { page, mock, posting, openRun } = await start(t)
+  posting.state.nextPublish.youtube = { errorMessage: 'YouTube daily upload limit reached for this channel.' }
+  await openRun()
+  await page.getByRole('button', { name: `Actions for “${CLIP_TITLE}”` }).click()
+  await page.getByRole('menuitem', { name: 'Post or schedule', exact: true }).click()
+  const dialog = page.getByRole('dialog')
+  await dialog.getByRole('checkbox', { name: /^YouTube/ }).check()
+  await dialog.getByRole('button', { name: 'Post now', exact: true }).click()
+  await dialog.getByText(/YouTube daily upload limit reached/).waitFor()
+  await dialog.getByRole('button', { name: 'Done', exact: true }).click()
+  await page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: /Posts/ }).click()
+  const [post] = await page.evaluate(() => window.bridgeclip.zernio.posts.list())
+  const reason = 'This YouTube channel is temporarily blocked from uploading. Try again tomorrow.'
+  mock.failNext('POST', `/api/v1/posts/${post.id}/retry`, 429, { error: reason }, {
+    'X-RateLimit-Remaining': '599', 'X-RateLimit-Reset': String(Math.ceil(Date.now() / 1000) + 56)
+  })
+  await page.getByRole('button', { name: 'Retry', exact: true }).click()
+  await page.getByText(`Zernio: ${reason}`, { exact: true }).waitFor()
+  assert.equal(await page.getByText(/Try again in \d+s/).count(), 0)
+  await shot(page, 'retry-channel-restriction')
+  assert.equal(posting.state.creates.length, 1)
+  await page.getByRole('button', { name: 'Retry', exact: true }).click()
+  await page.waitForFunction(async () => (await window.bridgeclip.zernio.posts.list())[0].status === 'published')
+  assert.equal(posting.state.creates.length, 1, 'successful retry uses the existing post')
+})
+
 test('without a Zernio key the dialog points to Accounts', { timeout: 300_000 }, async (t) => {
   const { page, mock, openRun } = await start(t, { key: false })
   await openRun()
-  await page.getByRole('button', { name: `Post “${CLIP_TITLE}”` }).click()
+  await page.getByRole('button', { name: `Actions for “${CLIP_TITLE}”` }).click()
+  await page.getByRole('menuitem', { name: 'Post or schedule', exact: true }).click()
   const dialog = page.getByRole('dialog')
   await dialog.getByText('Connect your social accounts').waitFor()
   await shot(page, '08-no-key')
@@ -323,7 +354,8 @@ test('many accounts across profiles: several TikToks with their own privacy choi
   await page.waitForLoadState('domcontentloaded')
 
   await openRun()
-  await page.getByRole('button', { name: `Post “${CLIP_TITLE}”` }).click()
+  await page.getByRole('button', { name: `Actions for “${CLIP_TITLE}”` }).click()
+  await page.getByRole('menuitem', { name: 'Post or schedule', exact: true }).click()
   const dialog = page.getByRole('dialog')
   await dialog.getByRole('button', { name: 'Select all TikTok accounts' }).click()
   await dialog.getByRole('button', { name: 'Select all YouTube accounts' }).click()

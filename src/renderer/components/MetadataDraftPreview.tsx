@@ -15,6 +15,7 @@ export function MetadataDraftPreview({ draft }: { draft: MetadataEnhancement }):
       <summary className="cursor-pointer font-medium text-ink">Context & research · {draft.research.status}{draft.research.reused ? ' · reused video research' : ''}</summary>
       <p className="mt-2 whitespace-pre-wrap" data-selectable>{draft.source?.title || 'No original video identified'}{draft.source?.channel ? ` · ${draft.source.channel}` : ''}</p>
       <p className="mt-2 whitespace-pre-wrap" data-selectable>{draft.source?.description || 'Original description unavailable; no description was assumed.'}</p>
+      {draft.guidance && <p className="mt-2 whitespace-pre-wrap" data-selectable><span className="font-medium text-ink">Enhancement prompt</span><br />{draft.guidance}</p>}
       <p className="mt-3 whitespace-pre-wrap" data-selectable>{draft.research.summary}</p>
       {draft.research.sources.map((citation) => <p key={citation.url} className="mt-2 break-all" data-selectable>{citation.title}<br />{citation.url}</p>)}
     </details>

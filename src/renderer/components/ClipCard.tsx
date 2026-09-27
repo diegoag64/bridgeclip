@@ -1,14 +1,13 @@
 import { useEffect, useState } from 'react'
-import { FolderOpen, ImageOff, ListPlus, Play, Send, TrendingUp, TriangleAlert } from 'lucide-react'
+import { Check, FolderOpen, Scan, ImageOff, ListPlus, Play, Send, TrendingUp, TriangleAlert, Undo2 } from 'lucide-react'
 import { cn, formatTimecode, isMac, localFileUrl } from '../lib/utils'
 import { getApi } from '../lib/ipc'
 import { clipFilePath, loadThumbnail } from '../lib/thumbnails'
 import type { ClipArtifact } from '../store/use-job-store'
 import { Checkbox } from './ui/Checkbox'
-import { Button } from './ui/Button'
 import { Badge } from './ui/Badge'
 import { Skeleton } from './ui/Skeleton'
-import { HoverCard } from './ui/HoverCard'
+import { ActionMenu } from './ui/ActionMenu'
 import { LIBRARY_POSTING_LABELS, type LibraryClipPostingStatus } from '../../shared/library-posting'
 
 // How the engine framed a vertical clip (its dominant layout).
@@ -35,6 +34,7 @@ interface ClipCardProps {
   onPost?: () => void
   onAddToAutomation?: () => void
   onInspectFraming?: () => void
+  onSetPosted?: (posted: boolean) => Promise<void>
 }
 
 export function ClipCard({
@@ -48,7 +48,8 @@ export function ClipCard({
   onAspect,
   onPost,
   onAddToAutomation,
-  onInspectFraming
+  onInspectFraming,
+  onSetPosted
 }: ClipCardProps): React.JSX.Element {
   const filePath = clipFilePath(clip.s3_url)
   const [thumb, setThumb] = useState<string | null | undefined>(undefined)
@@ -56,6 +57,7 @@ export function ClipCard({
   const [hovering, setHovering] = useState(false)
   const [previewFailed, setPreviewFailed] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [markingPosted, setMarkingPosted] = useState(false)
   const title = clip.summary || `Clip ${clip.clip_index + 1}`
   const postingBadge = postingStatus ? <Badge tone={postingStatus.state === 'posted' ? 'success' : postingStatus.state === 'partial' || postingStatus.state === 'failed' ? 'warning' : 'neutral'}>{LIBRARY_POSTING_LABELS[postingStatus.state]}</Badge> : null
   const score = (clip.virality_score * 10).toFixed(1)
@@ -95,6 +97,14 @@ export function ClipCard({
     } catch {
       setActionError('Could not show this clip in its folder.')
     }
+  }
+
+  const setPosted = async (posted: boolean): Promise<void> => {
+    if (!onSetPosted || markingPosted) return
+    setMarkingPosted(true); setActionError(null)
+    try { await onSetPosted(posted) }
+    catch (cause) { setActionError(cause instanceof Error ? cause.message : 'Could not update posted status. Try again.') }
+    finally { setMarkingPosted(false) }
   }
 
   return (
@@ -195,10 +205,16 @@ export function ClipCard({
       <div className="px-2 pb-2 pt-3">
         <div className="mb-3 flex min-h-8 flex-wrap items-center justify-between gap-2">
           {postingBadge}
-          {!selecting && <div className="ml-auto flex items-center gap-1.5">
-            {onPost && <MediaAction label={`Post “${title}”`} title="Post or schedule to social accounts" icon={<Send />} onClick={onPost} />}
-            {onAddToAutomation && <MediaAction label={`Add “${title}” to automation`} title="Add to an automation queue" icon={<ListPlus />} onClick={onAddToAutomation} />}
-            <MediaAction label={isMac ? 'Show in Finder' : 'Show in folder'} title="Open the folder containing this clip" icon={<FolderOpen />} onClick={() => { void showInFolder() }} />
+          {!selecting && <div className="ml-auto">
+            <ActionMenu label={`Actions for “${title}”`} disabled={markingPosted} actions={[
+              ...(onPost ? [{ label: 'Post or schedule', icon: <Send className="h-3.5 w-3.5" />, onSelect: onPost }] : []),
+              ...(onAddToAutomation ? [{ label: 'Add to automation', icon: <ListPlus className="h-3.5 w-3.5" />, onSelect: onAddToAutomation }] : []),
+              ...(onSetPosted && postingStatus && (postingStatus.state !== 'posted' || postingStatus.manuallyPosted) ? [postingStatus.manuallyPosted
+                ? { label: 'Undo manual posted mark', icon: <Undo2 className="h-3.5 w-3.5" />, onSelect: () => { void setPosted(false) } }
+                : { label: 'Mark as posted', icon: <Check className="h-3.5 w-3.5" />, onSelect: () => { void setPosted(true) } }] : []),
+              ...(onInspectFraming ? [{ label: 'Inspect framing', icon: <Scan className="h-3.5 w-3.5" />, onSelect: onInspectFraming }] : []),
+              { label: isMac ? 'Show in Finder' : 'Show in folder', icon: <FolderOpen className="h-3.5 w-3.5" />, onSelect: () => { void showInFolder() } }
+            ]} />
           </div>}
         </div>
         <h3 className="line-clamp-2 text-sm font-medium leading-[18px] text-ink" title={title}>
@@ -224,25 +240,8 @@ export function ClipCard({
             </span>
           </Badge>
         )}
-        {onInspectFraming && <Button size="sm" className="mt-2 w-full" onClick={onInspectFraming}>Inspect framing</Button>}
         {actionError && <p role="alert" className="mt-1.5 text-xs text-danger">{actionError}</p>}
       </div>
     </article>
-  )
-}
-
-/** Dedicated action row keeps controls clear of duration and media labels. */
-function MediaAction({ label, title, icon, onClick }: { label: string; title?: string; icon: React.ReactNode; onClick: () => void }): React.JSX.Element {
-  return (
-    <HoverCard cardClassName="px-3 py-2 text-xs" content={<span>{title ?? label}</span>}>
-    <button
-      type="button"
-      aria-label={label}
-      onClick={onClick}
-      className="glass-chip flex h-7 w-7 items-center justify-center rounded-full text-white/90 transition-colors duration-150 hover:bg-white/25 hover:text-white [&_svg]:h-3.5 [&_svg]:w-3.5"
-    >
-      {icon}
-    </button>
-    </HoverCard>
   )
 }

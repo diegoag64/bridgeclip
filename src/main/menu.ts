@@ -95,6 +95,20 @@ export function createMenu(mainWindow: BrowserWindow): void {
   const menu = Menu.buildFromTemplate(template)
   Menu.setApplicationMenu(menu)
 
+  // Handle app zoom before focused renderer controls or native accelerator
+  // matching can consume it. Match physical keys too (including the keypad).
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown' || input.alt || input.isComposing ||
+        !(isMac ? input.meta && !input.control : input.control && !input.meta)) return
+    const out = input.key === '-' || input.code === 'Minus' || input.code === 'NumpadSubtract'
+    const into = input.key === '+' || input.key === '=' || input.code === 'Equal' || input.code === 'NumpadAdd'
+    const reset = !input.shift && (input.key === '0' || input.code === 'Digit0' || input.code === 'Numpad0')
+    if (!out && !into && !reset) return
+    event.preventDefault() // Also suppress the menu accelerator: apply exactly once.
+    const contents = mainWindow.webContents
+    contents.setZoomLevel(reset ? 0 : contents.getZoomLevel() + (out ? -.5 : .5))
+  })
+
   mainWindow.webContents.on('context-menu', (_event, params) => {
     if (!params.isEditable && !params.selectionText) return
     const items: Electron.MenuItemConstructorOptions[] = params.isEditable

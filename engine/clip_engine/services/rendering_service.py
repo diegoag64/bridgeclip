@@ -234,25 +234,55 @@ class RenderingService:
         return ["-c:v", "libx264", "-preset", self.settings.ffmpeg_preset,
                 "-crf", str(self.settings.ffmpeg_crf), *gop]
 
-    async def capture_framing_source(self, video_path: str, output_path: str) -> None:
+    async def capture_framing_source(self, video_path: str, output_path: str, *, progress=None, duration_ms=None) -> None:
         """One uncropped preview per captured run, on the original source clock."""
         width, height = await self._get_video_dimensions(video_path)
         scale = min(1, 1280 / width, 720 / height)
         out_w, out_h = max(2, int(width * scale / 2) * 2), max(2, int(height * scale / 2) * 2)
+        fps = await self._probe_fps(video_path)
         temporary = output_path + ".partial.mp4"
         try:
-            await self._run_cmd([
+            cmd = [
                 "ffmpeg", "-nostdin", "-v", "error", "-n", *MEDIA_INPUT_OPTIONS, "-i", video_path,
                 "-map", "0:v:0", "-map", "0:a:0?", "-vf",
-                f"fps=30:start_time=0:round=near,scale={out_w}:{out_h},setsar=1",
-                *self._video_codec_args(out_w, out_h, "30"), "-pix_fmt", "yuv420p",
+                f"scale={out_w}:{out_h},setsar=1",
+                "-fps_mode", "passthrough", "-enc_time_base", "1:1000000",
+                *self._video_codec_args(out_w, out_h, fps), "-pix_fmt", "yuv420p",
                 "-c:a", "aac", "-af", AUDIO_SYNC, "-b:a", "96k", "-movflags", "+faststart", temporary,
-            ])
+            ]
+            if progress is None:
+                await self._run_cmd(cmd)
+            else:
+                progress(0)
+                await asyncio.to_thread(self._capture_preview_progress, cmd, duration_ms, progress)
             os.chmod(temporary, 0o600)
             os.replace(temporary, output_path)
         finally:
             if os.path.isfile(temporary):
                 os.remove(temporary)
+
+    @staticmethod
+    def _capture_preview_progress(cmd, duration_ms, progress):
+        """Read FFmpeg's machine progress without exposing paths or stderr."""
+        if not isinstance(duration_ms, (int, float)) or not math.isfinite(duration_ms) or duration_ms <= 0:
+            raise ValueError('Invalid preview duration')
+        reported = 0
+        cmd = [cmd[0], '-progress', 'pipe:1', '-stats_period', '0.5', *cmd[1:]]
+        with media_process(cmd) as (process, _):
+            while raw := process.stdout.readline(1025):
+                if len(raw) > 1024:
+                    raise RenderingError('Invalid preview progress')
+                if raw.startswith(b'out_time_us='):
+                    try:
+                        percent = max(0, min(99, int(int(raw.split(b'=', 1)[1]) / (duration_ms * 1000) * 100)))
+                    except ValueError:
+                        continue  # FFmpeg can report N/A before the first frame.
+                    if percent > reported:
+                        reported = percent
+                        progress(percent)
+            if process.wait() != 0:
+                raise RenderingError('Preview preparation failed')
+        progress(100)
 
     async def render_clip(self, request: RenderRequest) -> RenderResult:
         """
@@ -285,7 +315,7 @@ class RenderingService:
             fps = await self._probe_fps(request.video_path)
         else:
             target_width, target_height = get_output_dimensions(request.aspect_ratio)
-            fps = "30"
+            fps = await self._probe_fps(request.video_path) if request.manual_plan is not None else "30"
 
         logger.info(
             f"Rendering clip: {request.start_time_ms}ms-{request.end_time_ms}ms, "

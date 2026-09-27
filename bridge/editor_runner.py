@@ -15,7 +15,7 @@ def main():
         if len(raw) > 16384:
             raise ValueError('Request too large')
         config = json.loads(raw)
-        if config.get('action') not in ('review', 'export') or not os.path.isabs(config['run']):
+        if config.get('action') not in ('review', 'export', 'replace-source', 'scan-cameras') or not os.path.isabs(config['run']):
             raise ValueError('Invalid editor action')
         os.environ['LOCAL_MODE'] = 'true'
         from network_guard import install
@@ -27,12 +27,14 @@ def main():
             task = asyncio.current_task()
             if os.name != 'nt':
                 asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, task.cancel)
-            await run_editor(config)
+            await run_editor(config, progress=lambda value: emit({'type': 'progress', **value}))
         asyncio.run(work())
         emit({'ok': True})
         return 0
-    except (Exception, asyncio.CancelledError):
-        emit({'ok': False})
+    except (Exception, asyncio.CancelledError) as error:
+        # Only fixed error codes cross the bridge, never tool output or private paths.
+        code = getattr(error, 'code', None)
+        emit({'ok': False, 'error': code if code in ('duration', 'geometry', 'audio', 'invalid') else None})
         return 1
 
 

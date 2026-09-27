@@ -1,5 +1,6 @@
 import type { LibraryClipTarget } from '../shared/library-posting'
 import type { CandidateEdit, EditorSession } from '../shared/clip-editor'
+import type { JobOutput } from '../shared/job-output'
 import type { EditAudit } from '../shared/editorial'
 import { contextBridge, ipcRenderer } from 'electron'
 import type { FramingInspection } from '../shared/framing-trace'
@@ -19,6 +20,7 @@ import type { MetadataEnhancement, AutomationSourceGroup, AutomationBatchResult,
 import type { LibraryClipPostingStatus, LibraryEnhancementOptions } from '../shared/library-posting'
 import type { OpenRouterCatalog } from '../shared/openrouter-models'
 import type { UpdateState } from '../shared/updates'
+import type { OutputStorageUsage } from '../shared/output-storage'
 
 export interface ClipSettings {
   openrouterConfigured: boolean
@@ -70,17 +72,18 @@ export interface BridgeClipAPI {
   editor: {
     open: (path: string) => Promise<EditorSession>
     save: (path: string, revision: number, edits: CandidateEdit[]) => Promise<EditorSession>
-    run: (path: string, revision: number, id: string, action: 'review' | 'export' | 'export-all') => Promise<EditorSession>
+    run: (path: string, revision: number, id: string, action: 'review' | 'export' | 'export-all' | 'scan-cameras') => Promise<EditorSession>
     cancel: (path: string) => Promise<void>
+    replaceSource: (path: string, revision: number, replacement: string) => Promise<EditorSession>
   }
   edits: { inspect: (outputDir: string) => Promise<EditAudit> }
-  framing: { inspect: (outputDir: string, clipIndex: number) => Promise<FramingInspection> }
+  framing: { inspect: (outputDir: string, clipIndex: number) => Promise<FramingInspection>; available: (outputDir: string) => Promise<number[]> }
   models: { list: (refresh?: boolean) => Promise<OpenRouterCatalog> }
   automations: {
     libraryClip: (id: string, contentId: string) => Promise<LibraryClipTarget | null>
     reorder: (id: string, contentId: string, beforeId: string | null) => Promise<Automation[]>
     enhancementGroups: (id: string) => Promise<AutomationSourceGroup[]>
-    enhanceBatch: (id: string, contentIds: string[], key: string) => Promise<AutomationBatchResult>
+    enhanceBatch: (id: string, contentIds: string[], key: string, guidance?: string) => Promise<AutomationBatchResult>
     source: (id: string, contentId: string) => Promise<AutomationSourceContext | null>
     enhance: (id: string, contentId: string, options: { source?: AutomationSourceContext | null; research: boolean }) => Promise<Automation[]>
     resolveDraft: (id: string, contentId: string, draftId: string, apply: boolean) => Promise<Automation[]>
@@ -98,6 +101,7 @@ export interface BridgeClipAPI {
   }
   settings: {
     load: () => Promise<ClipSettings>
+    storageUsage: () => Promise<OutputStorageUsage>
     save: (settings: ClipSettings) => Promise<ClipSettings>
     replaceApiKey: (key: 'openrouterApiKey' | 'zernioApiKey', value: string) => Promise<ClipSettings>
     selectOutputDir: () => Promise<string | null>
@@ -154,7 +158,9 @@ export interface BridgeClipAPI {
   history: {
     setFavorite: (outputDir: string, favorite: boolean) => Promise<boolean>
     delete: (outputDir: string) => Promise<void>
+    deleteClips: (outputDir: string, indices: number[]) => Promise<JobOutput>
     postingStatus: (outputDir: string) => Promise<LibraryClipPostingStatus[]>
+    setPosted: (outputDir: string, clipIndex: number, posted: boolean) => Promise<boolean>
     metadataSource: (outputDir: string, clipIndex: number) => Promise<AutomationSourceContext | null>
     enhanceMetadata: (outputDir: string, clipIndex: number, options: LibraryEnhancementOptions) => Promise<MetadataEnhancement>
     list: () => Promise<HistoryEntry[]>
@@ -210,16 +216,20 @@ const api: BridgeClipAPI = {
     open: (path) => ipcRenderer.invoke('editor:open', path),
     save: (path, revision, edits) => ipcRenderer.invoke('editor:save', path, revision, edits),
     run: (path, revision, id, action) => ipcRenderer.invoke('editor:run', path, revision, id, action),
-    cancel: (path) => ipcRenderer.invoke('editor:cancel', path)
+    cancel: (path) => ipcRenderer.invoke('editor:cancel', path),
+    replaceSource: (path, revision, replacement) => ipcRenderer.invoke('editor:replaceSource', path, revision, replacement)
   },
   edits: { inspect: (outputDir) => ipcRenderer.invoke('edits:inspect', outputDir) },
-  framing: { inspect: (outputDir, clipIndex) => ipcRenderer.invoke('framing:inspect', outputDir, clipIndex) },
+  framing: {
+    inspect: (outputDir, clipIndex) => ipcRenderer.invoke('framing:inspect', outputDir, clipIndex),
+    available: (outputDir) => ipcRenderer.invoke('framing:available', outputDir)
+  },
   models: { list: (refresh = false) => ipcRenderer.invoke('models:list', refresh) },
   automations: {
     libraryClip: (id, contentId) => ipcRenderer.invoke('automations:libraryClip', id, contentId),
     reorder: (id, contentId, beforeId) => ipcRenderer.invoke('automations:reorder', id, contentId, beforeId),
     enhancementGroups: (id) => ipcRenderer.invoke('automations:enhancementGroups', id),
-    enhanceBatch: (id, contentIds, key) => ipcRenderer.invoke('automations:enhanceBatch', id, contentIds, key),
+    enhanceBatch: (id, contentIds, key, guidance) => ipcRenderer.invoke('automations:enhanceBatch', id, contentIds, key, guidance),
     source: (id, contentId) => ipcRenderer.invoke('automations:source', id, contentId),
     enhance: (id, contentId, options) => ipcRenderer.invoke('automations:enhance', id, contentId, options),
     resolveDraft: (id, contentId, draftId, apply) => ipcRenderer.invoke('automations:resolveDraft', id, contentId, draftId, apply),
@@ -237,6 +247,7 @@ const api: BridgeClipAPI = {
   },
   settings: {
     load: () => ipcRenderer.invoke('settings:load'),
+    storageUsage: () => ipcRenderer.invoke('settings:storageUsage'),
     save: (settings) => ipcRenderer.invoke('settings:save', settings),
     replaceApiKey: (key, value) => ipcRenderer.invoke('settings:replaceApiKey', key, value),
     selectOutputDir: () => ipcRenderer.invoke('settings:selectOutputDir')
@@ -278,7 +289,9 @@ const api: BridgeClipAPI = {
   history: {
     setFavorite: (outputDir, favorite) => ipcRenderer.invoke('history:setFavorite', outputDir, favorite),
     delete: (outputDir) => ipcRenderer.invoke('history:delete', outputDir),
+    deleteClips: (outputDir, indices) => ipcRenderer.invoke('history:deleteClips', outputDir, indices),
     postingStatus: (outputDir) => ipcRenderer.invoke('history:postingStatus', outputDir),
+    setPosted: (outputDir, clipIndex, posted) => ipcRenderer.invoke('history:setPosted', outputDir, clipIndex, posted),
     metadataSource: (outputDir, clipIndex) => ipcRenderer.invoke('history:metadataSource', outputDir, clipIndex),
     enhanceMetadata: (outputDir, clipIndex, options) => ipcRenderer.invoke('history:enhanceMetadata', outputDir, clipIndex, options),
     list: () => ipcRenderer.invoke('history:list'),

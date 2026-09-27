@@ -4,7 +4,7 @@ import { AUTOMATION_PLATFORMS, type AutomationSourceContext, type MetadataEnhanc
 import type { ClipArtifact, JobOutput } from '../shared/job-output'
 import { clipPostingStatus, type LibraryClipPostingStatus, type LibraryEnhancementOptions } from '../shared/library-posting'
 import { loadSettings } from './settings-store'
-import { getJobOutput } from './file-manager'
+import { getJobOutput, isManuallyPosted } from './file-manager'
 import { assertMediaPath, authorizeMedia, isWithinDirectory, openAuthorizedMedia } from './security'
 import { isAutomationMedia, listAutomations } from './automations'
 import { listPosts } from './zernio/posts'
@@ -62,7 +62,9 @@ async function fingerprint(path: string): Promise<{ size: number; hash: () => Pr
 export async function libraryPostingStatus(outputDir: unknown): Promise<LibraryClipPostingStatus[]> {
   const output = await libraryRun(outputDir)
   const workspaceKey = loadSettings().zernioApiKey
-  if (!workspaceKey) return output.clips.map((clip) => clipPostingStatus(clip.clip_index, []))
+  const withManualStatus = (status: LibraryClipPostingStatus): LibraryClipPostingStatus =>
+    isManuallyPosted(outputDir as string, status.clipIndex) ? { ...status, state: 'posted', manuallyPosted: true } : status
+  if (!workspaceKey) return output.clips.map((clip) => withManualStatus(clipPostingStatus(clip.clip_index, [])))
   const posts = listPosts()
   const origins = new Map(listAutomations().flatMap((automation) => automation.content.filter((item) => item.postId && item.sourceClipPath).map((item) => [item.postId!, pathKey(item.sourceClipPath!)] as const)))
   const bankPosts = posts.filter((post) => !origins.has(post.id) && isAutomationMedia(post.clipPath))
@@ -84,7 +86,7 @@ export async function libraryPostingStatus(outputDir: unknown): Promise<LibraryC
         if (bank && bank.size === original.size && await bank.hash() === await original.hash()) matches.push(post)
       }
     }
-    statuses.push(clipPostingStatus(clip.clip_index, matches))
+    statuses.push(withManualStatus(clipPostingStatus(clip.clip_index, matches)))
   }
   if (loadSettings().zernioApiKey !== workspaceKey) throw new Error('The posting workspace changed. Refresh the Library.')
   return statuses

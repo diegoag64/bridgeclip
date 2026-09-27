@@ -40,9 +40,11 @@ test('add library clips, review TikTok, and run a mixed-platform automation', { 
   }))
   const posting = createPostingMock()
   let researchCalls = 0; let batchWritingCalls = 0; let failLargeBatches = false
+  const enhancementInputs = []
   const mock = await createMockZernio({ apiKey: KEY, extraRoutes: [...posting.routes,
     { method: 'POST', path: '/speech', auth: false, handler: (ctx) => ctx.json(200, { text: 'Accurate transcripts make automations reliable.' }) },
     { method: 'POST', path: '/chat', auth: false, handler: (ctx) => {
+      enhancementInputs.push(JSON.parse(ctx.body.messages[1].content))
       if (ctx.body.tools) { researchCalls++; return ctx.json(200, { choices: [{ message: { content: 'Relevant terms: speech recognition and reliable automation.', annotations: [{ type: 'url_citation', url_citation: { title: 'Recognition guide', url: 'https://example.com/recognition' } }] } }] }) }
       const input = JSON.parse(ctx.body.messages[1].content)
       if (failLargeBatches && input.clips?.length === 5) return ctx.json(503, { error: 'test provider interruption' })
@@ -71,6 +73,7 @@ test('add library clips, review TikTok, and run a mixed-platform automation', { 
   await page.getByLabel('Automation name').fill('BridgeMind')
   await page.locator('form').getByRole('button', { name: 'Create' }).click()
   await page.getByRole('heading', { name: 'Content bank' }).waitFor()
+  await page.getByRole('status', { name: 'Next posting slot' }).getByText('No times scheduled', { exact: true }).waitFor()
 
   await page.getByRole('button', { name: 'New profile' }).click()
   await page.getByLabel('New profile name').fill('Another profile')
@@ -94,6 +97,7 @@ test('add library clips, review TikTok, and run a mixed-platform automation', { 
   await page.getByText('Changes saved.').waitFor()
   await page.getByRole('switch', { name: 'Automation on' }).click()
   await page.getByText('BridgeMind is on.').waitFor()
+  assert.match(await page.getByRole('region', { name: 'Queued', exact: true }).getByRole('status', { name: 'Next posting slot' }).textContent(), /Next slot (Today|Tomorrow) 11:59 PM · /)
 
   await page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: /Library/ }).click()
   await page.getByText('Automation library run').click()
@@ -273,15 +277,58 @@ test('add library clips, review TikTok, and run a mixed-platform automation', { 
   await page.reload()
   await page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: /Automations/ }).click()
   await page.getByRole('button', { name: 'Enhance by source video' }).click()
+  await page.getByText('Attached file ·', { exact: false }).waitFor()
+  const guidance = 'A workshop on speech recognition. Focus on practical automation tips for beginners.'
+  await page.getByLabel('Enhancement prompt (optional)').fill(guidance)
+  if (process.env.BRIDGECLIP_GUIDANCE_SCREENSHOT) await page.screenshot({ path: process.env.BRIDGECLIP_GUIDANCE_SCREENSHOT })
+  const requestsBeforeGuidance = enhancementInputs.length
   await page.getByRole('button', { name: 'Enhance 6 clips from this video' }).click()
   await page.getByText(/1 drafts ready to review · 5 failed · 0 already handled · 0 not attempted/).waitFor()
   const afterFailure = await page.evaluate(() => window.bridgeclip.automations.list())
   assert.equal(afterFailure[0].content.filter((item) => item.metadataError).length, 5)
   assert.equal(afterFailure[0].content.at(-1).metadataDraft.posts.length, 2)
+  assert.equal(afterFailure[0].content.at(-1).metadataDraft.guidance, guidance)
+  assert.ok(enhancementInputs.slice(requestsBeforeGuidance).every((input) => input.enhancementGuidance === guidance), 'prompt is forwarded through IPC to research and every writing chunk')
+  assert.equal(researchCalls, 2, 'new guidance refreshes research once for both chunks')
   assert.equal(posting.state.creates.length, 1)
   await page.reload()
   await page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: /Automations/ }).click()
   await page.getByText(/Metadata enhancement failed:/).first().waitFor()
+  await page.getByRole('button', { name: 'Review draft', exact: true }).last().click()
+  const guidedReview = page.getByRole('dialog', { name: 'Review enhanced metadata' })
+  await guidedReview.getByText('Context & research · complete', { exact: false }).click()
+  await guidedReview.getByText(guidance, { exact: false }).waitFor()
+  await guidedReview.getByRole('button', { name: 'Review later' }).click()
+  // Switching between an attached source and a linked one keeps their prompts separate.
+  const linkedRun = path.join(path.dirname(run), 'linked-source-run')
+  fs.mkdirSync(linkedRun)
+  const linkedClip = path.join(linkedRun, 'linked.mp4'); fs.copyFileSync(clip, linkedClip)
+  fs.writeFileSync(path.join(linkedRun, 'job_output.json'), JSON.stringify({
+    job_id: 'linked-source-run', source_video_title: 'Linked source video',
+    source_video_url: 'https://www.youtube.com/watch?v=hqP9fivmBqI', source_video_description: 'Speech recognition tips.',
+    clips: [{ clip_index: 0, s3_url: `file://${linkedClip}`, duration_ms: 4000, start_time_ms: 0, end_time_ms: 4000, summary: 'Linked clip', virality_score: 0.8 }]
+  }))
+  await page.evaluate(async (run) => {
+    const [automation] = await window.bridgeclip.automations.list()
+    await window.bridgeclip.automations.addLibraryClips(automation.id, run, [0])
+  }, linkedRun)
+  await page.getByRole('button', { name: 'Enhance by source video' }).click()
+  await page.getByLabel('Enhancement prompt (optional)').fill('Attached source notes')
+  await choose(page, page.getByLabel('Original video', { exact: true }), 'Linked source video · 1 clip')
+  await page.getByText('Linked video ·', { exact: false }).waitFor()
+  assert.equal(await page.getByLabel('Enhancement prompt (optional)').inputValue(), '')
+  const linkedGuidance = 'Focus on speech recognition for a technical audience.'
+  await page.getByLabel('Enhancement prompt (optional)').fill(linkedGuidance)
+  await choose(page, page.getByLabel('Original video', { exact: true }), 'Automation library run · 5 clips')
+  assert.equal(await page.getByLabel('Enhancement prompt (optional)').inputValue(), 'Attached source notes')
+  await choose(page, page.getByLabel('Original video', { exact: true }), 'Linked source video · 1 clip')
+  assert.equal(await page.getByLabel('Enhancement prompt (optional)').inputValue(), linkedGuidance)
+  await page.getByRole('button', { name: 'Enhance 1 clip from this video' }).click()
+  await page.getByText(/1 drafts ready to review · 0 failed/).waitFor()
+  assert.equal(enhancementInputs.at(-1).enhancementGuidance, linkedGuidance)
+  assert.equal(enhancementInputs.at(-1).sourceContext.url, 'https://www.youtube.com/watch?v=hqP9fivmBqI')
+  assert.equal(posting.state.creates.length, 1)
+
 
 
 })
