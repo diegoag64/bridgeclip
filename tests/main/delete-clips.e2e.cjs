@@ -12,12 +12,12 @@ test('Library deletes only selected clips through its icon action and refreshes 
   fs.mkdirSync(run, { recursive: true })
   const ffmpeg = fs.existsSync(path.join(ROOT, 'engine-bin/ffmpeg')) ? path.join(ROOT, 'engine-bin/ffmpeg') : 'ffmpeg'
   execFileSync(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=10', '-t', '1', '-c:v', 'mpeg4', path.join(run, 'clip_00.mp4')])
-  const clips = ['First clip', 'Second clip', 'Third clip'].map((summary, clip_index) => {
+  const clips = ['First clip', 'Second clip', 'Third clip', 'Fourth clip'].map((summary, clip_index) => {
     const file = path.join(run, `clip_0${clip_index}.mp4`)
     if (clip_index) fs.copyFileSync(path.join(run, 'clip_00.mp4'), file)
     return { clip_index, summary, s3_url: file, start_time_ms: 0, end_time_ms: 1000, duration_ms: 1000, virality_score: 90 - clip_index }
   })
-  const output = { job_id: 'test-run', source_video_title: 'Delete selected test', source_video_url: 'local.mp4', source_video_duration_seconds: 1, clips, total_clips: 3 }
+  const output = { job_id: 'test-run', source_video_title: 'Delete selected test', source_video_url: 'local.mp4', source_video_duration_seconds: 1, clips, total_clips: 4 }
   const manifest = path.join(run, 'job_output.json')
   fs.writeFileSync(manifest, JSON.stringify(output))
   fs.writeFileSync(path.join(run, 'transcript.json'), '{"segments":[]}')
@@ -33,7 +33,7 @@ test('Library deletes only selected clips through its icon action and refreshes 
   // Manual posting works without a connected account and survives reopening the run.
   const clipActions = page.getByRole('button', { name: 'Actions for “First clip”', exact: true })
   await clipActions.click()
-  assert.deepEqual(await page.getByRole('menuitem').allTextContents(), ['Post or schedule', 'Add to automation', 'Mark as posted', process.platform === 'darwin' ? 'Show in Finder' : 'Show in folder'])
+  assert.deepEqual(await page.getByRole('menuitem').allTextContents(), ['Post or schedule', 'Add to automation', 'Mark as posted', process.platform === 'darwin' ? 'Show in Finder' : 'Show in folder', 'Delete clip'])
   await page.getByRole('menuitem', { name: 'Mark as posted', exact: true }).click()
   await page.getByRole('region', { name: 'Posted 1', exact: true }).getByText('First clip', { exact: true }).waitFor()
   assert.ok(fs.existsSync(path.join(run, '.bridgeclip-posted-0')))
@@ -43,7 +43,7 @@ test('Library deletes only selected clips through its icon action and refreshes 
   await page.getByRole('button', { name: 'Posted 1', exact: true }).click()
   await clipActions.click()
   await page.getByRole('menuitem', { name: 'Undo manual posted mark', exact: true }).click()
-  await page.getByRole('region', { name: 'Not Posted 3', exact: true }).getByText('First clip', { exact: true }).waitFor()
+  await page.getByRole('region', { name: 'Not Posted 4', exact: true }).getByText('First clip', { exact: true }).waitFor()
   assert.equal(fs.existsSync(path.join(run, '.bridgeclip-posted-0')), false)
   // Failed writes leave the card unposted and expose a retryable error.
   fs.renameSync(manifest, `${manifest}.backup`)
@@ -52,6 +52,23 @@ test('Library deletes only selected clips through its icon action and refreshes 
   await page.getByRole('alert').getByText(/This completed run is no longer available/).waitFor()
   assert.equal(fs.existsSync(path.join(run, '.bridgeclip-posted-0')), false)
   fs.renameSync(`${manifest}.backup`, manifest)
+  // An individual clip can be deleted without first selecting any cards.
+  const fourthActions = page.getByRole('button', { name: 'Actions for “Fourth clip”', exact: true })
+  await fourthActions.click()
+  await page.getByRole('menuitem', { name: 'Delete clip', exact: true }).press('Enter')
+  const singleConfirmation = page.getByRole('alertdialog', { name: 'Delete this clip?', exact: true })
+  await singleConfirmation.getByText(/“Fourth clip” and its local video file/).waitFor()
+  await singleConfirmation.getByRole('button', { name: 'Cancel', exact: true }).click()
+  assert.ok(clips.every(clip => fs.existsSync(clip.s3_url)))
+  assert.equal(JSON.parse(fs.readFileSync(manifest)).clips.length, 4)
+  await fourthActions.click()
+  await page.getByRole('menuitem', { name: 'Delete clip', exact: true }).click()
+  await singleConfirmation.getByRole('button', { name: 'Delete clip', exact: true }).click()
+  await fourthActions.waitFor({ state: 'detached' })
+  await page.getByRole('button', { name: 'Not Posted 3', exact: true }).waitFor()
+  assert.equal(fs.existsSync(clips[3].s3_url), false)
+  assert.ok(clips.slice(0, 3).every(clip => fs.existsSync(clip.s3_url)))
+  assert.deepEqual(JSON.parse(fs.readFileSync(manifest)).clips.map(c => c.clip_index), [0, 1, 2])
   const trash = page.getByRole('button', { name: 'Delete selected clips', exact: true })
   assert.equal(await trash.count(), 0)
   await page.getByRole('checkbox', { name: 'Select First clip', exact: true }).click()
@@ -71,14 +88,14 @@ test('Library deletes only selected clips through its icon action and refreshes 
   await confirmation.waitFor()
   await confirmation.getByText(/Your source video, transcript and editor edits will be kept/).waitFor()
   await confirmation.getByRole('button', { name: 'Cancel', exact: true }).press('Space')
-  assert.ok(clips.every(clip => fs.existsSync(clip.s3_url)))
+  assert.ok(clips.slice(0, 3).every(clip => fs.existsSync(clip.s3_url)))
   assert.equal(JSON.parse(fs.readFileSync(manifest)).clips.length, 3)
   // A backend error leaves the selection and files available for a retry.
   fs.renameSync(manifest, `${manifest}.backup`)
   await trash.click()
   await page.getByRole('button', { name: 'Delete clips', exact: true }).click()
   await page.getByText(/This completed run is no longer available/).waitFor()
-  assert.ok(clips.every(clip => fs.existsSync(clip.s3_url)))
+  assert.ok(clips.slice(0, 3).every(clip => fs.existsSync(clip.s3_url)))
   fs.renameSync(`${manifest}.backup`, manifest)
   await trash.click()
   await page.getByRole('button', { name: 'Delete clips', exact: true }).click()
@@ -99,7 +116,7 @@ test('Library deletes only selected clips through its icon action and refreshes 
   await page.getByText('No clips in this run', { exact: true }).waitFor()
   assert.equal(await trash.count(), 0)
   assert.equal(JSON.parse(fs.readFileSync(manifest)).total_clips, 0)
-  assert.equal(JSON.parse(fs.readFileSync(manifest)).next_clip_index, 3)
+  assert.equal(JSON.parse(fs.readFileSync(manifest)).next_clip_index, 4)
   assert.ok(fs.existsSync(path.join(run, 'transcript.json')))
   await page.getByRole('button', { name: 'Library', exact: true }).first().click()
   await page.getByRole('button', { name: 'Open Delete selected test', exact: true }).click()

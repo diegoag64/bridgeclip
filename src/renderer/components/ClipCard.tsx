@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Check, FolderOpen, ImageOff, ListPlus, Play, Send, TrendingUp, TriangleAlert, Undo2 } from 'lucide-react'
+import { Check, FolderOpen, ImageOff, ListPlus, Play, Send, Trash2, TrendingUp, TriangleAlert, Undo2 } from 'lucide-react'
 import { cn, formatTimecode, isMac, localFileUrl } from '../lib/utils'
 import { getApi } from '../lib/ipc'
 import { clipFilePath, loadThumbnail } from '../lib/thumbnails'
@@ -34,6 +34,8 @@ interface ClipCardProps {
   onPost?: () => void
   onAddToAutomation?: () => void
   onSetPosted?: (posted: boolean) => Promise<void>
+  onDelete?: () => void
+  actionsDisabled?: boolean
 }
 
 export function ClipCard({
@@ -47,7 +49,9 @@ export function ClipCard({
   onAspect,
   onPost,
   onAddToAutomation,
-  onSetPosted
+  onSetPosted,
+  onDelete,
+  actionsDisabled
 }: ClipCardProps): React.JSX.Element {
   const filePath = clipFilePath(clip.s3_url)
   const [thumb, setThumb] = useState<string | null | undefined>(undefined)
@@ -204,13 +208,14 @@ export function ClipCard({
         <div className="mb-3 flex min-h-8 flex-wrap items-center justify-between gap-2">
           {postingBadge}
           {!selecting && <div className="ml-auto">
-            <ActionMenu label={`Actions for “${title}”`} disabled={markingPosted} actions={[
+            <ActionMenu label={`Actions for “${title}”`} disabled={markingPosted || actionsDisabled} actions={[
               ...(onPost ? [{ label: 'Post or schedule', icon: <Send className="h-3.5 w-3.5" />, onSelect: onPost }] : []),
               ...(onAddToAutomation ? [{ label: 'Add to automation', icon: <ListPlus className="h-3.5 w-3.5" />, onSelect: onAddToAutomation }] : []),
               ...(onSetPosted && postingStatus && (postingStatus.state !== 'posted' || postingStatus.manuallyPosted) ? [postingStatus.manuallyPosted
                 ? { label: 'Undo manual posted mark', icon: <Undo2 className="h-3.5 w-3.5" />, onSelect: () => { void setPosted(false) } }
                 : { label: 'Mark as posted', icon: <Check className="h-3.5 w-3.5" />, onSelect: () => { void setPosted(true) } }] : []),
-              { label: isMac ? 'Show in Finder' : 'Show in folder', icon: <FolderOpen className="h-3.5 w-3.5" />, onSelect: () => { void showInFolder() } }
+              { label: isMac ? 'Show in Finder' : 'Show in folder', icon: <FolderOpen className="h-3.5 w-3.5" />, onSelect: () => { void showInFolder() } },
+              ...(onDelete ? [{ label: 'Delete clip', icon: <Trash2 className="h-3.5 w-3.5" />, danger: true, onSelect: onDelete }] : [])
             ]} />
           </div>}
         </div>

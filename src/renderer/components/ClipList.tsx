@@ -232,12 +232,13 @@ function GeneratedClipList({ output, outputDir: runDirectory, leading, onNewClip
       setDeleteError(errorMessage(cause, 'Could not delete the selected clips. Please try again.'))
     } finally { deletingRef.current = false; setDeleting(false) }
   }
-  const confirmDelete = (): void => {
-    const picked = clips.filter((clip) => selected.has(clip.clip_index)).map((clip) => clip.clip_index)
+  const confirmDelete = (indices: number[]): void => {
+    const targets = output.clips.filter((clip) => indices.includes(clip.clip_index))
+    const picked = targets.map((clip) => clip.clip_index)
     if (!picked.length || deletingRef.current || exportingRef.current) return
     setConfirm({
       title: `Delete ${picked.length === 1 ? 'this clip' : `these ${picked.length} clips`}?`,
-      body: <>Permanently delete {picked.length === 1 ? 'the selected clip' : `the ${picked.length} selected clips`} and their local video files? This cannot be undone. Your source video, transcript and editor edits will be kept. Published posts and copies in automation banks or other folders will remain.</>,
+      body: <>Permanently delete {picked.length === 1 ? `“${targets[0].summary || `Clip ${targets[0].clip_index + 1}`}” and its local video file` : `the ${picked.length} selected clips and their local video files`}? This cannot be undone. Your source video, transcript and editor edits will be kept. Published posts and copies in automation banks or other folders will remain.</>,
       confirmLabel: picked.length === 1 ? 'Delete clip' : 'Delete clips',
       onConfirm: () => { void deleteSelected(picked) }
     })
@@ -295,6 +296,8 @@ function GeneratedClipList({ output, outputDir: runDirectory, leading, onNewClip
               onAspect={aspect == null ? setAspect : undefined}
               onPost={() => setPosting([asPostable(clip)])}
               onAddToAutomation={outputDir ? () => setBankClips([clip.clip_index]) : undefined}
+              onDelete={outputDir ? () => confirmDelete([clip.clip_index]) : undefined}
+              actionsDisabled={deleting || exporting}
               onSetPosted={outputDir ? async (posted) => {
                 if (!getApi().history.setPosted) throw new Error('Restart BridgeClip to enable manual posted marks.')
                 await getApi().history.setPosted(outputDir, clip.clip_index, posted)
@@ -435,7 +438,7 @@ function GeneratedClipList({ output, outputDir: runDirectory, leading, onNewClip
                 Export {selected.size}
               </Button>
               {outputDir && <Button variant="danger" size="sm" iconOnly aria-label="Delete selected clips" title="Delete selected clips"
-                icon={<Trash2 className="h-3.5 w-3.5" />} loading={deleting} disabled={exporting} onClick={confirmDelete} />}
+                icon={<Trash2 className="h-3.5 w-3.5" />} loading={deleting} disabled={exporting} onClick={() => confirmDelete(clips.filter((clip) => selected.has(clip.clip_index)).map((clip) => clip.clip_index))} />}
               <span aria-hidden className="mx-1 h-5 w-px bg-white/10" />
             </div>
           )}
