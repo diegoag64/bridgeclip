@@ -59,6 +59,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Mai
 
 ### Fixed
 
+- Baked captions use a complete background block with the selected horizontal and vertical padding, including multiple lines. Previews show the same rectangular background.
+- Reselecting a custom caption preset in Create or the editor applies its latest saved settings. Existing clips keep their saved appearance until you select it again.
 - Content cleanup stops when publishing history is damaged, keeping files that may still be needed by pending deliveries. The protection survives restarting and dismissing activity.
 - Karaoke caption previews keep upcoming words dimmed to match exports, including presets based on Impact. The opacity control also adjusts the unswept part of the current word.
 - Chat finds saved custom caption presets and can use them for new clips or Review & edit candidates, showing the selected preset’s name before starting a job.

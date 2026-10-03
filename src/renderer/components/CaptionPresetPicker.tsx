@@ -743,7 +743,12 @@ export function CaptionPresetPicker({ value, customCaption, onChange, disabled, 
             {group.items.map((preset, index) => <CaptionStyleTile key={preset.id} preset={preset} selected={current.id === preset.id} disabled={disabled}
               tabIndex={current.id === preset.id || index === 0 && !group.items.some(item => item.id === current.id) ? 0 : -1}
               beforeBookmark={() => capture(preset.id)} onBookmark={afterBookmark}
-              onClick={() => { const custom = customStyles.find(style => style.id === preset.id); onChange(custom?.baseId ?? preset.id, custom) }} />)}
+              onClick={() => {
+                // An explicit selection refreshes a saved snapshot; simply
+                // opening a draft must keep the appearance it already owns.
+                const custom = styles.find(style => style.id === preset.id) ?? customStyles.find(style => style.id === preset.id)
+                onChange(custom?.baseId ?? preset.id, custom)
+              }} />)}
           </div>}
       </div>)}
     </div>

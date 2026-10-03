@@ -6,6 +6,7 @@
   inset: calc(-1 * var(--caption-padding-y)) calc(-1 * var(--caption-padding-x));
   z-index: -1;
   pointer-events: none;
-  border-radius: inherit;
+  /* Match the rectangular libass caption background used when baking. */
+  border-radius: 0;
   background: var(--caption-background);
 }

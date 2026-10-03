@@ -96,7 +96,7 @@ def test_invalid_background_padding_is_rejected(axis, value):
         validate_custom_caption(snapshot)
 
 
-def test_background_padding_preserves_legacy_exports_and_scales_each_axis(tmp_path):
+def test_background_padding_preserves_legacy_values_and_scales_each_axis(tmp_path):
     from clip_engine.services.rendering_service import RenderingService
 
     snapshot = custom()
@@ -108,7 +108,7 @@ def test_background_padding_preserves_legacy_exports_and_scales_each_axis(tmp_pa
     assert service._block_size(['Hello'], legacy, 1080) == service._block_size(['Hello'], equal, 1080)
     snapshot['style'].update(line_box_padding_x=40, line_box_padding_y=0)
     style = resolve_caption_style('pop', snapshot)
-    assert r'\xbord40\ybord0' in service._plate_tags(None, style)
+    assert r'\xshad40\yshad0' in service._plate_tags(None, style)
     size = service._block_size(['Hello'], style, 1080)
     style.line_box_padding_y = 20
     taller = service._block_size(['Hello'], style, 1080)
@@ -148,6 +148,49 @@ def test_background_padding_changes_only_its_axis_in_baked_pixels(tmp_path):
     assert abs((wide[1] - wide[0]) - (normal[1] - normal[0]) - 50) <= 2
     assert wide[:2] == tall[:2]
     assert abs((tall[3] - tall[2]) - (wide[3] - wide[2]) - 44) <= 2
+
+
+@pytest.mark.parametrize('lines', [1, 2, 3])
+@pytest.mark.parametrize('karaoke', [False, True])
+@pytest.mark.parametrize('padding', [(0, 0), (24, 4), (4, 24)])
+def test_background_is_one_padded_block_not_glyph_outlines(tmp_path, lines, karaoke, padding):
+    import numpy as np
+    from PIL import Image
+
+    ffmpeg = str(ROOT / 'engine-bin/ffmpeg') if (ROOT / 'engine-bin/ffmpeg').exists() else shutil.which('ffmpeg')
+    if not ffmpeg:
+        pytest.skip('FFmpeg is needed for the background render check')
+    snapshot = {'id': 'custom-block', 'name': 'Block test', 'baseId': 'sweep', 'style': dict(DEFAULTS['sweep'])}
+    snapshot['style'].update(font_size=76, max_lines=lines, max_words_per_line=5,
+        line_box_color='#00FF00', line_box_opacity=.5, line_box_padding_x=padding[0], line_box_padding_y=padding[1],
+        outline_width=6, shadow_opacity=0, entrance_pop=False, karaoke_fill=karaoke, future_words='hide')
+    words = [TranscriptWord(word, i * 300, (i + 1) * 300)
+             for i, word in enumerate('START SMALL MAKE BIG CHANGES'.split())]
+    ass = tmp_path / 'block.ass'
+    asyncio.run(CaptionGeneratorService().generate_captions(
+        [TranscriptSegment(0, 1500, ' '.join(w.word for w in words), words=words)],
+        0, 2000, str(ass), caption_style=resolve_caption_style('sweep', snapshot),
+        output_width=1080, output_height=600, anchors=[(10**9, 5, 300)]))
+    frame = tmp_path / 'block.png'
+    subprocess.run([ffmpeg, '-v', 'error', '-f', 'lavfi', '-i', 'color=c=black:s=1080x600:r=10:d=1',
+        '-vf', f'ass={ass}:fontsdir={ROOT / "engine/assets/fonts"}', '-ss', '0.2', '-frames:v', '1', str(frame)],
+        capture_output=True, check=True, timeout=30)
+    pixels = np.asarray(Image.open(frame).convert('RGB'))
+    green = (pixels[:, :, 1] > 90) & (pixels[:, :, 0] < 30) & (pixels[:, :, 2] < 30)
+    rows, columns = np.where(green)
+    top, bottom, left, right = rows.min(), rows.max(), columns.min(), columns.max()
+    assert abs(bottom - top + 1 - (lines * 76 + 2 * padding[1])) <= 2
+    assert abs((top + bottom + 1) / 2 - 300) <= 1
+    # A full line box remains present above the glyphs, down both edges and
+    # between unequal rows. Glyph outlines and per-line boxes fail these checks.
+    assert green[top + 2, left + 2:right - 1].all()
+    if padding[0] > snapshot['style']['outline_width'] + 2:
+        assert green[top + 2:bottom - 1, left + 2].all()
+        assert green[top + 2:bottom - 1, right - 2].all()
+    if lines > 1:
+        middle = top + padding[1] + 76
+        assert green[middle, left + 2:right - 1].all()
+        assert abs(int(pixels[middle, (left + right) // 2, 1]) - int(pixels[top + 2, (left + right) // 2, 1])) <= 2, 'translucent rows must not overlap and darken'
 
 
 @pytest.mark.parametrize('limit', [False, True, 0, -1, 4, 1.5, '2', [], {}])

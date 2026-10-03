@@ -50,7 +50,9 @@ New Smart framing runs also scan during the pipeline: strong cuts and sustained 
 
 ## Choose a caption style
 
-The **Captions** tab separates bundled defaults from **Your styles**, saved in the Captions lab. Selecting a style stores a copy in the candidate; later changes to your library do not alter it. Changing styles marks a previously baked clip as needing a new export.
+The **Captions** tab separates bundled defaults from **Your styles**, saved in the Captions lab. Selecting a style stores a copy in the candidate; later changes to your library do not alter it. Select the same preset again to apply its latest saved settings, including background opacity and padding. After changing styles, choose **Mark ready**, then **Bake captions** to export the updated look.
+
+Caption backgrounds form one rectangle around the complete caption block, including all its lines. Horizontal and vertical padding apply independently in the lab and the baked video. Existing exports keep their pixels; bake the clip again to apply changed captions.
 
 ## Position captions
 

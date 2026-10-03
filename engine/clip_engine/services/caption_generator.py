@@ -4,15 +4,15 @@ Caption Generator Service - Generates short-form ASS captions with word-by-word 
 Each caption event is drawn as a stack of layers that share the same text, so
 the glyphs line up exactly and every effect is a real blurred bitmap:
 
-    0 plate   - rounded translucent box behind the whole line
+    0 plate   - translucent box behind the whole caption block
     1 shadow  - soft (blurred) drop shadow
     2 glow    - blurred bloom around the text or the active word
     3 pill    - rounded box behind the active word
     4 face    - the crisp text with its stroke
 
-Rounded boxes come from a thick glyph border (libass joins borders round), so
-no text measurement is needed. Words keep their advance widths on every layer,
-which keeps the stack aligned while words change color.
+The plate uses libass's event background, with independent horizontal/vertical
+padding. Word pills use rounded glyph borders. Every layer retains the text's
+advance widths, keeping the stack aligned while words change color.
 """
 
 import glob
@@ -484,7 +484,13 @@ class CaptionGeneratorService:
         pad_y = max(pad, (style.line_box_padding_y if style.line_box_padding_y is not None else style.line_box_padding) + 1) if style.line_box_color else pad
         shadow = style.shadow_offset if style.shadow_opacity > 0 else 0
         grow = 1.06 if style.entrance_pop else 1.0
-        half = max(pad_y - top, bottom + pad_y + shadow) * grow
+        half = max(pad - top, bottom + pad + shadow)
+        if style.line_box_color:
+            # The background encloses line boxes, including the space between
+            # rows, rather than just glyph ink. Reserve its full padded height
+            # when avoiding faces or positioning captions at frame edges.
+            half = max(half, lines * size / 2 + pad_y)
+        half *= grow
         return round((min(max(widths), wrap_w) + 2 * pad_x) * grow), round(2 * half)
 
     @staticmethod
@@ -505,7 +511,7 @@ class CaptionGeneratorService:
         video_region_y: Optional[int] = None,
         video_region_height: Optional[int] = None,
     ) -> str:
-        """One base style; every layer sets its own colors and borders inline."""
+        """Text layers plus an optional libass background style."""
         alignment = ALIGNMENT_MAP[style.alignment][style.position]
         margin_v = self._calculate_margin_v(
             style, output_height, video_region_y, video_region_height,
@@ -523,6 +529,15 @@ class CaptionGeneratorService:
             f"1,{style.outline_width},0,"
             f"{alignment},60,60,{margin_v},1"
         )
+        styles = default_style
+        if style.line_box_color:
+            # BorderStyle=4 draws one rectangle for the entire event, including
+            # multiline text, using shadow color/alpha and x/y shadow padding.
+            # Text remains invisible on this layer; borders are set to zero so
+            # text outline width cannot silently enlarge the requested padding.
+            plate = default_style.split(',')
+            plate[0], plate[15] = 'Style: Plate', '4'
+            styles += '\n' + ','.join(plate)
 
         return f"""[Script Info]
 Title: BridgeClip Captions
@@ -535,7 +550,7 @@ PlayResY: {output_height}
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-{default_style}
+{styles}
 
 """
 
@@ -675,12 +690,13 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
         for layer, tags_for in layers:
             parts = []
             for t in tokens:
-                karaoke = f"\\kf{t.karaoke_cs}" if t.karaoke_cs else ""
+                karaoke = f"\\kf{t.karaoke_cs}" if t.karaoke_cs and layer != LAYER_PLATE else ""
                 parts.append(f"{{{karaoke}{tags_for(t)}}}{t.text}")
             lines = self._wrap_words(parts, style.max_words_per_line, gap) if line_ends is None else [
                 gap.join(parts[start:end]) for start, end in zip([0, *line_ends[:-1]], line_ends)]
             text = "\\N".join(lines)
-            events.append(f"Dialogue: {layer},{start},{end},Default,,0,0,0,,{{{lead}}}{text}")
+            ass_style = 'Plate' if layer == LAYER_PLATE else 'Default'
+            events.append(f"Dialogue: {layer},{start},{end},{ass_style},,0,0,0,,{{{lead}}}{text}")
         return events
 
     # ------------------------------------------------------------------
@@ -760,10 +776,9 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
         color = self._hex_to_ass(style.line_box_color)
         pad_x = style.line_box_padding_x if style.line_box_padding_x is not None else style.line_box_padding
         pad_y = style.line_box_padding_y if style.line_box_padding_y is not None else style.line_box_padding
-        border = f"\\bord{pad_x}" if pad_x == pad_y else f"\\xbord{pad_x}\\ybord{pad_y}"
         return (
-            f"\\1a&HFF&\\3a{self._alpha(style.line_box_opacity)}\\3c{color}"
-            f"{border}\\shad0\\blur1"
+            f"\\1a&HFF&\\2a&HFF&\\3a&HFF&\\4a{self._alpha(style.line_box_opacity)}\\4c{color}"
+            f"\\bord0\\xshad{pad_x}\\yshad{pad_y}\\blur0"
         )
 
     def _is_emphasis(self, word: str) -> bool:

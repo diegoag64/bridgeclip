@@ -2,7 +2,7 @@
 
 These examples use synthetic videos, local test folders and mock provider metadata. No private media, provider keys or paid clipping runs are included.
 
-The **before** images were captured from upstream `main` at `b996820`, except the caption editor comparison at `e09c091`, caption browser at `0a09f2d`, Library details at `6dc143a`, the caption default setting at `5d60f04`, and the karaoke preview at `385cdee`, all from earlier versions of this PR. The **after** images show this change on macOS. Automated checks also cover compact windows and reduced motion.
+The **before** images were captured from upstream `main` at `b996820`, except the caption editor comparison at `e09c091`, caption browser at `0a09f2d`, Library details at `6dc143a`, the caption default setting at `5d60f04`, karaoke preview at `385cdee`, and baked background at `df4eb09`, all from earlier versions of this PR. The **after** images show this change on macOS. Automated checks also cover compact windows and reduced motion.
 
 ## Before and after
 
@@ -19,7 +19,10 @@ The **before** images were captured from upstream `main` at `b996820`, except th
 | Default caption | ![Caption browser before a shared default setting](captions-cards.png) | ![Choose a default for both Create and Chat](captions-default-setting.png) |
 | Caption browser | ![Table above defaults and a separate preview on the right](captions-browse-before.png) | ![Custom and default presets share a preview on the left](captions-cards.png) |
 | Karaoke preview | ![Upcoming words incorrectly hidden](caption-karaoke-before.png) | ![Upcoming words dimmed to match exports](caption-karaoke-after.png) |
+| Baked caption background | ![Background incorrectly follows glyph outlines](caption-background-before.png) | ![One complete background with independent padding](caption-background-after.png) |
 | Posts | ![Ten recent posts and Show all](posts-before.png) | ![Numbered pages with a shared page-size preference](posts-after.png) |
+
+The baked-background comparison uses a bright green background to expose its bounds: 24 horizontal padding, 4 vertical padding, two lines, and a 6-pixel text outline. Both images are actual FFmpeg renders with the same settings. A separate editor check selects an updated preset and verifies these bounds in the exported MP4.
 
 ## Storage cleanup
 

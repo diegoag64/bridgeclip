@@ -213,7 +213,7 @@ class CaptionStyle:
     glow_blur: int = 14
     glow_active_only: bool = True
 
-    # Rounded translucent plate behind the whole line (None disables)
+    # Translucent background behind the complete caption block (None disables)
     line_box_color: Optional[str] = None
     line_box_opacity: float = 0.6
     line_box_padding: int = 22
