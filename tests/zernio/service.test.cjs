@@ -337,12 +337,20 @@ test('connect: a slow older start cannot replace a newer sign-in', async (t) => 
 
 test('connect: gives up after 10 minutes without a redirect and says so', async (t) => {
   const { service, mock, getWindow, results } = await setup(t)
-  t.mock.timers.enable({ apis: ['setTimeout'] })
+  // Advance only the sign-in deadline. Globally advancing timers also fires
+  // Undici parser timers for sockets closed by preceding HTTP tests.
+  const realSetTimeout = globalThis.setTimeout
+  let expire
+  t.mock.method(globalThis, 'setTimeout', (callback, milliseconds, ...args) => {
+    const timer = realSetTimeout(callback, milliseconds, ...args)
+    if (milliseconds === 10 * 60 * 1000) expire = () => { clearTimeout(timer); callback(...args) }
+    return timer
+  })
   const start = await service.connectZernioAccount('facebook', mock.state.profiles[0]._id, undefined, getWindow)
   assert.equal(start.status, 'pending')
-  t.mock.timers.tick(10 * 60 * 1000 - 1)
   assert.equal(results().length, 0)
-  t.mock.timers.tick(1)
+  assert.equal(typeof expire, 'function', 'sign-in arms a ten-minute deadline')
+  expire()
   assert.equal(results().length, 1)
   assert.equal(results()[0].ended, 'timeout')
   assert.match(results()[0].error, /stopped waiting for the browser after 10 minutes/)

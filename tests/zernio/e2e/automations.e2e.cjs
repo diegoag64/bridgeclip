@@ -40,13 +40,16 @@ test('add library clips, review TikTok, and run a mixed-platform automation', { 
   }))
   const posting = createPostingMock()
   let researchCalls = 0; let batchWritingCalls = 0; let failLargeBatches = false
+  let holdBatch = false; let releaseBatch
+  t.after(() => releaseBatch?.())
   const enhancementInputs = []
   const mock = await createMockZernio({ apiKey: KEY, extraRoutes: [...posting.routes,
     { method: 'POST', path: '/speech', auth: false, handler: (ctx) => ctx.json(200, { text: 'Accurate transcripts make automations reliable.' }) },
-    { method: 'POST', path: '/chat', auth: false, handler: (ctx) => {
+    { method: 'POST', path: '/chat', auth: false, handler: async (ctx) => {
       enhancementInputs.push(JSON.parse(ctx.body.messages[1].content))
       if (ctx.body.tools) { researchCalls++; return ctx.json(200, { choices: [{ message: { content: 'Relevant terms: speech recognition and reliable automation.', annotations: [{ type: 'url_citation', url_citation: { title: 'Recognition guide', url: 'https://example.com/recognition' } }] } }] }) }
       const input = JSON.parse(ctx.body.messages[1].content)
+      if (holdBatch && input.clips) await new Promise(resolve => { releaseBatch = resolve })
       if (failLargeBatches && input.clips?.length === 5) return ctx.json(503, { error: 'test provider interruption' })
       const posts = input.platforms.map(({ platform }) => ({ platform, title: platform === 'youtube' ? 'Why Transcript Accuracy Matters for Automation' : null, caption: 'Accurate transcripts make automations reliable. Here is the connection to speech recognition.', tags: platform === 'youtube' ? ['speech recognition'] : [], categoryId: platform === 'youtube' ? '28' : null, topicTag: null, evidence: 'Accurate transcripts make automations reliable.' }))
       if (input.clips) batchWritingCalls++
@@ -188,6 +191,9 @@ test('add library clips, review TikTok, and run a mixed-platform automation', { 
   await page.getByRole('heading', { name: 'Queued 2', exact: true }).waitFor()
   await page.getByRole('heading', { name: 'Submitted 0', exact: true }).waitFor()
   assert.equal(await page.getByRole('button', { name: 'Review TikTok', exact: true }).count(), 2)
+  await page.getByLabel('Duration 0:04', { exact: true }).first().waitFor()
+  assert.equal(await page.getByRole('button', { name: 'View in Library', exact: true }).count(), 0)
+  if (process.env.BRIDGECLIP_BANK_LAYOUT_SCREENSHOT) await page.screenshot({ path: process.env.BRIDGECLIP_BANK_LAYOUT_SCREENSHOT })
   const info = page.getByLabel('Info about First library clip', { exact: true })
   await info.hover()
   await page.getByRole('tooltip').getByText('Added to queue', { exact: true }).waitFor()
@@ -229,7 +235,8 @@ test('add library clips, review TikTok, and run a mixed-platform automation', { 
     fs.rmSync(bankFile, { force: true })
     fs.renameSync(`${bankFile}.saved`, bankFile)
   }
-  await page.getByRole('button', { name: 'View First library clip in Library', exact: true }).click()
+  await page.getByRole('button', { name: 'Actions for First library clip', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'View in Library', exact: true }).click()
   await page.getByRole('heading', { name: 'Automation library run', exact: true }).waitFor()
   await page.getByText('From content bank · Clip 1', { exact: true }).waitFor()
   assert.equal(await page.locator('article').count(), 1)
@@ -326,21 +333,29 @@ test('add library clips, review TikTok, and run a mixed-platform automation', { 
   assert.equal(await page.getByRole('button', { name: 'Run now' }).isDisabled(), true, 'a pending draft holds its clip')
   assert.equal(posting.state.creates.length, 1, 'pending draft holds its clip')
   await page.getByRole('button', { name: 'Review draft' }).click()
-  await page.getByRole('dialog').getByRole('button', { name: 'Apply metadata' }).click()
+  dialog = page.getByRole('dialog', { name: 'Review enhanced metadata' })
+  await dialog.getByText('Current title & caption', { exact: true }).press('Enter')
+  assert.equal(await dialog.locator('details').first().getAttribute('open'), '', 'Enter on a disclosure keeps its normal behavior')
+  await dialog.press('Shift+Enter')
+  assert.equal(await dialog.isVisible(), true, 'modified Enter does not accept the draft')
+  await dialog.press('Enter')
+  await dialog.waitFor({ state: 'hidden', timeout: 5000 })
   await page.getByText('Why Transcript Accuracy Matters for Automation', { exact: true }).waitFor()
   const saved = await page.evaluate(() => window.bridgeclip.automations.list())
   assert.equal(saved[0].content[1].metadataDraft, null)
   assert.equal(saved[0].content[1].generatedMetadata[0].title, 'Why Transcript Accuracy Matters for Automation')
   assert.equal(posting.state.creates.length, 1, 'applying copy does not publish immediately')
   // Enhanced titles still link to the exact original clip, not a title search.
-  await page.getByRole('button', { name: 'View Why Transcript Accuracy Matters for Automation in Library', exact: true }).click()
+  await page.getByRole('button', { name: 'Actions for Why Transcript Accuracy Matters for Automation', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'View in Library', exact: true }).click()
   await page.getByText('From content bank · Clip 2', { exact: true }).waitFor()
   assert.equal(await page.locator('article').count(), 1)
   await page.getByText('Second library clip', { exact: true }).waitFor()
   if (process.env.BRIDGECLIP_LIBRARY_FILTER_SCREENSHOT) await page.screenshot({ path: process.env.BRIDGECLIP_LIBRARY_FILTER_SCREENSHOT })
   await page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: /Automations/ }).click()
   // A submitted clip is visible even though Posted normally starts collapsed.
-  await page.getByRole('button', { name: 'View First library clip in Library', exact: true }).click()
+  await page.getByRole('button', { name: 'Actions for First library clip', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'View in Library', exact: true }).click()
   await page.getByText('From content bank · Clip 1', { exact: true }).waitFor()
   await page.getByText('First library clip', { exact: true }).waitFor()
   assert.equal(await page.locator('article').count(), 1)
@@ -354,11 +369,33 @@ test('add library clips, review TikTok, and run a mixed-platform automation', { 
   await page.getByLabel('Original video', { exact: true }).waitFor()
   assert.match(await page.getByLabel('Original video', { exact: true }).textContent(), /Automation library run · 2 clips/)
   if (process.env.BRIDGECLIP_BATCH_SCREENSHOT) await page.screenshot({ path: process.env.BRIDGECLIP_BATCH_SCREENSHOT })
+  holdBatch = true
   await page.getByRole('button', { name: 'Enhance 2 clips from this video' }).click()
+  await page.getByRole('button', { name: 'Stop after batch', exact: true }).waitFor()
+  await page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: /Library/ }).click()
+  const activity = page.getByRole('region', { name: 'Video enhancement progress' })
+  await activity.getByText(/Writing titles & descriptions/).waitFor()
+  assert.equal(await activity.getByRole('progressbar').getAttribute('max'), '2')
+  assert.equal(await activity.getByRole('progressbar').getAttribute('value'), '0')
+  const runningId = await page.evaluate(async () => (await window.bridgeclip.automations.enhancementJobs())[0].id)
+  const duplicateError = await page.evaluate(async () => {
+    const [job] = await window.bridgeclip.automations.enhancementJobs()
+    try { await window.bridgeclip.automations.startEnhancement(job.automationId, 'ignored', ''); return null }
+    catch (error) { return error.message }
+  })
+  assert.match(duplicateError, /already has an enhancement/)
+  await page.reload()
+  await activity.getByText(/Writing titles & descriptions/).waitFor()
+  assert.equal(await page.evaluate(async () => (await window.bridgeclip.automations.enhancementJobs())[0].id), runningId)
+  if (process.env.BRIDGECLIP_ENHANCEMENT_SCREENSHOT) await page.screenshot({ path: process.env.BRIDGECLIP_ENHANCEMENT_SCREENSHOT })
+  await page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: /Automations/ }).click()
+  await page.getByRole('button', { name: 'Stop after batch', exact: true }).waitFor()
+  holdBatch = false; releaseBatch?.()
   await page.getByText(/2 drafts ready to review/).waitFor()
   assert.equal(batchWritingCalls, 1, 'one writing request for two clips')
   assert.equal(researchCalls, 1, 'batch reuses the source research from individual enhancement')
   assert.equal(posting.state.creates.length, 1, 'batch does not publish')
+  await page.getByRole('button', { name: 'Review draft', exact: true }).nth(1).waitFor()
   assert.equal(await page.getByRole('button', { name: 'Review draft', exact: true }).count(), 2)
   // A failed five-clip request must not prevent the later batch from running.
   await page.evaluate(async ({ run }) => {
@@ -437,7 +474,7 @@ test('add library clips, review TikTok, and run a mixed-platform automation', { 
   const linkedClip = path.join(linkedRun, 'linked.mp4'); fs.copyFileSync(clip, linkedClip)
   fs.writeFileSync(path.join(linkedRun, 'job_output.json'), JSON.stringify({
     job_id: 'linked-source-run', source_video_title: 'Linked source video',
-    source_video_url: 'https://www.youtube.com/watch?v=hqP9fivmBqI', source_video_description: 'Speech recognition tips.',
+    source_video_url: 'https://www.youtube.com/watch?v=hqP9fivmBqI', source_video_description: 'Speech recognition tips.', source_video_channel: 'Original publisher',
     clips: [{ clip_index: 0, s3_url: `file://${linkedClip}`, duration_ms: 4000, start_time_ms: 0, end_time_ms: 4000, summary: 'Linked clip', virality_score: 0.8 }]
   }))
   await page.evaluate(async (run) => {
@@ -554,7 +591,7 @@ test('dismiss an upload error and retry that exact clip after Run now skips it',
   }
   await openBank()
   const failedRow = page.locator('[data-rfd-draggable-id]').filter({ has: page.getByText('Failed clip', { exact: true }) })
-  posting.state.failNextUpload = 503
+  posting.state.failNextUpload = 400
   await page.getByRole('button', { name: 'Run now', exact: true }).click()
   await failedRow.getByRole('alert').waitFor()
   await failedRow.getByRole('button', { name: 'Retry clip', exact: true }).waitFor()
@@ -570,14 +607,32 @@ test('dismiss an upload error and retry that exact clip after Run now skips it',
   assert.equal(bankBeforeRetry.content[0].status, 'queued')
   assert.ok(bankBeforeRetry.content[0].error, 'dismissal keeps error history')
   assert.equal(posting.state.creates.length, 1, 'dismissal never publishes')
-  posting.state.failNextUpload = 503
+  posting.state.failNextUpload = 400
   await failedRow.getByRole('button', { name: 'Retry clip', exact: true }).click()
   await failedRow.getByRole('alert').waitFor()
   assert.equal(posting.state.creates.length, 1, 'a failed retry never falls through to another clip')
   if (process.env.BRIDGECLIP_UPLOAD_RECOVERY_SCREENSHOT) await page.screenshot({ path: process.env.BRIDGECLIP_UPLOAD_RECOVERY_SCREENSHOT })
+  // Hold preflight so the immediate retry indicator is observable before any
+  // persisted posting state exists (the page pauses polling during mutations).
+  let releaseRetry; let retryStarted
+  const started = new Promise((resolve) => { retryStarted = resolve })
+  const release = new Promise((resolve) => { releaseRetry = resolve })
+  t.after(() => releaseRetry())
+  mock.route({ method: 'GET', path: '/api/v1/profiles', handler: async (ctx) => {
+    retryStarted(); await release
+    ctx.json(200, { profiles: ctx.state.profiles })
+  } })
   await failedRow.getByRole('button', { name: 'Retry clip', exact: true }).click()
+  await started
+  const retryButton = failedRow.getByRole('button', { name: 'Retrying clip…', exact: true })
+  await retryButton.waitFor()
+  assert.equal(await retryButton.isDisabled(), true)
+  assert.equal(await retryButton.getAttribute('aria-busy'), 'true')
+  if (process.env.BRIDGECLIP_RETRY_PROGRESS_SCREENSHOT) await page.screenshot({ path: process.env.BRIDGECLIP_RETRY_PROGRESS_SCREENSHOT })
+  releaseRetry()
   await page.getByRole('region', { name: 'Submitted', exact: true }).getByText('Failed clip', { exact: true }).waitFor()
   await page.getByRole('region', { name: 'Queued', exact: true }).getByText('Later clip', { exact: true }).waitFor()
   assert.equal(posting.state.creates.length, 2)
   assert.equal(await failedRow.getByRole('button', { name: 'Retry clip', exact: true }).count(), 0)
+  assert.equal(await page.getByRole('button', { name: 'Retrying clip…', exact: true }).count(), 0)
 })

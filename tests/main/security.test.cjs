@@ -54,7 +54,10 @@ test('development checks the staged FFmpeg that the clipping engine uses', async
 test('Zernio sign-in links stay on its HTTPS origin and provider errors are sanitized', async () => {
   const provider = loadSource('zernio/client.ts', {
     '../../shared/zernio': loadShared('zernio.ts'),
-    '../http-response': loadSource('http-response.ts'),
+    '../http-retry': loadSource('http-retry.ts', {
+      './http-response': loadSource('http-response.ts'),
+      './logger': { logger: { warn() {} } }
+    }, { AbortSignal, fetch: async () => Response.json({ error: 'private-provider-token' }, { status: 500 }) }),
     '../logger': { logger: { info() {}, warn() {}, error() {} } },
     '../network-policy': { assertPublicWebUrl: async () => {}, isPublicAddress: security.isPublicAddress ?? (() => false) }
   }, {
@@ -200,6 +203,7 @@ test('the native picker authorizes media and shell opening rejects aliased appli
       './zernio/service': {},
       './zernio/posts': {},
       './automations': {},
+      './automation-enhancement-jobs': {},
       './library-posting': {},
       './library-management': {},
       './storage-cleanup': {},
@@ -990,5 +994,59 @@ test('one unreadable Jev field falls back to its default without hiding saved ke
     // Saving still validates strictly.
     assert.throws(() => store.savePublicSettings({ ...store.publicSettings(loaded), jevThreshold: '2' }), /Invalid Jev threshold/)
     assert.throws(() => store.savePublicSettings({ ...store.publicSettings(loaded), jevEnabled: 'maybe' }), /Invalid Jev/)
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})
+
+test('saved jobs resume after restart, preserve their identity, and reject duplicate or changed-settings retries', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bridgeclip-resume-'))
+  const starts = []
+  const settings = { outputDirectory: root, openrouterApiKey: 'test-secret', customVocabulary: '', pythonPath: 'python3' }
+  let finishValidation
+  const pendingValidation = new Promise(resolve => { finishValidation = resolve })
+  let delay = false
+  const mocks = {
+    './settings-store': { loadSettings: () => settings, getSettingsForBridge: () => ({ OPENROUTER_API_KEY: settings.openrouterApiKey, LOCAL_OUTPUT_DIR: root, JEV_POLICY: settings.customVocabulary }) },
+    './file-manager': { ensureOutputDir: () => {} },
+    './pipeline-runner': { getEnginePath: () => '/engine', getBridgeRunnerPath: () => '/bridge', resolvePythonPath: () => 'python3', preflightCheck: () => ({ ok: true }), validatePython: async () => { if (delay) await pendingValidation; return { ok: true } } },
+    './run-history': runHistory,
+    './job-manager': { getJob: () => null, isJobStillActive: () => false, enqueueJob: (id, request) => { starts.push({ id, request }); return { id, status: 'pending' } } },
+    './logger': { logger: { info() {}, warn() {}, error() {} } },
+    './security': security,
+    './network-policy': { assertPublicWebUrl: async () => {} },
+    './validation': { validateJobConfig },
+    './openrouter-models': { resolveAdvancedModels: async () => ({}) },
+    './tools': { supportsCaptionFilter: async () => true }
+  }
+  try {
+    const initial = await loadSource('job-start.ts', mocks).startClipJobRequest({ videoUrl: 'https://example.com/video.mp4',
+      maxClips: null, autoClipCount: true, includeCaptions: false, layoutVision: false,
+      aspectRatio: '9:16', layoutStyle: 'fit', pacing: 'natural', captionPreset: 'pop',
+      durationRanges: null, startTimeSeconds: null, endTimeSeconds: null, bannerPlatform: null, bannerChannelUrl: null })
+    assert.ok(initial.jobId, initial.error)
+    runHistory.finishRunRecord(root, initial.jobId, 'failed')
+    const recipe = fs.readFileSync(path.join(root, initial.jobId, 'run-request.json'), 'utf8')
+    assert.equal(recipe.includes('test-secret'), false)
+    assert.equal(runHistory.readRunRequest(root, initial.jobId).request.videoUrl, 'https://example.com/video.mp4')
+    const history = loadSource('file-manager.ts', { '../shared/job-output': jobOutput, './run-history': runHistory, './tools': { resolveBinary: () => 'ffprobe' } })
+    assert.equal((await history.getJobHistory(root))[0].resumable, true)
+    // A fresh module has no session job or preflight cache.
+    const restarted = loadSource('job-start.ts', mocks)
+    delay = true
+    const pending = restarted.resumeClipJobRequest(initial.jobId)
+    const duplicate = await restarted.resumeClipJobRequest(initial.jobId)
+    assert.match(duplicate.error, /already running/)
+    finishValidation()
+    const resumed = await pending
+    assert.equal(resumed.jobId, initial.jobId, resumed.error)
+    assert.equal(starts.length, 2)
+    settings.customVocabulary = 'new terms'
+    assert.match((await restarted.resumeClipJobRequest(initial.jobId)).error, /settings changed/)
+    assert.equal(starts.length, 2)
+    if (fileLinksAvailable) {
+      const file = path.join(root, initial.jobId, 'run-request.json')
+      const outside = path.join(root, 'outside.json'); fs.writeFileSync(outside, recipe)
+      fs.unlinkSync(file); fs.symlinkSync(outside, file)
+      assert.equal(runHistory.readRunRequest(root, initial.jobId), null)
+    }
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })

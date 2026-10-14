@@ -92,7 +92,7 @@ export function JobProgress({ job, onCancel, leading }: JobProgressProps): React
   )
 }
 
-export function JobFailure({ job, onRetry, leading }: { job: Job; onRetry: () => void; leading?: React.ReactNode }): React.JSX.Element {
+export function JobFailure({ job, onRetry, leading, retrying = false }: { job: Job; onRetry: () => void; leading?: React.ReactNode; retrying?: boolean }): React.JSX.Element {
   const error = job.error || 'The clipping engine stopped without an error message.'
   const structuredError = useMemo(() => inspectJsonValue(error).encoded, [error])
   return (
@@ -127,8 +127,8 @@ export function JobFailure({ job, onRetry, leading }: { job: Job; onRetry: () =>
 
       {job.stages && <div className="mt-4"><StageBreakdown stages={job.stages} /></div>}
       <div className="mt-5 flex flex-wrap items-center gap-2">
-        <Button variant="primary" icon={<RotateCcw className="h-4 w-4" />} onClick={onRetry}>
-          Run again
+        <Button variant="primary" icon={<RotateCcw className="h-4 w-4" />} loading={retrying} disabled={retrying} onClick={onRetry}>
+          Resume job
         </Button>
         <Button icon={<ScrollText className="h-4 w-4" />} onClick={() => getApi().diagnostics.openLogFolder()}>
           Show logs
@@ -137,6 +137,7 @@ export function JobFailure({ job, onRetry, leading }: { job: Job; onRetry: () =>
           Report an issue
         </Button>
       </div>
+      <p className="mt-2 text-xs text-ink-muted">Reuses saved progress. Unfinished AI steps may use credits. Older runs can only reuse files that were retained.</p>
     </Page>
   )
 }

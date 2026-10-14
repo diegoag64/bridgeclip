@@ -4,6 +4,7 @@ Transcription Service - Word-timed audio transcription with OpenRouter model rec
 
 import asyncio
 import base64
+import hashlib
 import json
 import math
 import tempfile
@@ -13,13 +14,14 @@ import random
 import subprocess
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
 from clip_engine.config import get_settings
 from clip_engine.services.media_process import MEDIA_INPUT_OPTIONS, run_media
 from clip_engine.services.run_diagnostics import model_request
+from clip_engine.job_checkpoint import CURRENT as CHECKPOINT, restore
 
 logger = logging.getLogger(__name__)
 
@@ -148,7 +150,7 @@ def _format_speaker_label(speaker_id: object) -> Optional[str]:
     """MAI speaker indices are zero-based, including a valid speaker 0."""
     if type(speaker_id) is int and speaker_id >= 0:
         return f"S{speaker_id + 1}"
-    if isinstance(speaker_id, str) and speaker_id.isdigit():
+    if isinstance(speaker_id, str) and speaker_id.isascii() and speaker_id.isdigit() and len(speaker_id) <= 6:
         return f"S{int(speaker_id) + 1}"
     return None
 
@@ -585,6 +587,13 @@ class TranscriptionService:
         if getattr(self.settings, "clipping_mode", "quality") == "advanced":
             models = [primary]
         chunk_count = max(1, math.ceil(duration / TRANSCRIPTION_CHUNK_SECONDS))
+        checkpoint = CHECKPOINT.get()
+        audio_hash = None
+        if checkpoint:
+            def fingerprint():
+                with open(audio_path, 'rb') as source:
+                    return hashlib.file_digest(source, 'sha256').hexdigest()
+            audio_hash = await asyncio.to_thread(fingerprint)
         with tempfile.TemporaryDirectory(prefix="clip-transcribe-", dir=os.path.dirname(audio_path)) as work:
             for index in range(chunk_count):
                 core_start = index * TRANSCRIPTION_CHUNK_SECONDS
@@ -600,7 +609,27 @@ class TranscriptionService:
                 self._progress(f"Transcribing audio, part {index + 1} of {chunk_count}...")
                 if getattr(self, 'detail_callback', None):
                     self.detail_callback(index, chunk_count)
-                parsed = await self._transcribe_chunk(chunk_path, language, keyterms, end - start, models, costs)
+                cache_key = [audio_hash, index, start, end, language, normalize_keyterms(keyterms),
+                             primary, getattr(self.settings, 'clipping_mode', 'quality'),
+                             getattr(self.settings, 'transcription_diarize', True)]
+                saved = checkpoint.load('transcription-chunk', cache_key) if checkpoint else None
+                if saved is not None:
+                    parsed = restore(TranscriptionResult, saved['transcript'])
+                    chunk_costs = restore(TranscriptionApiCosts, saved['costs'])
+                    models = saved['models']
+                    self._progress(f'Reusing saved transcription, part {index + 1} of {chunk_count}...')
+                else:
+                    chunk_costs = TranscriptionApiCosts(model='')
+                    parsed = await self._transcribe_chunk(chunk_path, language, keyterms, end - start, models, chunk_costs)
+                    if checkpoint:
+                        checkpoint.save('transcription-chunk', cache_key,
+                                        {'transcript': asdict(parsed), 'costs': asdict(chunk_costs), 'models': models})
+                costs.attempts += chunk_costs.attempts
+                costs.audio_duration_seconds += chunk_costs.audio_duration_seconds
+                costs.estimated_cost_usd += chunk_costs.estimated_cost_usd
+                costs.cost_incomplete = costs.cost_incomplete or chunk_costs.cost_incomplete
+                costs.model = ' + '.join(dict.fromkeys(filter(None, (costs.model + ' + ' + chunk_costs.model).split(' + '))))
+                logger.info('Transcription chunk complete: part=%d total=%d reused=%s', index + 1, chunk_count, saved is not None)
                 detected_language = detected_language or parsed.language
                 for segment in parsed.segments:
                     words = []
@@ -651,7 +680,10 @@ class TranscriptionService:
                     seen = costs.model.split(" + ") if costs.model else []
                     if model not in seen:
                         costs.model = " + ".join([*seen, model])
-                    return self._parse_openrouter_response(response, duration, model)
+                    try:
+                        return self._parse_openrouter_response(response, duration, model)
+                    except (ValueError, TypeError, OverflowError, IndexError, KeyError):
+                        raise TranscriptionProviderError('invalid_response') from None
                 except TranscriptionError as error:
                     transient = error.reason in {"rate_limit", "network"}
                     recoverable = transient or error.reason in {

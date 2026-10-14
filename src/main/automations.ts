@@ -1,3 +1,4 @@
+import type { EnhancementStage } from '../shared/automations'
 import type { LibraryClipTarget } from '../shared/library-posting'
 import { app, shell } from 'electron'
 import { createHash, randomUUID } from 'crypto'
@@ -394,6 +395,19 @@ export function dismissAutomationMetadataError(id: unknown, contentId: unknown):
   return listAutomations()
 }
 
+/** Inspect only the recorded bank copy, including clips added before durations were shown. */
+export async function automationContentDuration(id: unknown, contentId: unknown): Promise<number | null> {
+  const { workspace, automation } = find(id)
+  const item = automation.content.find((entry) => entry.id === contentId)
+  if (!item) throw new Error('Clip not found.')
+  const path = join(bankPath(workspace, automation.id), item.fileName)
+  if (!isAutomationMedia(path)) return null
+  authorizeMedia(path)
+  const media = await probeClipForPosting(path, null)
+  if (currentWorkspace() !== workspace || !cached.includes(automation) || !automation.content.includes(item)) return null
+  return media.durationMs
+}
+
 export function showAutomationContentInFolder(id: unknown, contentId: unknown): boolean {
   const { workspace, automation } = find(id)
   const item = automation.content.find((entry) => entry.id === contentId)
@@ -713,10 +727,10 @@ export function removeAutomationContent(id: unknown, contentId: unknown): Automa
 }
 
 async function completeBankSource(automation: Automation, source: AutomationSourceContext | null): Promise<AutomationSourceContext | null> {
-  if (!source || source.description) return source
+  if (!source || (source.description && source.channel)) return source
   const identity = source.url || source.videoId
-  const previous = identity && automation.content.map((item) => item.sourceContext).find((candidate) => candidate && (candidate.url || candidate.videoId) === identity && candidate.description)
-  return previous ? { ...source, description: previous.description, channel: source.channel || previous.channel } : completeSourceContext(source)
+  const previous = identity && automation.content.map((item) => item.sourceContext).find((candidate) => candidate && (candidate.url || candidate.videoId) === identity && candidate.description && candidate.channel)
+  return completeSourceContext(previous ? { ...source, description: source.description || previous.description, channel: source.channel || previous.channel } : source)
 }
 
 async function sharedSourceResearch(workspace: string, automation: Automation, source: AutomationSourceContext | null, transcript = '', guidance = ''): Promise<MetadataResearch> {
@@ -762,7 +776,7 @@ export async function automationEnhancementGroups(id: unknown): Promise<Automati
 }
 
 /** Keep a whole writing batch reserved, so scheduled publishing cannot race draft preparation. */
-export async function enhanceAutomationBatch(id: unknown, rawIds: unknown, rawKey: unknown, rawGuidance: unknown = ''): Promise<AutomationBatchResult> {
+export async function enhanceAutomationBatch(id: unknown, rawIds: unknown, rawKey: unknown, rawGuidance: unknown = '', progress?: (stage: EnhancementStage) => void): Promise<AutomationBatchResult> {
   const { workspace, automation } = find(id)
   if (typeof rawGuidance !== 'string' || rawGuidance.length > MAX_ENHANCEMENT_GUIDANCE) throw new Error(`Use a prompt of up to ${MAX_ENHANCEMENT_GUIDANCE} characters.`)
   const guidance = rawGuidance.trim()
@@ -802,11 +816,14 @@ export async function enhanceAutomationBatch(id: unknown, rawIds: unknown, rawKe
     const clips: MetadataBatchClip[] = []
     for (const item of selected) {
       ensureCurrent()
+      const clipIndex = rawIds.indexOf(item.id) + 1
+      progress?.({ phase: 'preparing', clipIndex, clipTitle: item.title })
       try {
         const path = join(bankPath(workspace, automation.id), item.fileName)
         if (!isAutomationMedia(path)) throw new Error('Clip file is missing from the content bank.')
         authorizeMedia(path)
         if (!item.transcript) {
+          progress?.({ phase: 'transcribing', clipIndex, clipTitle: item.title })
           const transcript = await transcribeAutomationClip(path)
           ensureCurrent(); item.transcript = transcript; save(workspace)
         }
@@ -817,10 +834,13 @@ export async function enhanceAutomationBatch(id: unknown, rawIds: unknown, rawKe
     }
     if (!clips.length) { recordErrors(); return { automations: listAutomations(), completed: 0, skipped, errors } }
     const source = selected[0].sourceContext ?? null
+    progress?.({ phase: 'researching' })
     const research = await sharedSourceResearch(workspace, automation, source, clips[0].transcript, guidance)
     ensureCurrent()
-    const result = await generateAutomationMetadataBatch(clips, platforms, { source, research, guidance })
+    progress?.({ phase: 'writing' })
+    const result = await generateAutomationMetadataBatch(clips, platforms, { sourceEnhancement: true, source, research, guidance })
     ensureCurrent()
+    progress?.({ phase: 'saving' })
     let completed = 0
     for (const item of selected) {
       const posts = result.posts.get(item.id)
@@ -893,7 +913,7 @@ export async function enhanceAutomationContent(id: unknown, contentId: unknown, 
     const research = options.research ? await sharedSourceResearch(workspace, automation, source, item.transcript)
       : { status: 'skipped' as const, summary: 'Web research was turned off.', sources: [] }
     ensureCurrent()
-    const posts = await generateAutomationMetadata(item.transcript, item.title, item.caption, platforms, { facebookFormat, source, research })
+    const posts = await generateAutomationMetadata(item.transcript, item.title, item.caption, platforms, { sourceEnhancement: true, facebookFormat, source, research })
     ensureCurrent()
     const previous = item.metadataDraft
     item.metadataError = null

@@ -1,3 +1,4 @@
+import { startEnhancementJob, listEnhancementJobs, controlEnhancementJob } from './automation-enhancement-jobs'
 import { openEditor, saveEditor, runEditor, cancelEditor, replaceEditorSource } from './clip-editor'
 import { editorCloseReady, freeEditorMedia, readEditorProgress } from './clip-editor'
 import { listCaptionStyles, saveCaptionStyle, deleteCaptionStyle } from './caption-library'
@@ -12,13 +13,13 @@ import { cleanStoredContent, previewStorageCleanup, sourceStorageSummary } from 
 import { inspectEdits } from './edit-inspector'
 import { getEnginePath, getBridgeRunnerPath, resolvePythonPath, validatePython } from './pipeline-runner'
 import { cancelTrackedJob, dismissJob, initJobManager, listJobs, liveJobIds } from './job-manager'
-import { startClipJobRequest } from './job-start'
+import { resumeClipJobRequest, startClipJobRequest } from './job-start'
 import { logger, getLogFilePath } from './logger'
 import { assertAbsolutePath, assertMediaPath, assertTrustedSender, authorizeMedia, isTrustedExternalUrl, isWebUrl, isWithinDirectory, openAuthorizedMedia } from './security'
 import { getModelCatalog } from './openrouter-models'
 import { getYouTubePreview } from './youtube-preview'
 import { resolveBinary, supportsCaptionFilter } from './tools'
-import { automationEnhancementGroups, enhanceAutomationBatch, automationContentSource, enhanceAutomationContent, resolveAutomationMetadataDraft, addAutomationContent, addLibraryClipsToAutomation, createAutomation, deleteAutomation, isAutomationMedia, listAutomations, removeAutomationContent, runAutomation, updateAutomation, updateAutomationContent, approveAutomationTikTokReview, prepareAutomationTikTokReview } from './automations'
+import { automationContentDuration, automationEnhancementGroups, enhanceAutomationBatch, automationContentSource, enhanceAutomationContent, resolveAutomationMetadataDraft, addAutomationContent, addLibraryClipsToAutomation, createAutomation, deleteAutomation, isAutomationMedia, listAutomations, removeAutomationContent, runAutomation, updateAutomation, updateAutomationContent, approveAutomationTikTokReview, prepareAutomationTikTokReview } from './automations'
 import { acknowledgeAutomationWarnings, retryAutomationContent, dismissAutomationMetadataError, automationLibraryClip, reorderAutomationContent, reviewAutomationContent, showAutomationContentInFolder } from './automations'
 import { libraryPostingStatus, libraryMetadataSource, enhanceLibraryMetadata } from './library-posting'
 import { libraryPostingSummary } from './library-posting'
@@ -116,12 +117,16 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
   handle('zernio:posts:open', (_event, postId: unknown, targetIndex: unknown) => openPostLink(postId, targetIndex))
   handle('zernio:posts:openTikTokLegal', (_event, key: unknown) => openTikTokLegal(key))
 
+  handle('automations:startEnhancement', (_event, id: unknown, key: unknown, guidance: unknown) => startEnhancementJob(id, key, guidance))
+  handle('automations:enhancementJobs', () => listEnhancementJobs())
+  handle('automations:controlEnhancement', (_event, id: unknown, action: unknown) => controlEnhancementJob(id, action))
   handle('automations:enhancementGroups', (_event, id: unknown) => automationEnhancementGroups(id))
   handle('automations:enhanceBatch', (_event, id: unknown, ids: unknown, key: unknown, guidance: unknown) => enhanceAutomationBatch(id, ids, key, guidance))
   handle('automations:source', (_event, id: unknown, contentId: unknown) => automationContentSource(id, contentId))
   handle('automations:enhance', (_event, id: unknown, contentId: unknown, options: unknown) => enhanceAutomationContent(id, contentId, options))
   handle('automations:resolveDraft', (_event, id: unknown, contentId: unknown, draftId: unknown, apply: unknown) => resolveAutomationMetadataDraft(id, contentId, draftId, apply))
   handle('automations:list', () => listAutomations())
+  handle('automations:duration', (_event, id: unknown, contentId: unknown) => automationContentDuration(id, contentId))
   handle('automations:acknowledgeWarnings', (_event, id: unknown, contentId: unknown) => acknowledgeAutomationWarnings(id, contentId))
   handle('automations:dismissMetadataError', (_event, id: unknown, contentId: unknown) => dismissAutomationMetadataError(id, contentId))
   handle('automations:reviewContent', (_event, id: unknown, contentId: unknown, returnToQueue: unknown) => reviewAutomationContent(id, contentId, returnToQueue))
@@ -166,6 +171,7 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
   })
 
   handle('job:start', (_event, config: unknown) => startClipJobRequest(config))
+  handle('job:resume', (_event, id: unknown) => resumeClipJobRequest(id))
 
   handle('job:cancel', (_event, jobId: unknown) => {
     if (typeof jobId !== 'string') return false

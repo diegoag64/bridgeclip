@@ -50,7 +50,7 @@ test('provider redirects cannot forward audio, custom API keys, or transcripts',
     for (const name of names) process.env[name] = redirect.url
     const api = main(dir)
     const file = path.join(dir, 'valid.mp4'); clip(file)
-    await assert.rejects(api.transcribeAutomationClip(file), /could not be transcribed/)
+    await assert.rejects(api.transcribeAutomationClip(file), /OpenRouter transcription could not be reached/)
     await assert.rejects(api.generateAutomationMetadata('private transcript', '', '', ['instagram']), /could not be reached/)
     assert.equal(leaked, 0)
   } finally {

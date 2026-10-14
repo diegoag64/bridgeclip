@@ -108,7 +108,7 @@ test('maps Zernio error codes to friendly text without echoing provider payloads
     [500, { error: 'private-provider-token', platformError: { access_token: 'secret' } }, /HTTP 500/]
   ]
   for (const [status, body, pattern] of cases) {
-    mock.failNext('GET', '/api/v1/profiles', status, body, status === 503 ? { 'Retry-After': '5' } : {})
+    for (let attempt = 0; attempt < (status >= 500 ? 3 : 1); attempt++) mock.failNext('GET', '/api/v1/profiles', status, body)
     await assert.rejects(api.listProfiles(), (e) => {
       assert.equal(e.status, status)
       assert.match(e.message, pattern)
@@ -204,13 +204,13 @@ test('an upstream restriction can coincide with API exhaustion without borrowing
 }))
 
 test('a 503 exposes Retry-After to callers without closing the rate-limit gate', () => withMock(async ({ mock, api }) => {
-  mock.failNext('GET', '/api/v1/profiles', 503, { type: 'api_error', code: 'temporarily_unavailable' }, { 'Retry-After': '7' })
-  await assert.rejects(api.listProfiles(), (e) => e.status === 503 && e.retryAfterSeconds === 7 && /Try again in 7s/.test(e.message))
+  mock.failNext('GET', '/api/v1/profiles', 503, { type: 'api_error', code: 'temporarily_unavailable' }, { 'Retry-After': '60' })
+  await assert.rejects(api.listProfiles(), (e) => e.status === 503 && e.retryAfterSeconds === 60 && /Try again in 60s/.test(e.message))
   assert.equal((await api.listProfiles()).length, 1)
 
-  const retryAt = new Date(Date.now() + 10_000).toUTCString()
+  const retryAt = new Date(Date.now() + 60_000).toUTCString()
   mock.failNext('GET', '/api/v1/profiles', 503, { type: 'api_error', code: 'temporarily_unavailable' }, { 'Retry-After': retryAt })
-  await assert.rejects(api.listProfiles(), (e) => e.status === 503 && e.retryAfterSeconds >= 8 && e.retryAfterSeconds <= 10)
+  await assert.rejects(api.listProfiles(), (e) => e.status === 503 && e.retryAfterSeconds >= 58 && e.retryAfterSeconds <= 60)
 }))
 
 test('X-RateLimit-Remaining: 0 on a success also waits for the reset', () => withMock(async ({ mock, client, api }) => {
@@ -226,6 +226,39 @@ test('network failures read as offline', async () => {
   const api = new client.ZernioClient(KEY, 'http://127.0.0.1:9/api/v1')
   await assert.rejects(api.listProfiles(), (e) => e.status === 0 && /Could not reach Zernio/.test(e.message))
 })
+
+test('safe Zernio reads recover dropped connections and interrupted response bodies', () => withMock(async ({ mock, api }) => {
+  let attempts = 0
+  mock.route({ method: 'GET', path: '/api/v1/profiles', handler: (ctx) => {
+    attempts++
+    if (attempts === 1) return ctx.res.destroy()
+    if (attempts === 2) {
+      ctx.res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': '1000' })
+      ctx.res.write('{"profiles":')
+      return setImmediate(() => ctx.res.destroy())
+    }
+    ctx.json(200, { profiles: ctx.state.profiles })
+  } })
+  assert.equal((await api.listProfiles()).length, 1)
+  assert.equal(attempts, 3)
+  mock.route({ method: 'GET', path: '/api/v1/posts/example', handler: (ctx) => ctx.json(200, { post: { id: 'example' } }) })
+  mock.failNext('GET', '/api/v1/posts/example', 502)
+  assert.equal((await api.getPost('example')).id, 'example')
+  assert.equal(mock.requestsTo('GET', '/api/v1/posts/example').length, 2)
+}))
+
+test('retry recovery stays bounded and does not replay mutations or bypass exhausted rate limits', () => withMock(async ({ mock, client, api }) => {
+  mock.route({ method: 'GET', path: '/api/v1/profiles', handler: (ctx) => ctx.res.destroy() })
+  await assert.rejects(api.listProfiles(), (error) => error.code === 'network_error')
+  assert.equal(mock.requestsTo('GET', '/api/v1/profiles').length, 3)
+  mock.route({ method: 'POST', path: '/api/v1/profiles', handler: (ctx) => ctx.res.destroy() })
+  await assert.rejects(api.createProfile('New profile'), (error) => error.code === 'network_error')
+  assert.equal(mock.requestsTo('POST', '/api/v1/profiles').length, 1, 'an ambiguous mutation cannot be replayed blindly')
+  mock.failNext('GET', '/api/v1/accounts', 503, {}, { 'X-RateLimit-Remaining': '0', 'X-RateLimit-Reset': String(Math.ceil(Date.now() / 1000) + 60) })
+  await assert.rejects(api.listAccounts(), (error) => error.status === 429)
+  assert.equal(mock.requestsTo('GET', '/api/v1/accounts').length, 1)
+  client.resetRateLimit()
+}))
 
 test('startConnect returns authUrl, handles alreadyConnected and re-enabled accounts, and sends force', () => withMock(async ({ mock, api }) => {
   const [profile] = mock.state.profiles

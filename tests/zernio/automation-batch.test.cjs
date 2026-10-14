@@ -97,7 +97,7 @@ test('source batches share research across requests and restarts, isolate videos
     const clips = input.clips ?? [{ id: 'single', transcript: input.transcript }]
     writing.push(clips.map((clip) => clip.id))
     const postsFor = (clip, index) => [{ platform: 'youtube', title: `Accurate transcription ${index}`, caption: clip.transcript, tags: ['transcription'], categoryId: '28', topicTag: null,
-      evidence: writing.length === 1 && index === 2 ? clips[0].transcript : clip.transcript }]
+      ...(writing.length === 1 && index === 2 ? { evidence: clips[0].transcript } : { evidenceIndex: 0 }) }]
     ctx.json(200, { choices: [{ message: { content: JSON.stringify(input.clips ? { clips: clips.map((clip, index) => ({ id: clip.id, posts: postsFor(clip, index) })) } : { posts: postsFor(clips[0], 0) }) } }] })
   } }] })
   const previous = process.env.BRIDGECLIP_E2E_OPENROUTER_URL
@@ -133,6 +133,8 @@ test('source batches share research across requests and restarts, isolate videos
     assert.deepEqual(writing.map((ids) => ids.length), [5, 1], 'only the cross-contaminated clip is retried')
     assert.equal(writing[1][0], group.contentIds[2])
     assert.ok(first.automations[0].content.slice(0, 5).every((item) => item.metadataDraft && item.title === 'Topic'))
+    assert.ok(first.automations[0].content.slice(0, 5).every((item) =>
+      item.metadataDraft.posts[0].caption === `${item.transcript}\n\nOriginal video by Channel\nWatch the full video: ${SOURCE.url}`), 'default source enhancement credits and links the original without a custom prompt')
     const stale = await main.automations.enhanceAutomationBatch(created.id, [group.contentIds[0], groups[1].contentIds[0]], group.key)
     assert.equal(stale.skipped, 1)
     assert.match(stale.errors[0].message, /source context changed/)

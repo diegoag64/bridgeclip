@@ -20,6 +20,8 @@ import shutil
 import tempfile
 import time
 import uuid
+import traceback
+from pathlib import Path
 from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Any, Callable, Optional
@@ -69,6 +71,7 @@ from clip_engine.services.webhook_service import (
     WebhookService,
     get_webhook_service,
 )
+from clip_engine.job_checkpoint import CURRENT as CHECKPOINT, Checkpoints, cached, digest, restore
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +127,8 @@ class ClippingJobRequest:
     workflow: str = 'automatic'
     caption_preset: str = 'pop'
     custom_caption: Optional[dict] = None
+    # Desktop local runs opt in to durable recovery; server jobs keep ephemeral work.
+    checkpoint_enabled: bool = False
 
     def __post_init__(self):
         validate_video_speed(self.video_speed)
@@ -217,6 +222,10 @@ class AIClippingPipeline:
         editorial_service = JevService.from_settings(self.settings, required=request.workflow == 'review')
         coherence_service = JevService(self.settings.openrouter_api_key if jev_enabled else '', max_requests=256, token_budget=1536000)
         work_dir = os.path.join(self.settings.temp_directory, job_id)
+        checkpoint = None
+        checkpoint_token = None
+        checkpoint_complete = False
+        resume_key = None
         stage_timings: dict[str, float] = {}
         stage_memory_mb: dict[str, float] = {}
         clip_render_durations_seconds: list[float] = []
@@ -249,6 +258,27 @@ class AIClippingPipeline:
         diagnostics_token = CURRENT.set(self._diagnostics)
         heartbeat = asyncio.create_task(self._diagnostic_heartbeat())
         try:
+            if self.local_mode and request.checkpoint_enabled:
+                run_dir = Path(self._get_local_output_dir(job_id))
+                if run_dir.is_symlink():
+                    raise ValueError('Invalid run directory')
+                checkpoint = Checkpoints(run_dir / '.resume')
+                checkpoint_token = CHECKPOINT.set(checkpoint)
+                work_dir = str(checkpoint.directory / 'work')
+                if Path(work_dir).is_symlink():
+                    raise ValueError('Invalid checkpoint work directory')
+                settings_values = vars(self.settings)
+                options = {key: value for key, value in settings_values.items()
+                           if key.startswith(('jev_', 'planner_', 'source_context_', 'layout_vision_', 'transcription_', 'advanced_transcription_', 'editorial_'))}
+                source_stamp = None
+                if os.path.isfile(request.video_url):
+                    stat = os.stat(request.video_url)
+                    source_stamp = [stat.st_size, stat.st_mtime_ns]
+                resume_key = digest([asdict(request), options, source_stamp])
+                previous_scope = checkpoint.load('run-scope', 'current')
+                if previous_scope is not None and previous_scope != resume_key:
+                    raise ValueError('Saved run settings or source changed; start a new job')
+                checkpoint.save('run-scope', 'current', resume_key)
             os.makedirs(work_dir, mode=0o700, exist_ok=True)
             logger.info(f"Starting AI clipping job: {job_id}")
             logger.info("Video source received")
@@ -273,8 +303,19 @@ class AIClippingPipeline:
                 lambda: self._update_progress(job_id, JobStatus.DOWNLOADING, 5 + (percent or 0) * .06, detail,
                     stage_percent=percent, completed=done, total=total, unit='bytes'))
             try:
-                download_result = await self.video_downloader.download_video(
-                    url=request.video_url, output_dir=work_dir)
+                saved_download = checkpoint.load('download', [request.video_url, source_stamp]) if checkpoint else None
+                download_result = restore(DownloadResult, saved_download) if saved_download else None
+                if download_result:
+                    media = Path(download_result.video_path)
+                    allowed = media.resolve().is_relative_to(Path(work_dir).resolve()) or str(media) == request.video_url
+                    if not allowed or media.is_symlink() or not media.is_file() or media.stat().st_size != download_result.file_size_bytes:
+                        download_result = None
+                if download_result is None:
+                    download_result = await self.video_downloader.download_video(url=request.video_url, output_dir=work_dir)
+                    if checkpoint:
+                        checkpoint.save('download', [request.video_url, source_stamp], download_result)
+                else:
+                    self._update_progress(job_id, JobStatus.DOWNLOADING, 11, 'Reusing saved source video')
             finally:
                 self.video_downloader.progress_callback = None
             stage_timings["download"] = time.perf_counter() - stage_start
@@ -302,7 +343,8 @@ class AIClippingPipeline:
                 current_stage = "source_context"
                 self._update_progress(job_id, JobStatus.CONTEXTUALIZING, 12, "Researching the source and building context...")
                 stage_start = time.perf_counter()
-                source_context = await self.source_context_service.build(download_result.metadata)
+                source_context = await cached('source-context', resume_key,
+                    lambda: self.source_context_service.build(download_result.metadata))
                 stage_timings["source_context"] = time.perf_counter() - stage_start
                 if self.local_mode:
                     self._save_local_json(job_id, "source_context", source_context)
@@ -325,13 +367,13 @@ class AIClippingPipeline:
                 job_id, JobStatus.TRANSCRIBING, 15 + 10 * done / total, f'Transcribing audio, part {done + 1} of {total}…',
                 stage_id='transcription', stage_percent=100 * done / total, completed=done, total=total, unit='chunks')
             try:
-                transcription_result = await self.transcription_service.transcribe(
+                transcription_result = await cached('transcript', resume_key, lambda: self.transcription_service.transcribe(
                     video_path=download_result.video_path,
                     work_dir=work_dir,
                     keyterms=transcription_terms(request.keyterms, source_context) if source_context else request.keyterms,
                     start_seconds=None if jev_enabled else request.start_time_seconds,
                     end_seconds=None if jev_enabled else effective_end_time,
-                )
+                ), TranscriptionResult)
             except NoAudioTrackError:
                 logger.info("Source has no audio track; trying visual-only planning")
                 transcription_result = TranscriptionResult(segments=[], full_text="", provider="no_audio")
@@ -421,8 +463,14 @@ class AIClippingPipeline:
                 jev_enabled=jev_enabled,
                 clip_request=request.clip_request,
             )
-            clip_plan = await self.intelligence_planner.plan_clips(**planning_args)
-            edit_audit['planner'] = getattr(self.intelligence_planner, 'audit', {'requests': []})
+            clip_plan = await cached('clip-plan', resume_key,
+                lambda: self.intelligence_planner.plan_clips(**planning_args), ClipPlanResponse)
+            planner_audit = checkpoint.load('planner-audit', resume_key) if checkpoint else None
+            if planner_audit is None:
+                planner_audit = getattr(self.intelligence_planner, 'audit', {'requests': []})
+                if checkpoint:
+                    checkpoint.save('planner-audit', resume_key, planner_audit)
+            edit_audit['planner'] = planner_audit
             stage_timings["planning"] = time.perf_counter() - stage_start
             logger.info(f"Planned {len(clip_plan.segments)} clips")
             if not clip_plan.segments:
@@ -458,12 +506,22 @@ class AIClippingPipeline:
                         'pipeline_stages': self._stage_progress.update('completed')})
                 self._save_local_json(job_id, 'job_output', asdict(output))
                 self._update_progress(job_id, JobStatus.COMPLETED, 100, 'Ready to edit')
+                checkpoint_complete = True
                 return ClippingJobResult(job_id=job_id, status=JobStatus.COMPLETED, output=output,
                     processing_time_seconds=time.time() - start_time)
-            accepted = []
+            saved_selection = checkpoint.load('selected-clips', resume_key) if checkpoint else None
+            accepted = [restore(ClipPlanSegment, segment) for segment in saved_selection['segments']] if saved_selection else []
+            if saved_selection:
+                edit_audit = saved_selection['audit']
+                if saved_selection.get('plan'):
+                    clip_plan = restore(ClipPlanResponse, saved_selection['plan'])
+                # JSON restores separate objects; reconnect reports to their clips
+                # so rendering updates the saved audit as it does on a fresh run.
+                for segment, entry in zip(accepted, (e for e in edit_audit['candidates'] if e['status'] == 'accepted')):
+                    segment.editorial = entry['report']
             limit = getattr(self.intelligence_planner, 'discovery_limit', None) or request.max_clips or self.settings.max_clips_absolute
             pending = clip_plan.segments
-            for discovery_pass in (1, 2):
+            for discovery_pass in (() if saved_selection else (1, 2)):
                 for segment in pending:
                     i = len(edit_audit['candidates'])
                     self._update_progress(job_id, JobStatus.PLANNING, 35,
@@ -542,6 +600,9 @@ class AIClippingPipeline:
                     break
             clip_plan.segments = accepted
             clip_plan.total_clips = len(accepted)
+            if checkpoint and accepted:
+                checkpoint.save('selected-clips', resume_key, {'segments': [asdict(s) for s in accepted], 'audit': edit_audit,
+                                                             'plan': asdict(clip_plan)})
             if not accepted:
                 edit_audit['outcome'] = 'no_approved_clips'
                 save_edit_audit()
@@ -668,7 +729,23 @@ class AIClippingPipeline:
                         apply_padding=not jev_enabled,
                     )
 
-                    render_result = await self.rendering_service.render_clip(render_request)
+                    render_key = [resume_key, i, asdict(segment)]
+                    saved_render = checkpoint.load('render', render_key) if checkpoint else None
+                    render_result = restore(RenderResult, saved_render) if saved_render else None
+                    if render_result and (render_result.output_path != output_path or not os.path.isfile(output_path)
+                                          or os.path.islink(output_path)
+                                          or os.path.getsize(output_path) != render_result.file_size_bytes):
+                        render_result = None
+                    if render_result:
+                        for artifact in (render_result.subtitle_path, render_result.framing_trace_path):
+                            if artifact and (not Path(artifact).is_file() or Path(artifact).is_symlink()
+                                             or not Path(artifact).resolve().is_relative_to(Path(work_dir).resolve())):
+                                render_result = None
+                                break
+                    if render_result is None:
+                        render_result = await self.rendering_service.render_clip(render_request)
+                        if checkpoint:
+                            checkpoint.save('render', render_key, render_result)
                     if getattr(render_result, "framing_trace_path", None):
                         clip_trace_paths[i] = render_result.framing_trace_path
                     segment.layout_type = render_result.layout_type
@@ -1063,6 +1140,7 @@ class AIClippingPipeline:
             logger.info(f"Job {job_id} metrics: {json.dumps(metrics, sort_keys=True)}")
             logger.info(f"Job {job_id} completed in {processing_time:.1f}s with {len(clip_artifacts)} clips")
 
+            checkpoint_complete = True
             return ClippingJobResult(
                 job_id=job_id,
                 status=JobStatus.COMPLETED,
@@ -1072,6 +1150,7 @@ class AIClippingPipeline:
 
         except Exception as e:
             if saved_local_output is not None:
+                checkpoint_complete = True
                 logger.warning("Local clips saved; final bookkeeping failed (%s)", type(e).__name__)
                 self._update_progress(
                     job_id, JobStatus.COMPLETED, 100, "Clips saved locally",
@@ -1089,6 +1168,11 @@ class AIClippingPipeline:
             if type(http_status) is not int or not 100 <= http_status <= 599:
                 http_status = None
             logger.error("Job %s failed at %s: %s (HTTP %s)", job_id, current_stage, failure_code, http_status)
+            # Fixed exception type and source locations diagnose unexpected failures
+            # without writing provider response bodies, credentials or exception text.
+            frames = [(os.path.basename(frame.filename), frame.lineno, frame.name)
+                      for frame in traceback.extract_tb(e.__traceback__)[-6:]]
+            logger.error('Failure diagnostic: type=%s frames=%s', type(e).__name__, frames)
             public_error = str(e) if isinstance(e, CoherenceRejected) else safe_processing_error(e)
             if edit_audit is not None:
                 edit_audit['planner'] = getattr(self.intelligence_planner, 'audit', {'requests': []})
@@ -1117,12 +1201,13 @@ class AIClippingPipeline:
             heartbeat.cancel()
             await asyncio.gather(heartbeat, return_exceptions=True)
             CURRENT.reset(diagnostics_token)
-            # Completed local clips and JSON have already been copied to the
-            # output directory. The work directory can contain a downloaded
-            # source and intermediate audio/video, so remove it in both modes.
-            if os.path.isdir(work_dir):
+            if checkpoint_token is not None:
+                CHECKPOINT.reset(checkpoint_token)
+            # Failed local runs retain source media and completed paid work.
+            cleanup_dir = str(checkpoint.directory) if checkpoint else work_dir
+            if (not checkpoint or checkpoint_complete) and os.path.isdir(cleanup_dir):
                 try:
-                    shutil.rmtree(work_dir)
+                    shutil.rmtree(cleanup_dir)
                 except Exception as e:
                     logger.warning(f"Failed to cleanup work dir: {e}")
 
@@ -1180,8 +1265,15 @@ class AIClippingPipeline:
             # the point when all rendered clips and the downloaded source are
             # still present. Copy when the output folder is on another volume
             # or its filesystem does not permit hard links.
+            if CHECKPOINT.get() and os.path.isfile(dest) and not os.path.samefile(clip_path, dest):
+                # A filesystem without hard links may retain a partial copy.
+                # Its complete checkpoint is authoritative on a resumed save.
+                os.unlink(dest)
             try:
-                os.link(clip_path, dest)
+                # A failed save can leave this exact hard link in place. Resume
+                # must not copy a file onto itself or repeat the render.
+                if not (os.path.isfile(dest) and os.path.samefile(clip_path, dest)):
+                    os.link(clip_path, dest)
             except OSError as error:
                 if error.errno not in (errno.EXDEV, errno.EPERM, errno.EACCES,
                                        getattr(errno, "ENOTSUP", errno.EPERM),

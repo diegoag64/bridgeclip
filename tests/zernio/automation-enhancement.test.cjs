@@ -11,6 +11,7 @@ const { createPostingMock } = require('./support/mock-posts.cjs')
 const SOURCE = { title: 'How reliable automations work', description: 'A long discussion about speech recognition and reliable automation workflows.', channel: 'Example channel', url: 'https://www.youtube.com/watch?v=hqP9fivmBqI' }
 const TRANSCRIPT = 'Building reliable automations starts with accurate transcripts.'
 const POST = { platform: 'youtube', title: 'Why Accurate Transcripts Matter for Automations', caption: 'Accurate transcripts are the foundation for reliable automations.', tags: ['speech recognition', 'automation'], categoryId: '28', topicTag: null, evidence: 'accurate transcripts' }
+const ATTRIBUTED_CAPTION = `${POST.caption}\n\nOriginal video by Example channel\nWatch the full video: https://www.youtube.com/watch?v=hqP9fivmBqI`
 const entry = "export * as automations from './src/main/automations'; export * as settings from './src/main/settings-store'; export * as source from './src/main/automation-source'"
 
 test('source URLs discard tracking parameters and reject arbitrary hosts, local paths and credentials', () => {
@@ -19,6 +20,29 @@ test('source URLs discard tracking parameters and reject arbitrary hosts, local 
   assert.equal(youtubeSourceUrl('https://www.youtube.com/shorts/hqP9fivmBqI'), SOURCE.url)
   for (const value of ['/private/movie.mp4', 'http://127.0.0.1/a', 'https://youtube.com.evil.test/watch?v=hqP9fivmBqI', 'https://secret@youtube.com/watch?v=hqP9fivmBqI', 'https://youtube.com:8443/watch?v=hqP9fivmBqI']) assert.equal(youtubeSourceUrl(value), null)
   assert.throws(() => parseSourceContext({ ...SOURCE, description: 'x'.repeat(20001) }), /source title/)
+})
+
+test('source lookup fills a missing creator while preserving saved and subsequently corrected context', async () => {
+  const { dir, cleanup } = tempDir('bridgeclip-source-creator-')
+  let lookups = 0
+  const childProcess = require('node:child_process')
+  const execFile = (...args) => {
+    lookups++
+    args.at(-1)(null, { stdout: JSON.stringify({ title: 'Remote title', description: 'Remote description', channel: 'Original publisher' }) })
+  }
+  try {
+    const { completeSourceContext } = loadMain("export { completeSourceContext } from './src/main/automation-source'", {
+      electron: fakeElectron(dir).electron, child_process: { ...childProcess, execFile }
+    })
+    const source = { ...SOURCE, channel: '' }
+    assert.deepEqual(await completeSourceContext(source), { ...source, channel: 'Original publisher' })
+    const corrected = { ...SOURCE, title: 'Corrected title', description: '', channel: 'Corrected publisher' }
+    assert.deepEqual(await completeSourceContext(corrected), { ...corrected, description: SOURCE.description })
+    assert.equal(lookups, 1, 'cached source lookup fills blanks without overwriting corrections')
+    assert.equal(await completeSourceContext(null), null)
+    assert.deepEqual(await completeSourceContext({ ...source, url: null }), { ...source, url: null })
+    assert.equal(lookups, 1, 'attached files cannot trigger a source lookup')
+  } finally { cleanup() }
 })
 
 test('enhancement preserves current copy until review, holds scheduling, survives restart and publishes the applied draft unchanged', async () => {
@@ -89,7 +113,7 @@ test('enhancement preserves current copy until review, holds scheduling, survive
     assert.ok(item.metadataDraft, 'draft survives restart')
     main.automations.resolveAutomationMetadataDraft(created.id, item.id, item.metadataDraft.id, true)
     item = main.automations.listAutomations()[0].content[0]
-    assert.equal(item.title, POST.title); assert.equal(item.caption, POST.caption)
+    assert.equal(item.title, POST.title); assert.equal(item.caption, ATTRIBUTED_CAPTION)
     assert.equal(item.metadataDraft, null)
     assert.equal(item.metadataEnhancement.research.sources.length, 1)
     const appliedCalls = writingCalls
@@ -98,7 +122,7 @@ test('enhancement preserves current copy until review, holds scheduling, survive
     assert.equal(writingCalls, appliedCalls, 'manual automation reuses approved AI metadata without regeneration')
     assert.equal(posting.state.creates[0].body.platforms[0].platformSpecificData.title, POST.title)
     assert.deepEqual(posting.state.creates[0].body.tags, POST.tags)
-    assert.equal(posting.state.creates[0].body.platforms[0].customContent, POST.caption)
+    assert.equal(posting.state.creates[0].body.platforms[0].customContent, ATTRIBUTED_CAPTION)
     await assert.rejects(main.automations.enhanceAutomationContent(created.id, item.id, { research: true }), /unposted queued/)
 
     // Legacy import recovers provenance by bytes, not just by its matching title.

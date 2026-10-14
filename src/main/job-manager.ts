@@ -73,7 +73,7 @@ function pruneFinished(): void {
 export function enqueueJob(jobId: string, config: ClipJobConfig, outputDirectory: string): JobSnapshot {
   const snapshot: JobSnapshot = {
     id: jobId,
-    revision: 0,
+    revision: (jobs.get(jobId)?.snapshot.revision ?? -1) + 1,
     request: config,
     status: 'queued',
     percent: 0,
@@ -191,6 +191,10 @@ export function dismissJob(jobId: string): boolean {
 
 export function getJob(jobId: string): JobSnapshot | null {
   return jobs.get(jobId)?.snapshot ?? null
+}
+
+export function isJobStillActive(jobId: string): boolean {
+  return running.has(jobId) || Boolean(jobs.get(jobId) && isActiveJobStatus(jobs.get(jobId)!.snapshot.status))
 }
 
 export function listJobs(): JobSnapshot[] {

@@ -38,7 +38,7 @@ function makeClip(file, { seconds = 4, width = 360, height = 640 } = {}) {
   return file
 }
 
-test('upload reads the authorized file handle after its path is replaced', async () => {
+test('upload retries from byte zero on the authorized handle after its path is replaced', async () => {
   const http = require('node:http')
   const { dir, cleanup } = tempDir()
   const source = path.join(dir, 'clip.mp4')
@@ -48,14 +48,49 @@ test('upload reads the authorized file handle after its path is replaced', async
   fs.writeFileSync(source, 'replacement bytes')
   const received = []
   const server = http.createServer((req, res) => {
-    req.on('data', (chunk) => received.push(chunk))
-    req.on('end', () => { res.writeHead(200); res.end() })
+    const chunks = []
+    req.on('data', (chunk) => chunks.push(chunk))
+    req.on('end', () => {
+      received.push(Buffer.concat(chunks).toString())
+      if (received.length === 2) return res.destroy()
+      res.writeHead(received.length === 1 ? 503 : 200); res.end()
+    })
   })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   try {
     await pure.putFile(`http://127.0.0.1:${server.address().port}/upload`, opened.handle, { contentType: 'video/mp4', size: opened.size })
-    assert.equal(Buffer.concat(received).toString(), 'authorized bytes')
+    assert.deepEqual(received, ['authorized bytes', 'authorized bytes', 'authorized bytes'])
   } finally {
+    await opened.handle.close()
+    await new Promise((resolve) => server.close(resolve))
+    cleanup()
+  }
+})
+
+test('cancelling during upload retry backoff prevents another PUT', async () => {
+  const http = require('node:http')
+  const { dir, cleanup } = tempDir()
+  const source = path.join(dir, 'clip.mp4')
+  fs.writeFileSync(source, 'authorized bytes')
+  const opened = await pure.openAuthorizedMedia(source, dir)
+  const controller = new AbortController()
+  let requests = 0
+  let cancel
+  const server = http.createServer((req, res) => {
+    requests++
+    req.resume()
+    req.on('end', () => {
+      res.writeHead(503); res.end()
+      cancel = setTimeout(() => controller.abort(), 50)
+    })
+  })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  try {
+    await assert.rejects(pure.putFile(`http://127.0.0.1:${server.address().port}/upload`, opened.handle,
+      { contentType: 'video/mp4', size: opened.size, signal: controller.signal }), /Upload cancelled/)
+    assert.equal(requests, 1)
+  } finally {
+    clearTimeout(cancel)
     await opened.handle.close()
     await new Promise((resolve) => server.close(resolve))
     cleanup()
@@ -598,13 +633,14 @@ async function withPosting(fn, { clip = {}, mockOptions = {} } = {}) {
 
 test('publish now: presign, a streamed PUT to storage, then POST /v1/posts with an idempotency id', () => withPosting(async ({ mock, posting, clipPath, accounts, publish, progress, userData }) => {
   const size = fs.statSync(clipPath).size
+  mock.failNext('POST', '/api/v1/media/presign', 503)
   const result = await publish({
     targets: [{ platform: 'youtube', accountId: accounts.youtube._id }, { platform: 'tiktok', accountId: accounts.tiktok._id }],
     options: { youtube: { title: 'Why agents need tests', visibility: 'unlisted', madeForKids: false }, tiktok: tiktokOptions([accounts.tiktok._id]) }
   })
 
   const presign = mock.requestsTo('POST', '/api/v1/media/presign')
-  assert.equal(presign.length, 1)
+  assert.equal(presign.length, 2, 'a temporary presign failure recovers before the single upload and post')
   assert.equal(presign[0].authorized, true)
 
   assert.equal(posting.state.uploads.length, 1)

@@ -246,3 +246,58 @@ def test_local_clips_link_on_same_volume_and_copy_across_volumes(monkeypatch, tm
     assert copied.read_bytes() == b"copied clip"
     assert os.stat(source).st_ino != os.stat(copied).st_ino
 
+
+
+def test_resume_reuses_completed_paid_stages_and_cleans_checkpoints_on_success(monkeypatch, tmp_path):
+    from unittest.mock import AsyncMock
+    from clip_engine.services.video_downloader import DownloadResult, VideoMetadata
+    monkeypatch.setattr(RenderingService, '_verify_ffmpeg', lambda self: None)
+    settings = pipeline_module.get_settings()
+    monkeypatch.setattr(settings, 'local_mode', True)
+    monkeypatch.setattr(settings, 'local_output_dir', str(tmp_path / 'out'))
+    monkeypatch.setattr(settings, 'jev_enabled', False)
+    monkeypatch.setattr(settings, 'source_context_web_research', False)
+    monkeypatch.setattr(settings.__class__, 'temp_directory', property(lambda self: str(tmp_path / 'work')))
+    async def download(url, output_dir):
+        source = os.path.join(output_dir, 'source.mp4')
+        with open(source, 'wb') as f: f.write(b'source')
+        return DownloadResult(source, VideoMetadata('Test', 300, 1920, 1080, 30, 'mp4', 'test'), 6, 'youtube')
+    downloading = AsyncMock(side_effect=download)
+    transcribing = AsyncMock(return_value=TranscriptionResult(
+        segments=[TranscriptSegment(0, 500, 'hi', words=[TranscriptWord('hi', 0, 500)])], full_text='hi'))
+    planning = AsyncMock(return_value=ClipPlanResponse(segments=[ClipPlanSegment(0, 30000, .9)], total_clips=1))
+    rendering = AsyncMock(side_effect=RenderingError('Synthetic render interruption'))
+    def pipeline():
+        instance = AIClippingPipeline()
+        monkeypatch.setattr(instance.video_downloader, 'download_video', downloading)
+        monkeypatch.setattr(instance.transcription_service, 'transcribe', transcribing)
+        monkeypatch.setattr(instance.intelligence_planner, 'plan_clips', planning)
+        monkeypatch.setattr(instance.rendering_service, 'render_clip', rendering)
+        return instance
+    def request(): return ClippingJobRequest(video_url='https://example.com/video.mp4', job_id='resume-test', checkpoint_enabled=True)
+    result = asyncio.run(pipeline().process_video(request()))
+    assert result.status == JobStatus.FAILED
+    checkpoint = tmp_path / 'out/resume-test/.resume'
+    assert (checkpoint / 'work/source.mp4').read_bytes() == b'source'
+    async def render(request):
+        with open(request.output_path, 'wb') as f: f.write(b'mp4')
+        return RenderResult(output_path=request.output_path, file_size_bytes=3, duration_ms=30000)
+    rendering.side_effect = render
+    saving_run = pipeline()
+    save_json = saving_run._save_local_json
+    def interrupted_save(job_id, name, data, **kwargs):
+        if name == 'job_output':
+            raise OSError('Synthetic manifest interruption')
+        return save_json(job_id, name, data, **kwargs)
+    monkeypatch.setattr(saving_run, '_save_local_json', interrupted_save)
+    result = asyncio.run(saving_run.process_video(request()))
+    assert result.status == JobStatus.FAILED
+    assert (tmp_path / 'out/resume-test/clip_00.mp4').read_bytes() == b'mp4'
+    result = asyncio.run(pipeline().process_video(request()))
+    assert result.status == JobStatus.COMPLETED, result.error
+    assert downloading.await_count == transcribing.await_count == planning.await_count == 1
+    assert rendering.await_count == 2
+    assert not checkpoint.exists()
+    assert (tmp_path / 'out/resume-test/clip_00.mp4').read_bytes() == b'mp4'
+    audit = json.loads((tmp_path / 'out/resume-test/edit_audit.json').read_text())
+    assert audit['candidates'][0]['status'] == 'rendered'

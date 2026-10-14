@@ -74,11 +74,12 @@ export function sourceFromOutput(output: JobOutput): AutomationSourceContext {
 const sourceCache = new Map<string, { at: number; source: AutomationSourceContext }>()
 /** Metadata only: no video download, cookies, user config, playlists or generic extractor. */
 export async function completeSourceContext(source: AutomationSourceContext | null): Promise<AutomationSourceContext | null> {
-  if (!source?.url || source.description) return source
+  if (!source?.url || (source.description && source.channel)) return source
   const url = youtubeSourceUrl(source.url)
   if (!url) return source
   const cached = sourceCache.get(url)
-  if (cached && Date.now() - cached.at < 3600000) return { ...cached.source, title: source.title || cached.source.title }
+  if (cached && Date.now() - cached.at < 3600000) return { ...source, title: source.title || cached.source.title,
+    description: source.description || cached.source.description, channel: source.channel || cached.source.channel, url }
   try {
     const { stdout } = await execFileAsync(resolveBinary('yt-dlp'), [
       '--ignore-config', '--skip-download', '--no-playlist', '--no-warnings', '--use-extractors', 'youtube',
@@ -86,7 +87,7 @@ export async function completeSourceContext(source: AutomationSourceContext | nu
       '--print', '{"title":%(title)j,"description":%(description)j,"channel":%(uploader)j}', '--', url
     ], { timeout: 35000, maxBuffer: 200000 })
     const info = JSON.parse(stdout.trim())
-    const result = { title: source.title || String(info.title ?? '').slice(0, 1024), description: String(info.description ?? '').slice(0, 20000),
+    const result = { ...source, title: source.title || String(info.title ?? '').slice(0, 1024), description: source.description || String(info.description ?? '').slice(0, 20000),
       channel: source.channel || String(info.channel ?? '').slice(0, 1024), url }
     if (sourceCache.size >= 50) sourceCache.delete(sourceCache.keys().next().value!)
     sourceCache.set(url, { at: Date.now(), source: result })
