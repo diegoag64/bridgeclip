@@ -54,7 +54,10 @@ test('development checks the staged FFmpeg that the clipping engine uses', async
 test('Zernio sign-in links stay on its HTTPS origin and provider errors are sanitized', async () => {
   const provider = loadSource('zernio/client.ts', {
     '../../shared/zernio': loadShared('zernio.ts'),
-    '../http-response': loadSource('http-response.ts'),
+    '../http-retry': loadSource('http-retry.ts', {
+      './http-response': loadSource('http-response.ts'),
+      './logger': { logger: { warn() {} } }
+    }, { AbortSignal, fetch: async () => Response.json({ error: 'private-provider-token' }, { status: 500 }) }),
     '../logger': { logger: { info() {}, warn() {}, error() {} } },
     '../network-policy': { assertPublicWebUrl: async () => {}, isPublicAddress: security.isPublicAddress ?? (() => false) }
   }, {
@@ -200,6 +203,7 @@ test('the native picker authorizes media and shell opening rejects aliased appli
       './zernio/service': {},
       './zernio/posts': {},
       './automations': {},
+      './automation-enhancement-jobs': {},
       './library-posting': {},
       './library-management': {},
       './storage-cleanup': {},
@@ -991,4 +995,115 @@ test('one unreadable Jev field falls back to its default without hiding saved ke
     assert.throws(() => store.savePublicSettings({ ...store.publicSettings(loaded), jevThreshold: '2' }), /Invalid Jev threshold/)
     assert.throws(() => store.savePublicSettings({ ...store.publicSettings(loaded), jevEnabled: 'maybe' }), /Invalid Jev/)
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})
+
+test('saved jobs resume after restart, preserve their identity, and reject duplicate or changed-settings retries', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bridgeclip-resume-'))
+  const starts = []
+  const settings = { outputDirectory: root, openrouterApiKey: 'test-secret', customVocabulary: '', pythonPath: 'python3' }
+  let finishValidation
+  const pendingValidation = new Promise(resolve => { finishValidation = resolve })
+  let delay = false
+  const mocks = {
+    './settings-store': { loadSettings: () => settings, getSettingsForBridge: () => ({ OPENROUTER_API_KEY: settings.openrouterApiKey, LOCAL_OUTPUT_DIR: root, JEV_POLICY: settings.customVocabulary }) },
+    './file-manager': { ensureOutputDir: () => {} },
+    './pipeline-runner': { getEnginePath: () => '/engine', getBridgeRunnerPath: () => '/bridge', resolvePythonPath: () => 'python3', preflightCheck: () => ({ ok: true }), validatePython: async () => { if (delay) await pendingValidation; return { ok: true } } },
+    './run-history': runHistory,
+    './job-manager': { getJob: () => null, isJobStillActive: () => false, enqueueJob: (id, request) => { starts.push({ id, request }); return { id, status: 'pending' } } },
+    './logger': { logger: { info() {}, warn() {}, error() {} } },
+    './security': security,
+    './network-policy': { assertPublicWebUrl: async () => {} },
+    './validation': { validateJobConfig },
+    './openrouter-models': { resolveAdvancedModels: async () => ({}) },
+    './tools': { supportsCaptionFilter: async () => true }
+  }
+  try {
+    const initial = await loadSource('job-start.ts', mocks).startClipJobRequest({ videoUrl: 'https://example.com/video.mp4',
+      maxClips: null, autoClipCount: true, includeCaptions: false, layoutVision: false,
+      aspectRatio: '9:16', layoutStyle: 'fit', pacing: 'natural', captionPreset: 'pop',
+      durationRanges: null, startTimeSeconds: null, endTimeSeconds: null, bannerPlatform: null, bannerChannelUrl: null })
+    assert.ok(initial.jobId, initial.error)
+    runHistory.finishRunRecord(root, initial.jobId, 'failed')
+    const recipe = fs.readFileSync(path.join(root, initial.jobId, 'run-request.json'), 'utf8')
+    assert.equal(recipe.includes('test-secret'), false)
+    assert.equal(runHistory.readRunRequest(root, initial.jobId).request.videoUrl, 'https://example.com/video.mp4')
+    const history = loadSource('file-manager.ts', { '../shared/job-output': jobOutput, './run-history': runHistory, './tools': { resolveBinary: () => 'ffprobe' } })
+    assert.equal((await history.getJobHistory(root))[0].resumable, true)
+    // A fresh module has no session job or preflight cache.
+    const restarted = loadSource('job-start.ts', mocks)
+    delay = true
+    const pending = restarted.resumeClipJobRequest(initial.jobId)
+    const duplicate = await restarted.resumeClipJobRequest(initial.jobId)
+    assert.match(duplicate.error, /already running/)
+    finishValidation()
+    const resumed = await pending
+    assert.equal(resumed.jobId, initial.jobId, resumed.error)
+    assert.equal(starts.length, 2)
+    settings.customVocabulary = 'new terms'
+    assert.match((await restarted.resumeClipJobRequest(initial.jobId)).error, /settings changed/)
+    assert.equal(starts.length, 2)
+    if (fileLinksAvailable) {
+      const file = path.join(root, initial.jobId, 'run-request.json')
+      const outside = path.join(root, 'outside.json'); fs.writeFileSync(outside, recipe)
+      fs.unlinkSync(file); fs.symlinkSync(outside, file)
+      assert.equal(runHistory.readRunRequest(root, initial.jobId), null)
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})
+
+test('queued workers and resumed jobs use the settings saved when the request was accepted', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bridgeclip-queued-settings-'))
+  const settings = { outputDirectory: root, openrouterApiKey: 'test-original-key', customVocabulary: 'Original term', pythonPath: '', jevEnabled: 'off' }
+  const store = {
+    loadSettings: () => ({ ...settings }),
+    getSettingsForBridge: value => ({ OPENROUTER_API_KEY: value.openrouterApiKey, LOCAL_OUTPUT_DIR: value.outputDirectory, JEV_ENABLED: value.jevEnabled }),
+    vocabularyTerms: value => [value]
+  }
+  const logger = { info() {}, warn() {}, error() {}, debug() {} }
+  const starts = []
+  const runner = loadSource('pipeline-runner.ts', {
+    electron: { app: { isPackaged: false, getPath: () => root } },
+    child_process: { ...require('node:child_process'), spawn: (_command, _args, options) => {
+      const child = new (require('node:events').EventEmitter)()
+      for (const key of ['stdin', 'stdout', 'stderr']) child[key] = new (require('node:stream').PassThrough)()
+      child.stdin.end = data => starts.push({ child, config: JSON.parse(data), env: options.env })
+      return child
+    } },
+    './settings-store': store, './logger': { logger }, './run-history': runHistory,
+    './tools': { resolveBinary: name => name }, '../shared/job-output': jobOutput, '../shared/job-contract': jobContract
+  }, { queueMicrotask })
+  runner.validatePython = async () => ({ ok: true })
+  const manager = loadSource('job-manager.ts', { './pipeline-runner': runner, './run-history': runHistory, './logger': { logger } })
+  const api = loadSource('job-start.ts', {
+    './settings-store': store, './file-manager': { ensureOutputDir: () => {} }, './pipeline-runner': runner,
+    './job-manager': manager, './run-history': runHistory, './logger': { logger }, './security': security,
+    './network-policy': { assertPublicWebUrl: async () => {} }, './validation': { validateJobConfig },
+    './openrouter-models': {}, './tools': { supportsCaptionFilter: async () => true }
+  })
+  const request = { videoUrl: 'https://example.com/video.mp4', maxClips: null, autoClipCount: true,
+    includeCaptions: false, layoutVision: false, aspectRatio: '9:16', layoutStyle: 'fit', pacing: 'natural',
+    captionPreset: 'pop', durationRanges: null, startTimeSeconds: null, endTimeSeconds: null, bannerPlatform: null, bannerChannelUrl: null }
+  try {
+    await api.startClipJobRequest(request)
+    await api.startClipJobRequest(request)
+    const queued = await api.startClipJobRequest(request)
+    assert.equal(queued.queued, true)
+    settings.customVocabulary = 'Changed term'; settings.jevEnabled = 'on'; settings.openrouterApiKey = 'test-rotated-key'
+    starts[0].child.emit('close', 1, null)
+    assert.equal(starts.length, 3)
+    assert.deepEqual(starts[2].config.keyterms, ['Original term'])
+    assert.equal(starts[2].env.JEV_ENABLED, 'off')
+    assert.equal(starts[2].env.OPENROUTER_API_KEY, 'test-rotated-key', 'credentials can rotate independently of job options')
+    starts[2].child.emit('close', 1, null)
+    settings.customVocabulary = 'Original term'; settings.jevEnabled = 'off'
+    const resumed = await api.resumeClipJobRequest(queued.jobId)
+    assert.equal(resumed.jobId, queued.jobId, resumed.error)
+    assert.deepEqual(starts[3].config.keyterms, starts[2].config.keyterms)
+    assert.equal(starts[3].env.JEV_ENABLED, starts[2].env.JEV_ENABLED)
+    assert.doesNotMatch(fs.readFileSync(path.join(root, queued.jobId, 'run-request.json'), 'utf8'), /test-original-key|test-rotated-key/)
+    assert.doesNotMatch(JSON.stringify(manager.listJobs()), /test-original-key|test-rotated-key/)
+  } finally {
+    for (const { child } of starts) { child.emit('close', 1, null); child.stdout.end(); child.stderr.end() }
+    fs.rmSync(root, { recursive: true, force: true })
+  }
 })

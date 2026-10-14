@@ -17,6 +17,30 @@ export interface RunRecord {
   httpStatus?: number | null
 }
 
+/** Private recipe for resuming this run; credentials are never included. */
+export function writeRunRequest(baseDir: string, jobId: string, request: unknown, settingsFingerprint: string): void {
+  const dir = checkedDirectory(baseDir, jobId)
+  const temp = join(dir, `run-request.${randomUUID()}.tmp`)
+  try {
+    writeFileSync(temp, JSON.stringify({ request, settingsFingerprint }), { mode: 0o600, flag: 'wx' })
+    renameSync(temp, join(dir, 'run-request.json'))
+  } finally { try { unlinkSync(temp) } catch { /* Already renamed. */ } }
+}
+
+export function readRunRequest(baseDir: string, jobId: string): { request: unknown; settingsFingerprint: string } | null {
+  let fd: number | null = null
+  try {
+    const file = join(checkedDirectory(baseDir, jobId), 'run-request.json')
+    if (lstatSync(file).isSymbolicLink()) return null
+    fd = openSync(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    const stat = fstatSync(fd)
+    if (!stat.isFile() || stat.size > 64 * 1024) return null
+    const value = JSON.parse(readFileSync(fd, 'utf8'))
+    return value && typeof value === 'object' && value.request && /^[a-f0-9]{64}$/.test(value.settingsFingerprint) ? value : null
+  } catch { return null }
+  finally { if (fd !== null) closeSync(fd) }
+}
+
 const RUN_FILE = 'run-history.json'
 const MAX_RECORD_BYTES = 16 * 1024
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -78,7 +102,7 @@ export function readRunRecord(baseDir: string, jobId: string): RunRecord | null 
         !['running', 'completed', 'failed', 'cancelled'].includes(record.status ?? '') ||
         (record.errorMessage !== null && (typeof record.errorMessage !== 'string' || record.errorMessage.length > 300)) ||
         (record.failureCode != null && (typeof record.failureCode !== 'string' || !/^[a-z]+(?:[._][a-z]+)*$/.test(record.failureCode) || record.failureCode.length > 64)) ||
-        (record.failureStage != null && !['setup', 'download', 'transcription', 'planning', 'rendering', 'saving', 'uploading'].includes(record.failureStage)) ||
+        (record.failureStage != null && !['setup', 'download', 'source_context', 'transcription', 'planning', 'rendering', 'saving', 'uploading'].includes(record.failureStage)) ||
         (record.httpStatus != null && (!Number.isInteger(record.httpStatus) || record.httpStatus < 100 || record.httpStatus > 599))) return null
     return record as RunRecord
   } catch {

@@ -8,7 +8,7 @@ import tempfile
 from contextlib import contextmanager
 from uuid import uuid4
 from datetime import datetime, timezone
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from clip_engine.error_policy import NoClipCandidatesError
 
@@ -19,6 +19,7 @@ from clip_engine.services.layout_renderer import shot_views
 from clip_engine.services.rendering_service import RenderRequest, RenderingService
 from clip_engine.services.transcription_service import TranscriptSegment, TranscriptWord
 from clip_engine.services.media_process import MEDIA_INPUT_OPTIONS, PROBE_TIMEOUT_SECONDS, run_media, validate_video_dimensions
+from clip_engine.job_checkpoint import CURRENT as CHECKPOINT, digest
 
 
 # Fixed failure codes; the only failure detail that crosses the bridge.
@@ -181,7 +182,18 @@ async def prepare_project(request, segments, transcript, download, renderer, rev
     import threading
     progress_thread = threading.get_ident()
     total = min(100, len(segments))
+    checkpoint = CHECKPOINT.get()
+    preparation_key = digest([asdict(request), [asdict(s) for s in transcript],
+                              download.metadata.title, duration,
+                              {key: value for key, value in vars(reviewer.settings).items()
+                               if key.startswith(('jev_', 'editorial_'))}]) if checkpoint else None
     for i, segment in enumerate(segments[:100]):
+        candidate_key = [preparation_key, i, asdict(segment)] if checkpoint else None
+        saved_candidate = checkpoint.load('editor-candidate', candidate_key) if checkpoint else None
+        if saved_candidate is not None:
+            project['candidates'].append(saved_candidate)
+            progress(f'Reusing prepared candidate {i + 1} of {total}…', 100 * (i + 1) / total)
+            continue
         progress(f'Analyzing framing for candidate {i + 1} of {total}…', 100 * i / total)
         a, b = max(0, segment.start_time_ms), min(duration, segment.end_time_ms)
         if b - a < 100:
@@ -241,6 +253,8 @@ async def prepare_project(request, segments, transcript, download, renderer, rev
         progress(f'Reviewing candidate {i + 1} of {total} with Jev…', 100 * i / total)
         await review_candidate(c, reviewer)
         project['candidates'].append(c)
+        if checkpoint:
+            checkpoint.save('editor-candidate', candidate_key, c)
         if diagnostics:
             diagnostics.phase(None)
     if not project['candidates']:
@@ -250,7 +264,7 @@ async def prepare_project(request, segments, transcript, download, renderer, rev
     def move_download():
         # A download in the pipeline's temporary folder is discarded after this
         # run: rename it on the same volume instead of storing a second copy.
-        if getattr(download, 'source_type', 'local') == 'local':
+        if checkpoint or getattr(download, 'source_type', 'local') == 'local':
             return False
         try:
             if os.stat(download.video_path).st_dev != os.stat(output_dir).st_dev:

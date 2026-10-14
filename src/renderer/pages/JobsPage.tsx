@@ -63,6 +63,7 @@ export function JobsPage({ onNavigate, onViewLibrary }: {
   const [filter, setFilter] = useState<Filter>('all')
   const [query, setQuery] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [resumingId, setResumingId] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [jobsLoaded, setJobsLoaded] = useState(false)
   const requestId = useRef(0)
@@ -124,10 +125,12 @@ export function JobsPage({ onNavigate, onViewLibrary }: {
     }
   }
 
-  const runAgain = async (job: Job): Promise<void> => {
+  const runAgain = async (jobId: string): Promise<void> => {
+    if (resumingId) return
+    setResumingId(jobId)
     setError(null)
     try {
-      const result = await getApi().job.start(job.request)
+      const result = await getApi().job.resume(jobId)
       if (result.error) setError(result.error)
       else if (result.jobId) {
         if (result.job) useJobStore.getState().upsert(result.job)
@@ -135,8 +138,8 @@ export function JobsPage({ onNavigate, onViewLibrary }: {
         focusJob(result.jobId)
       }
     } catch (err) {
-      setError(errorMessage(err, 'Could not start this job again.'))
-    }
+      setError(errorMessage(err, 'Could not resume this job.'))
+    } finally { setResumingId(null) }
   }
 
   const openFolder = async (outputDir: string): Promise<void> => {
@@ -160,9 +163,9 @@ export function JobsPage({ onNavigate, onViewLibrary }: {
     }
     if (focused.status === 'completed') return <></>
     if (focused.status === 'failed') {
-      return <>{errorCallout}<div className="px-6 pt-3"><InspectEditsButton outputDir={focused.outputDir} /></div><JobFailure job={focused} leading={back} onRetry={() => { void runAgain(focused) }} /></>
+      return <>{errorCallout}<div className="px-6 pt-3"><InspectEditsButton outputDir={focused.outputDir} /></div><JobFailure job={focused} leading={back} retrying={resumingId === focused.id} onRetry={() => { void runAgain(focused.id) }} /></>
     }
-    return <>{errorCallout}<JobCancelled job={focused} leading={back} onRetry={() => { void runAgain(focused) }} /></>
+    return <>{errorCallout}<JobCancelled job={focused} leading={back} retrying={resumingId === focused.id} onRetry={() => { void runAgain(focused.id) }} /></>
   }
 
   return (
@@ -187,11 +190,15 @@ export function JobsPage({ onNavigate, onViewLibrary }: {
         } else if (useJobStore.getState().jobs[entry.jobId]) focusJob(entry.jobId)
       }}
       onOpenFolder={(dir) => { void openFolder(dir) }}
+      onResume={(id) => { void runAgain(id) }}
+      resumingId={resumingId}
     />
   )
 }
 
-function JobsList({ active, entries, filter, query, error, refreshing, onFilter, onQuery, onDismissError, onRefresh, onNew, onOpenJob, onCancel, onOpenEntry, onOpenFolder }: {
+function JobsList({ active, entries, filter, query, error, refreshing, onFilter, onQuery, onDismissError, onRefresh, onNew, onOpenJob, onCancel, onOpenEntry, onOpenFolder, onResume, resumingId }: {
+  onResume: (id: string) => void
+  resumingId: string | null
   active: Job[]
   entries: HistoryEntry[] | null
   filter: Filter
@@ -363,7 +370,7 @@ function JobsList({ active, entries, filter, query, error, refreshing, onFilter,
                 <div ref={historyWindow} className="history-window">
                   <ul key={`${filter}:${query}:${page}:${pageSize}`} className="history-page divide-y divide-white/[0.05]" data-direction={pagination.direction} aria-label={`Previous jobs, page ${page}`}>
                     {visible.slice((page - 1) * pageSize, page * pageSize).map((entry) => (
-                      <PreviousJobRow key={entry.jobId} entry={entry} hasDetails={Boolean(sessionJobs[entry.jobId])} onOpen={() => onOpenEntry(entry)} onOpenFolder={() => onOpenFolder(entry.outputDir)} />
+                      <PreviousJobRow key={entry.jobId} entry={entry} hasDetails={Boolean(sessionJobs[entry.jobId])} onOpen={() => onOpenEntry(entry)} onOpenFolder={() => onOpenFolder(entry.outputDir)} onResume={() => onResume(entry.jobId)} resuming={resumingId === entry.jobId} />
                     ))}
                   </ul>
                 </div>
@@ -459,7 +466,7 @@ const STATUS_TEXT: Record<HistoryEntry['status'], string> = {
 }
 
 /** One line per run: status, title, then clips, run time, cost and date in aligned columns. */
-function PreviousJobRow({ entry, hasDetails, onOpen, onOpenFolder }: { entry: HistoryEntry; hasDetails: boolean; onOpen: () => void; onOpenFolder: () => void }): React.JSX.Element {
+function PreviousJobRow({ entry, hasDetails, onOpen, onOpenFolder, onResume, resuming }: { entry: HistoryEntry; hasDetails: boolean; onOpen: () => void; onOpenFolder: () => void; onResume: () => void; resuming: boolean }): React.JSX.Element {
   const [inspecting, setInspecting] = useState(false)
   const [progress, setProgress] = useState<{ outputDir: string; remaining: number } | null>(null)
   const closeInspector = useCallback(() => setInspecting(false), [])
@@ -517,6 +524,7 @@ function PreviousJobRow({ entry, hasDetails, onOpen, onOpenFolder }: { entry: Hi
       ) : (
         <div className={cellClass}>{cells}</div>
       )}
+      {entry.resumable && <Button size="sm" variant="ghost" loading={resuming} disabled={resuming} onClick={onResume}>Resume job</Button>}
       <ActionMenu label={`Actions for ${entry.videoTitle}`} actions={[
         { label: completed ? 'Open in Library' : 'Open job', icon: <ListVideo className="h-3.5 w-3.5" />, disabled: !openable, onSelect: onOpen },
         { label: 'Open folder', icon: <FolderOpen className="h-3.5 w-3.5" />, onSelect: onOpenFolder },
@@ -527,14 +535,15 @@ function PreviousJobRow({ entry, hasDetails, onOpen, onOpenFolder }: { entry: Hi
   )
 }
 
-function JobCancelled({ job, leading, onRetry }: { job: Job; leading: React.ReactNode; onRetry: () => void }): React.JSX.Element {
+function JobCancelled({ job, leading, onRetry, retrying }: { job: Job; leading: React.ReactNode; onRetry: () => void; retrying: boolean }): React.JSX.Element {
   return (
     <Page width="focus">
       <div className="mb-3">{leading}</div>
       <h1 className="text-xl font-semibold tracking-[-0.02em] text-ink">Job cancelled</h1>
       <p className="mt-1 truncate text-sm text-ink-muted" title={job.request.videoUrl}>{sourceLabel(job.request.videoUrl)}</p>
       <div className="mt-4">
-        <Button variant="primary" icon={<RotateCcw className="h-3.5 w-3.5" />} onClick={onRetry}>Run again</Button>
+        <Button variant="primary" icon={<RotateCcw className="h-3.5 w-3.5" />} loading={retrying} disabled={retrying} onClick={onRetry}>Resume job</Button>
+        <p className="mt-2 text-xs text-ink-muted">Reuses saved progress. Unfinished AI steps may use credits.</p>
       </div>
     </Page>
   )

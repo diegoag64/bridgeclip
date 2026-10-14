@@ -189,3 +189,16 @@ test('saved stage timing boundary rejects invalid values and strips arbitrary fi
   const output = jobOutput.parseJobOutput({ job_id: 'x', clips: [], metrics: { pipeline_stages: [valid] } })
   assert.equal(output.metrics.pipeline_stages[0].elapsed_ms, 5000)
 })
+
+test('resuming the same run advances its revision and waits for the failed worker to exit', () => {
+  const f = setup(); f.enqueue('resume')
+  f.starts[0].sink.webContents.send('job:error', { message: 'Interrupted' })
+  const failedRevision = f.manager.getJob('resume').revision
+  assert.equal(f.manager.isJobStillActive('resume'), true)
+  f.starts[0].onExit()
+  assert.equal(f.manager.isJobStillActive('resume'), false)
+  f.enqueue('resume')
+  assert.ok(f.manager.getJob('resume').revision > failedRevision)
+  assert.equal(f.starts.length, 2)
+  assert.equal(f.manager.isJobStillActive('resume'), true)
+})

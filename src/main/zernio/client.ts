@@ -1,6 +1,6 @@
 import { isZernioId, isZernioPlatform, type ZernioAccount, type ZernioPlatform, type ZernioProfile } from '../../shared/zernio'
 import { isIP } from 'net'
-import { readResponseText } from '../http-response'
+import { fetchTextWithRetry } from '../http-retry'
 import { assertPublicWebUrl, isPublicAddress } from '../network-policy'
 import { randomUUID } from 'crypto'
 import { logger } from '../logger'
@@ -337,7 +337,7 @@ export class ZernioClient {
     let response: Response
     let raw: string
     try {
-      response = await fetch(`${this.baseUrl}${path}`, {
+      const result = await fetchTextWithRetry(`${this.baseUrl}${path}`, {
         method,
         headers: {
           Authorization: `Bearer ${this.apiKey}`,
@@ -345,11 +345,13 @@ export class ZernioClient {
           ...(body ? { 'Content-Type': 'application/json' } : {})
         },
         body: body ? JSON.stringify(body) : undefined,
-        redirect: 'error',
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
-      })
-      raw = await readResponseText(response, 2 * 1024 * 1024)
-    } catch {
+        redirect: 'error'
+      }, { timeoutMs: REQUEST_TIMEOUT_MS, maxBytes: 2 * 1024 * 1024,
+        retry: method === 'GET' && !path.startsWith('/connect/'), operation, beforeAttempt: throwIfRateLimited,
+        onResponse: (response) => { if (response.status !== 429) noteRateLimit(response.headers) } })
+      response = result.response; raw = result.text
+    } catch (error) {
+      if (error instanceof ZernioApiError) throw error
       logger.warn('zernio.request.failed', { ...context, status: 0, category: 'network', durationMs: Date.now() - startedAt })
       throw new ZernioApiError('Could not reach Zernio. Check your internet connection and try again.', 0, 'network_error')
     }
@@ -525,7 +527,7 @@ export class ZernioClient {
     let response: Response
     let raw: string
     try {
-      response = await fetch(`${this.baseUrl}${path}`, {
+      const result = await fetchTextWithRetry(`${this.baseUrl}${path}`, {
         method,
         headers: {
           Authorization: `Bearer ${this.apiKey}`,
@@ -534,11 +536,13 @@ export class ZernioClient {
           ...(options.requestId ? { 'x-request-id': options.requestId } : {})
         },
         body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
-        redirect: 'error',
-        signal: AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS)
-      })
-      raw = await readResponseText(response, 2 * 1024 * 1024)
+        redirect: 'error'
+      }, { timeoutMs: options.timeoutMs ?? REQUEST_TIMEOUT_MS, maxBytes: 2 * 1024 * 1024,
+        retry: method === 'GET' || (method === 'POST' && path === '/media/presign'), operation, beforeAttempt: throwIfRateLimited,
+        onResponse: (response) => { if (response.status !== 429) noteRateLimit(response.headers) } })
+      response = result.response; raw = result.text
     } catch (error) {
+      if (error instanceof ZernioApiError) throw error
       const timedOut = error instanceof Error && error.name === 'TimeoutError'
       logger.warn('zernio.post.request.failed', { ...context, status: 0, category: timedOut ? 'timeout' : 'network', durationMs: Date.now() - startedAt })
       throw timedOut

@@ -8,9 +8,10 @@ import { open, readdir } from 'fs/promises'
 import { isAbsolute, join, relative, sep } from 'path'
 import { resolveBinary } from './tools'
 import { parseJobOutput, type JobOutput } from '../shared/job-output'
-import { readRunRecord } from './run-history'
+import { readRunRecord, readRunRequest } from './run-history'
 
 export interface JobHistoryEntry {
+  resumable?: boolean
   editorProject?: boolean
   candidateCount?: number
   favorite?: boolean
@@ -125,6 +126,7 @@ export async function getJobHistory(baseDir: string, activeJobIds: ReadonlySet<s
                   : record?.status === 'failed' || record?.status === 'cancelled'
                     ? record.status : 'incomplete'
                 entries.push({ jobId: dir.name, date: record?.startedAt ?? stat.mtime.toISOString(),
+                  resumable: status !== 'running' && Boolean(readRunRequest(baseDir, dir.name)),
                   videoTitle: record?.sourceLabel ?? 'Unfinished run', clipCount: 0,
                   status, outputDir: runDir, totalCostUsd: null,
                   finishedAt: record?.finishedAt ?? null, durationMs,

@@ -54,6 +54,7 @@ function ipcWithLibrary(library) {
     './zernio/service': {},
     './zernio/posts': {},
     './automations': {},
+    './automation-enhancement-jobs': {},
     './clip-editor': {},
     './output-storage': {},
     './edit-inspector': {},

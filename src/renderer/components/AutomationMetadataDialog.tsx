@@ -19,6 +19,7 @@ export function AutomationMetadataDialog({ automationId, item, youtubeOnly, onUp
   const [source, setSource] = useState(item.metadataDraft?.source ?? item.sourceContext ?? EMPTY_SOURCE)
   const [research, setResearch] = useState(true)
   const [working, setWorking] = useState<string | null>(null)
+  const requestInFlight = useRef(false)
   const [loading, setLoading] = useState(!item.metadataDraft)
   const [error, setError] = useState<string | null>(null)
   const draft = item.metadataDraft
@@ -39,14 +40,29 @@ export function AutomationMetadataDialog({ automationId, item, youtubeOnly, onUp
     return () => { previous?.focus() }
   }, [])
   const run = async (action: string, request: () => Promise<Automation[]>, close = false): Promise<void> => {
+    if (loading || requestInFlight.current) return
+    requestInFlight.current = true
     setWorking(action); onBusy(true); setError(null)
     try { onUpdated(await request()); if (close) onClose() }
     catch (cause) { setError(errorMessage(cause, 'Could not enhance metadata.')) }
-    finally { setWorking(null); onBusy(false) }
+    finally { requestInFlight.current = false; setWorking(null); onBusy(false) }
   }
   const busy = loading || Boolean(working)
+  const applyDraft = (): void => {
+    if (draft && !busy) void run('apply', () => getApi().automations.resolveDraft(automationId, item.id, draft.id, true), true)
+  }
   return <Dialog ref={panel} aria-labelledby={titleId} panelClassName="max-w-3xl" onKeyDown={(event) => {
     if (event.key === 'Escape' && !busy) { event.preventDefault(); onClose() }
+    if (draft && !busy && event.key === 'Enter' && !event.defaultPrevented && !event.repeat && !event.nativeEvent.isComposing
+      && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+      // Leave native controls and editable text to handle their own Enter key.
+      const target = event.target
+      if (target instanceof HTMLElement && !target.isContentEditable
+        && !target.closest('button, input, textarea, select, a, summary, [role="button"], [role="textbox"]')) {
+        event.preventDefault()
+        applyDraft()
+      }
+    }
     if (event.key === 'Tab') {
       const buttons = panel.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), [tabindex="0"]')
       if (!buttons?.length) { event.preventDefault(); return }
@@ -79,10 +95,11 @@ export function AutomationMetadataDialog({ automationId, item, youtubeOnly, onUp
       {working && <p role="status" className="text-sm text-ink-muted">{working === 'generate' ? 'Preparing transcript, researching the topic and writing a draft…' : 'Saving your choice…'}</p>}
     </div>
     <DialogFooter>
+      {draft && <span className="mr-auto text-xs text-ink-subtle">Press Enter to apply</span>}
       <Button disabled={busy} onClick={onClose}>{draft ? 'Review later' : 'Cancel'}</Button>
       {draft ? <>
         <Button disabled={busy} onClick={() => void run('discard', () => getApi().automations.resolveDraft(automationId, item.id, draft.id, false), true)}>Discard draft</Button>
-        <Button variant="primary" loading={working === 'apply'} disabled={busy} onClick={() => void run('apply', () => getApi().automations.resolveDraft(automationId, item.id, draft.id, true), true)}>Apply metadata</Button>
+        <Button variant="primary" aria-keyshortcuts="Enter" loading={working === 'apply'} disabled={busy} onClick={applyDraft}>Apply metadata</Button>
       </> : <Button variant="primary" loading={working === 'generate'} disabled={busy} onClick={() => void run('generate', () => getApi().automations.enhance(automationId, item.id, { source, research }))}>Generate draft</Button>}
     </DialogFooter>
   </Dialog>

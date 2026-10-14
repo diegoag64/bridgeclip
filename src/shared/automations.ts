@@ -117,6 +117,32 @@ export interface AutomationSourceGroup {
   contentIds: string[]
 }
 
+export interface EnhancementStage {
+  phase: 'preparing' | 'transcribing' | 'researching' | 'writing' | 'saving'
+  clipIndex?: number
+  clipTitle?: string
+}
+
+export interface EnhancementJob {
+  id: string
+  automationId: string
+  automationName: string
+  sourceTitle: string
+  total: number
+  processed: number
+  completed: number
+  failed: number
+  skipped: number
+  batchStart: number
+  batchEnd: number
+  stage: EnhancementStage
+  status: 'running' | 'completed' | 'stopped' | 'failed'
+  stopRequested: boolean
+  startedAt: number
+  finishedAt: number | null
+  errors: string[]
+}
+
 export interface AutomationBatchResult {
   automations: Automation[]
   completed: number

@@ -1,3 +1,4 @@
+import { EnhancementActivity } from './EnhancementActivity'
 import type { ReactNode } from 'react'
 import { Sidebar, type Page } from './Sidebar'
 
@@ -16,8 +17,9 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps): Reac
   return (
     <div className="app-backdrop drag relative flex h-screen w-screen overflow-hidden">
       <Sidebar currentPage={currentPage} onNavigate={onNavigate} />
-      <main className="relative min-w-0 flex-1">
-        <div id="page-scroll" className="no-drag h-full overflow-y-auto pt-10">
+      <main className="relative flex min-w-0 flex-1 flex-col pt-10">
+        <EnhancementActivity />
+        <div id="page-scroll" className="no-drag min-h-0 flex-1 overflow-y-auto">
           {children}
         </div>
         {/* Title-bar strip: drag handle, and the edge content scrolls under. Stops short of the scrollbar. */}

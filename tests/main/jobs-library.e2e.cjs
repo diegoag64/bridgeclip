@@ -98,7 +98,7 @@ test('Jobs actions inspect runs and open completed jobs in the shared Library vi
   await publish(snapshot(failedId, 'failed', failedDir))
   await failedActions.click()
   await page.getByRole('menuitem', { name: 'Open job', exact: true }).click()
-  await page.getByRole('button', { name: 'Run again', exact: true }).waitFor()
+  await page.getByRole('button', { name: 'Resume job', exact: true }).waitFor()
   assert.equal(await page.locator('button[aria-current="page"]').getAttribute('aria-label'), 'Jobs')
   await page.getByText('Test failure', { exact: true }).waitFor()
   const structuredError = JSON.stringify({ message: 'Provider temporarily unavailable', retryable: true })
@@ -107,6 +107,23 @@ test('Jobs actions inspect runs and open completed jobs in the shared Library vi
   await errorDetails.getByText('"Provider temporarily unavailable"', { exact: true }).waitFor()
   await errorDetails.getByRole('radio', { name: 'Original', exact: true }).click()
   assert.equal(await errorDetails.getByRole('textbox', { name: 'Original JSON' }).inputValue(), structuredError)
+  // Hold the transport response to exercise the visible retry state without
+  // launching paid processing. Persistence and admission run in main tests.
+  await app.evaluate(({ ipcMain }) => {
+    ipcMain.removeHandler('job:resume')
+    ipcMain.handle('job:resume', (_event, id) => new Promise(resolve => {
+      globalThis.resumedJobId = id
+      globalThis.finishResume = resolve
+    }))
+  })
+  const resume = page.getByRole('button', { name: 'Resume job', exact: true })
+  if (process.env.BRIDGECLIP_E2E_SHOTS) await page.screenshot({ path: path.join(process.env.BRIDGECLIP_E2E_SHOTS, 'resume-job.png') })
+  await resume.click()
+  await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent.includes('Resume job') && button.disabled))
+  assert.equal(await app.evaluate(() => globalThis.resumedJobId), failedId)
+  await app.evaluate(() => globalThis.finishResume({ error: 'Test recovery unavailable' }))
+  await page.getByText('Test recovery unavailable', { exact: true }).waitFor()
+  assert.equal(await resume.isEnabled(), true)
   await jobs()
 
   const liveDir = writeRun(liveId, 'Watched test run', 'running')

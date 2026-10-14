@@ -8,6 +8,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Mai
 
 ### Added
 
+- **Resume job** in Jobs continues failed, cancelled or interrupted runs using saved processing checkpoints, including completed transcription chunks and prepared editor clips, even after restarting the app.
+
 - **Default caption** on the Captions page lets you choose a saved or built-in preset for new clips in Create and Chat, or follow your first bookmark. Existing drafts keep their selected style.
 - Caption bookmarks keep favorite defaults and custom presets easy to find across app launches. Create and the clip editor offer an **All / Favorites** filter, with bookmarks first in each style group.
 - **Crash reports** in Settings → About lets you review and copy a local issue report after an app or interface error. Reports omit keys, media paths and raw error messages; Help also offers **Copy Latest Crash Report**.
@@ -36,6 +38,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Mai
 
 ### Changed
 
+- **Review draft** accepts enhanced metadata with Enter, with a shortcut hint in the popup.
+- Content bank rows show clip duration, keep long titles compact with an instant full-title tooltip, and offer **View in Library** in the **…** menu.
+- **Enhance by source video** now defaults to AI discovery titles and descriptions, with natural topic keywords, saved creator credit and the original YouTube link. The optional prompt only needs extra direction.
+
 - **First bookmark** now prefers bookmarked custom caption presets, then bookmarked built-ins, with Pop as the fallback in both Create and Chat.
 - Library item details pairs the source video with a compact 2×2 grid of run statistics, combines search and sorting in one toolbar, and moves transcript, stage timings, folder access and post-status refresh into the **…** menu.
 - **Your presets** on the Captions page uses the same cards as Default presets, with three cards per row, preview selection, bookmarks and a compact menu for edit, duplicate and delete.
@@ -58,6 +64,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Mai
 - Editor previews use much less disk space, and downloaded sources are moved into the project instead of copied.
 
 ### Fixed
+
+- Queued clipping jobs keep their original review and vocabulary settings. Resuming preserves final render QA and skips completed candidate reviews, including discovery results, instead of repeating their paid work.
+- **Enhance by source video** keeps live progress and stop controls visible when switching tabs or reloading the window. The progress panel shows the current stage, elapsed time, processed clips, draft counts and any failures.
+
+- Automations recover from temporary connection failures during account checks and uploads. Manual **Retry clip** shows a spinner and **Retrying clip…** until the attempt finishes.
+- Metadata enhancement retries temporary transcription failures and empty provider responses; connection errors no longer suggest that a playable clip has no audio.
+
+- Metadata enhancement selects supporting transcript excerpts directly, avoiding grounding failures caused by the writer rewording evidence quotes.
 
 - Baked captions use a complete background block with the selected horizontal and vertical padding, including multiple lines. Previews show the same rectangular background.
 - Reselecting a custom caption preset in Create or the editor applies its latest saved settings. Existing clips keep their saved appearance until you select it again.

@@ -289,3 +289,47 @@ def test_oversized_stream_is_bounded_and_closed(service, monkeypatch, tmp_path):
     with pytest.raises(stt.TranscriptionProviderError, match="response_too_large"):
         request(service, monkeypatch, tmp_path, body=body)
     assert body.closed and body.reads == 2
+
+
+def test_resume_after_failure_reuses_paid_chunks_and_rejects_changed_audio(service, monkeypatch, tmp_path):
+    from clip_engine.job_checkpoint import CURRENT, Checkpoints
+    path = tmp_path / 'source.wav'
+    path.write_bytes(b'original audio')
+    monkeypatch.setattr(service, '_audio_duration', lambda _: 601)
+    monkeypatch.setattr(service, '_extract_chunk', lambda *a: None)
+    request = AsyncMock(side_effect=[reply('First.'), stt.TranscriptionProviderError('auth', 401)])
+    monkeypatch.setattr(service, '_request_transcript', request)
+    token = CURRENT.set(Checkpoints(tmp_path / 'checkpoint'))
+    try:
+        with pytest.raises(stt.TranscriptionProviderError):
+            asyncio.run(service.transcribe_audio(str(path)))
+        assert request.await_count == 2
+    finally:
+        CURRENT.reset(token)
+
+    # A new store instance simulates restarting the worker/app, not an in-memory retry.
+    request.reset_mock(side_effect=True)
+    request.side_effect = [reply('Second.', 1.3, 1.8), reply('Tail.', 1.1, 1.5)]
+    token = CURRENT.set(Checkpoints(tmp_path / 'checkpoint'))
+    try:
+        result = asyncio.run(service.transcribe_audio(str(path)))
+        assert request.await_count == 2
+        assert result.full_text == 'First. Second. Tail.'
+        assert [s.start_time_ms for s in result.segments] == [100, 300300, 600100]
+        assert result.api_costs.estimated_cost_usd == .003
+        path.write_bytes(b'different audio')
+        request.reset_mock(side_effect=True)
+        request.side_effect = [reply('New.'), reply('New.', 1.3, 1.8), reply('New.', 1.1, 1.5)]
+        changed = asyncio.run(service.transcribe_audio(str(path)))
+        assert request.await_count == 3
+        assert changed.full_text == 'New. New. New.'
+    finally:
+        CURRENT.reset(token)
+
+
+def test_unicode_speaker_identifier_does_not_discard_billed_transcript(service, monkeypatch, tmp_path):
+    response = reply()
+    response['words'][0]['speaker'] = '²'
+    result, models = transcribe(service, monkeypatch, tmp_path, [response])
+    assert result.full_text == 'Hello.'
+    assert models == [TURBO]

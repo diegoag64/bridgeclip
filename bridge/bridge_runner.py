@@ -266,6 +266,7 @@ async def run(config: dict) -> bool:
         video_source = os.path.abspath(video_source)
 
     request = ClippingJobRequest(
+        checkpoint_enabled=True,
         video_url=video_source,
         workflow=config.get('workflow', 'automatic'),
         caption_preset=preset_name,

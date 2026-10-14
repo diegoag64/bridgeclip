@@ -649,3 +649,33 @@ def test_freed_editor_media_refuses_every_operation(monkeypatch, tmp_path):
             asyncio.run(run_editor({**config, 'action': action, 'source_id': 'a' * 32}))
         assert error.value.editor_code == 'source_missing'
     render.assert_not_called()
+
+
+def test_resume_editor_preparation_after_preview_failure_reuses_candidate_reviews(tmp_path):
+    from clip_engine.services.ai_clipping_pipeline import ClippingJobRequest
+    from clip_engine.job_checkpoint import CURRENT, Checkpoints
+    gate, calls = reviewer(lambda state, q: False)
+    source = tmp_path / 'original.mov'; source.write_bytes(b'original source')
+    out = tmp_path / 'run'; out.mkdir()
+    renderer = SimpleNamespace(_get_video_dimensions=AsyncMock(return_value=(1920, 1080)),
+        capture_framing_source=AsyncMock(side_effect=RuntimeError('Preview failed')))
+    request = ClippingJobRequest(video_url=str(source), layout_style='fit', checkpoint_enabled=True)
+    def segments(): return [ClipPlanSegment(0, 5000, .9, summary='First'), ClipPlanSegment(6000, 11000, .7, summary='Second')]
+    download = SimpleNamespace(video_path=str(source), metadata=SimpleNamespace(title='Original', duration_seconds=12))
+    token = CURRENT.set(Checkpoints(out / '.resume'))
+    try:
+        with pytest.raises(RuntimeError, match='Preview failed'):
+            asyncio.run(prepare_project(request, segments(), transcript(), download, renderer, gate, str(out), lambda *_: None))
+    finally: CURRENT.reset(token)
+    original_calls = len(calls)
+    assert original_calls > 0
+    async def preview(src, dest, **kwargs): Path(dest).write_bytes(b'preview')
+    renderer.capture_framing_source.side_effect = preview
+    token = CURRENT.set(Checkpoints(out / '.resume'))
+    try:
+        project = asyncio.run(prepare_project(request, segments(), transcript(), download, renderer, gate, str(out), lambda *_: None))
+    finally: CURRENT.reset(token)
+    assert len(calls) == original_calls
+    assert len(project['candidates']) == 2
+    assert all(c['review']['decision'] == 'needs_attention' for c in project['candidates'])
+    assert source.read_bytes() == (out / 'editor-source.mp4').read_bytes() == b'original source'

@@ -1,7 +1,8 @@
+import { useEnhancementStore } from '../store/use-enhancement-store'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { DragDropContext, Draggable, Droppable, type DraggableProvided, type DropResult } from '@hello-pangea/dnd'
-import { Check, FolderOpen, GripVertical, Info, Pencil, Play, Plus, RefreshCw, Sparkles, Trash2, Workflow, X } from 'lucide-react'
+import { Check, Clock3, FolderOpen, GripVertical, Info, Pencil, Play, Plus, RefreshCw, Sparkles, Trash2, Workflow, X } from 'lucide-react'
 import { canReorderContent, reorderQueuedContent, hasAutomationWarnings, hasContentWarnings, hasEnhancedMetadata } from '../../shared/automations'
 import { MAX_ENHANCEMENT_GUIDANCE, AUTOMATION_PLATFORMS, needsTikTokReview, nextAutomationContent, type Automation, type AutomationContent, type AutomationContentStatus, type AutomationUpdate, type AutomationSourceGroup } from '../../shared/automations'
 import { isPostableAccount, isValidProfileName } from '../../shared/zernio'
@@ -28,7 +29,7 @@ import { useAccountsStore } from '../store/use-accounts-store'
 import { useSettingsStore } from '../store/use-settings-store'
 import { getApi } from '../lib/ipc'
 import { useDataVersion } from '../store/use-data-version-store'
-import { cn, errorMessage, formatRelativeDate, isMac } from '../lib/utils'
+import { cn, errorMessage, formatRelativeDate, formatTimecode, isMac } from '../lib/utils'
 import type { Page as PageName } from '../components/Sidebar'
 
 function draftFor(automation: Automation): AutomationUpdate {
@@ -95,7 +96,9 @@ export function AutomationsPage({ onNavigate, onViewLibrary }: { onNavigate: (pa
   const [newProfileOpen, setNewProfileOpen] = useState(false)
   const [newProfileName, setNewProfileName] = useState('')
   const [newTime, setNewTime] = useState('09:00')
-  const [busy, setBusy] = useState<string | null>(null)
+  const [localBusy, setBusy] = useState<string | null>(null)
+  const enhancementJobs = useEnhancementStore(state => state.jobs)
+  const busy = localBusy ?? (enhancementJobs.some(job => job.automationId === selectedId && job.status === 'running') ? 'enhance-bulk' : null)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   // Do not let an in-flight poll replace the list during a drag or a save.
@@ -103,8 +106,6 @@ export function AutomationsPage({ onNavigate, onViewLibrary }: { onNavigate: (pa
   const refreshVersion = useRef(0)
   const [editing, setEditing] = useState<{ id: string; title: string; caption: string } | null>(null)
   const [enhancing, setEnhancing] = useState<{ automationId: string; contentId: string } | null>(null)
-  const [bulkProgress, setBulkProgress] = useState<string | null>(null)
-  const stopBulk = useRef(false)
   const [sourceGroups, setSourceGroups] = useState<AutomationSourceGroup[] | null>(null)
   const [sourceGroupKey, setSourceGroupKey] = useState('')
   const [sourceGuidance, setSourceGuidance] = useState<Record<string, string>>({})
@@ -113,6 +114,30 @@ export function AutomationsPage({ onNavigate, onViewLibrary }: { onNavigate: (pa
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null)
   const closeConfirm = useCallback(() => setConfirm(null), [])
   const selected = automations.find((automation) => automation.id === selectedId) ?? null
+  const [durations, setDurations] = useState<Record<string, number | null>>({})
+  const durationRequests = useRef(new Map<string, Promise<number | null>>())
+  const durationAutomationId = selected?.id
+  // Polls and queue reorders should not restart local media inspection.
+  const durationContentIds = selected?.content.map((item) => item.id).sort().join('|') ?? ''
+  useEffect(() => {
+    if (!durationAutomationId || !durationContentIds) return
+    let active = true
+    void (async () => {
+      // Probe serially in the background instead of launching one process per row.
+      for (const id of durationContentIds.split('|')) {
+        if (!active) break
+        const key = `${durationAutomationId}:${id}`
+        let request = durationRequests.current.get(key)
+        if (!request) {
+          request = getApi().automations.duration(durationAutomationId, id).catch(() => null)
+          durationRequests.current.set(key, request)
+        }
+        const duration = await request
+        if (active) setDurations((previous) => previous[key] === duration ? previous : { ...previous, [key]: duration })
+      }
+    })()
+    return () => { active = false }
+  }, [durationAutomationId, durationContentIds])
   const aiKeysMissing = !writingConfigured
   const automationsVersion = useDataVersion('automations')
 
@@ -188,34 +213,12 @@ export function AutomationsPage({ onNavigate, onViewLibrary }: { onNavigate: (pa
     if (!selected) return
     const group = sourceGroups?.find((group) => group.key === sourceGroupKey)
     if (!group) return
-    const ids = group.contentIds.slice(0, 30)
-    const guidance = sourceGuidance[group.key] ?? ''
-    setBusy('enhance-bulk'); setError(null); setNotice(null); stopBulk.current = false
-    let completed = 0
-    let skipped = 0
-    let attempted = 0
-    const failures: string[] = []
+    setBusy('enhance-bulk'); setError(null); setNotice(null)
     try {
-      for (let offset = 0; offset < ids.length; offset += 5) {
-        if (stopBulk.current) break
-        setBulkProgress(`${group.title} · preparing clips ${offset + 1}–${Math.min(offset + 5, ids.length)} of ${ids.length}`)
-        try {
-          const result = await getApi().automations.enhanceBatch(selected.id, ids.slice(offset, offset + 5), group.key, guidance)
-          setAutomations(result.automations)
-          completed += result.completed
-          skipped += result.skipped
-          attempted += ids.slice(offset, offset + 5).length
-          failures.push(...result.errors.map((error) => `${selected.content.find((item) => item.id === error.contentId)?.title ?? 'Clip'}: ${error.message}`))
-        } catch (cause) {
-          const message = errorMessage(cause, 'Could not generate this batch.')
-          const batchIds = ids.slice(offset, offset + 5)
-          attempted += batchIds.length
-          failures.push(...batchIds.map((id) => `${selected.content.find((item) => item.id === id)?.title ?? 'Clip'}: ${message}`))
-        }
-      }
-      setNotice(`${completed} drafts ready to review · ${failures.length} failed · ${skipped} already handled · ${ids.length - attempted} not attempted. ${stopBulk.current ? 'Stopped after the current batch.' : 'All selected clips were attempted.'} Failed clips remain available to retry; research and transcripts are reused.`)
-      if (failures.length) setError(`${failures.length} clips need another attempt. ${failures.slice(0, 3).join(' · ')}`)
-    } finally { setBusy(null); setBulkProgress(null); setSourceGroups(null) }
+      await useEnhancementStore.getState().start(selected.id, group.key, sourceGuidance[group.key] ?? '')
+      setSourceGroups(null)
+    } catch (cause) { setError(errorMessage(cause, 'Could not start enhancement.')) }
+    finally { setBusy(null) }
   }
 
   const create = async (name: string): Promise<boolean> => {
@@ -253,7 +256,7 @@ export function AutomationsPage({ onNavigate, onViewLibrary }: { onNavigate: (pa
 
   const retryContent = async (item: AutomationContent): Promise<void> => {
     if (!selected || busy || dirty || editing) return
-    const result = await mutate('retry-content', () => getApi().automations.retryContent(selected.id, item.id))
+    const result = await mutate(`retry-content:${item.id}`, () => getApi().automations.retryContent(selected.id, item.id))
     const updated = result?.find((automation) => automation.id === selected.id)
     if (!updated) return
     if (updated.lastError) setError(updated.lastError)
@@ -703,19 +706,18 @@ export function AutomationsPage({ onNavigate, onViewLibrary }: { onNavigate: (pa
                   {sourceGroups.length ? <>
                     <Field label="Original video" htmlFor="enhancement-source-video"><Select id="enhancement-source-video" value={sourceGroupKey} disabled={Boolean(busy)} onChange={setSourceGroupKey} options={sourceGroups.map((group) => ({ value: group.key, label: `${group.title} · ${group.contentIds.length} ${group.contentIds.length === 1 ? 'clip' : 'clips'}` }))} /></Field>
                     <p className="text-xs text-ink-muted">{activeSourceGroup?.sourceType === 'linked'
-                      ? 'Linked video · We’ll use the original description. Add a prompt to guide the enhancements.'
-                      : 'Attached file · Tell us what the video is about and how you’d like to enhance its clips. No link is needed.'}</p>
+                      ? 'Linked video · AI shorts defaults include clip-specific titles, natural search keywords, creator credit and a link to the original video. Source details are used when available.'
+                      : 'Attached file · AI shorts defaults include clip-specific titles and natural search keywords. Creator credit is included when known; no source link is invented.'}</p>
                     <Field label="Enhancement prompt (optional)" htmlFor="enhancement-guidance">
                       <TextArea id="enhancement-guidance" rows={3} maxLength={MAX_ENHANCEMENT_GUIDANCE} disabled={Boolean(busy)} value={sourceGuidance[sourceGroupKey] ?? ''}
                         onChange={(event) => setSourceGuidance((previous) => ({ ...previous, [sourceGroupKey]: event.target.value }))}
-                        placeholder="e.g. A workshop on building reliable AI tools. Focus on practical tips for developers, with clear, conversational titles." />
+                        placeholder="Defaults already cover AI discovery and source attribution. Add a specific angle here, e.g. focus on what this means for developers." />
                     </Field>
-                    <p className="text-xs text-ink-subtle">Describe the topic, audience, tone, or points to emphasize. Each draft stays grounded in what its clip actually says. Up to {MAX_ENHANCEMENT_GUIDANCE.toLocaleString()} characters.</p>
+                    <p className="text-xs text-ink-subtle">No prompt needed. Optional notes refine the audience, tone or angle. Each draft uses its own clip transcript for claims and saved source details for attribution. Up to {MAX_ENHANCEMENT_GUIDANCE.toLocaleString()} characters.</p>
                     <p className="text-xs text-ink-muted">Research is shared across this video’s clips and reused for 7 days when the context and prompt match. Each clip keeps its own transcript and reviewable draft. Already reviewed metadata is skipped. Up to 30 clips per batch.</p>
                     <Button size="sm" disabled={Boolean(busy) || dirty} onClick={() => void enhanceQueued()}>Enhance {Math.min(30, activeSourceGroup?.contentIds.length ?? 0)} {activeSourceGroup?.contentIds.length === 1 ? 'clip' : 'clips'} from this video</Button>
                   </> : <p className="text-sm text-ink-muted">No queued clips need a new draft.</p>}
                 </div>}
-                {bulkProgress && <Callout tone="info" className="mt-3" action={<Button size="sm" onClick={() => { stopBulk.current = true; setBulkProgress('Stopping after the current operation…') }}>Stop after batch</Button>}>{bulkProgress}</Callout>}
                 <DragDropContext key={selected.id} onBeforeCapture={() => { contentInteraction.current = true; refreshVersion.current++ }} onDragEnd={(result) => void moveContent(result)}>
                   {contentGroups.filter((group) => !['Needs attention', 'Held clips'].includes(group.label) || group.items.length > 0).map((group) => (
                     <section key={group.label} aria-label={group.label} className="border-t border-white/[0.06]">
@@ -735,6 +737,7 @@ export function AutomationsPage({ onNavigate, onViewLibrary }: { onNavigate: (pa
                                 dragProvided={provided}
                                 dragging={snapshot.isDragging}
                                 item={item}
+                                durationMs={durations[`${selected.id}:${item.id}`]}
                                 nextUp={item.id === nextClip?.id}
                                 tiktokReviewNeeded={item.status === 'queued' && needsTikTokReview(selected, item)}
                                 tiktokSelected={selected.accounts.some((account) => account.platform === 'tiktok')}
@@ -747,6 +750,7 @@ export function AutomationsPage({ onNavigate, onViewLibrary }: { onNavigate: (pa
                                 enhancementDisabled={dirty || !writingConfigured}
                                 enhanced={hasEnhancedMetadata(item, selected.accounts.length ? selected.accounts.map((account) => account.platform) : ['youtube'])}
                                 onRetry={() => void retryContent(item)}
+                                retrying={busy === `retry-content:${item.id}`}
                                 retryDisabled={dirty || Boolean(editing) || needsTikTokReview(selected, item)}
                                 onDismissError={() => { if (!busy) void mutate('dismiss-warning', () => getApi().automations.acknowledgeWarnings(selected.id, item.id)) }}
                                 onDismissMetadataError={() => { if (!busy) void mutate('dismiss-metadata', () => getApi().automations.dismissMetadataError(selected.id, item.id)) }}
@@ -874,8 +878,9 @@ function CreateForm({ busy, onCreate, onCancel, autoFocus, size = 'md', classNam
   )
 }
 
-function ContentRow({ item, nextUp, tiktokReviewNeeded, tiktokSelected, onReviewTikTok, reviewDisabled, editing, busy, onEdit, onChange, onSave, onReturnToQueue, onRefreshPost, onRemove, onCheckPosts, onViewLibrary, onShowInFolder, onEnhance, enhancementDisabled, enhanced, dragProvided, dragging, onDismissMetadataError, onDismissError, onRetry, retryDisabled }: {
+function ContentRow({ item, durationMs, nextUp, tiktokReviewNeeded, tiktokSelected, onReviewTikTok, reviewDisabled, editing, busy, onEdit, onChange, onSave, onReturnToQueue, onRefreshPost, onRemove, onCheckPosts, onViewLibrary, onShowInFolder, onEnhance, enhancementDisabled, enhanced, dragProvided, dragging, onDismissMetadataError, onDismissError, onRetry, retrying, retryDisabled }: {
   item: AutomationContent
+  durationMs: number | null | undefined
   nextUp: boolean
   tiktokReviewNeeded: boolean
   tiktokSelected: boolean
@@ -900,6 +905,7 @@ function ContentRow({ item, nextUp, tiktokReviewNeeded, tiktokSelected, onReview
   onDismissMetadataError: () => void
   onDismissError: () => void
   onRetry: () => void
+  retrying: boolean
   retryDisabled: boolean
 }): React.JSX.Element {
   const status = item.status === 'needs_review' && item.warningsAcknowledged ? { label: 'Held · Warning acknowledged', tone: 'neutral' as const }
@@ -913,13 +919,18 @@ function ContentRow({ item, nextUp, tiktokReviewNeeded, tiktokSelected, onReview
       <div className="flex min-h-8 flex-wrap items-center gap-2">
         {canReorderContent(item) && <span role="button" tabIndex={-1} aria-disabled={!dragProvided.dragHandleProps} {...dragProvided.dragHandleProps} aria-label={`Reorder ${item.title}`} title="Drag to reorder. Or press Space, use arrow keys, then Space to drop; Escape to cancel." className={cn('touch-none rounded p-1 text-ink-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent', dragProvided.dragHandleProps ? 'cursor-grab hover:bg-fill-hover hover:text-ink active:cursor-grabbing' : 'cursor-default opacity-40')}><GripVertical className="h-3.5 w-3.5" /></span>}
         <div className="flex min-w-0 flex-1 basis-48 items-center gap-2">
-          <p className="truncate text-xs text-ink">{item.title}</p>
+          <HoverCard openDelay={0} className="min-w-0 max-w-[40ch]" cardClassName="w-max max-w-[min(28rem,calc(100vw-16px))]" content={<p className="break-words px-3 py-2 text-xs leading-relaxed">{item.title}</p>}>
+            <p className="truncate text-xs text-ink">{item.title}</p>
+          </HoverCard>
           {item.metadataDraft && <Badge tone="warning">Draft to review</Badge>}
           {item.status === 'posting' && <Badge tone="accent">Submitting…</Badge>}
           {nextUp && <Badge tone="accent" className="h-4 px-1.5 text-[10px]">Next up</Badge>}
         </div>
+        <span className="flex w-16 shrink-0 items-center justify-end gap-1.5 text-xs tabular-nums text-ink-muted" aria-label={durationMs == null ? 'Duration unavailable' : `Duration ${formatTimecode(durationMs)}`} title={durationMs == null ? 'Duration unavailable' : 'Video duration'}>
+          <Clock3 aria-hidden className="h-3 w-3 shrink-0" />{durationMs == null ? '—' : formatTimecode(durationMs)}
+        </span>
         <div className="ml-auto flex shrink-0 items-center gap-1">
-          {item.status === 'queued' && !item.postId && item.error && <Button size="sm" variant="secondary" icon={<RefreshCw className="h-3 w-3" />} disabled={busy || retryDisabled || Boolean(item.metadataDraft)} onClick={onRetry} title="Retry this clip now, using the saved automation settings">Retry clip</Button>}
+          {(retrying || (item.status === 'queued' && !item.postId && item.error)) && <Button size="sm" variant="secondary" icon={<RefreshCw className="h-3 w-3" />} loading={retrying} aria-busy={retrying} disabled={busy || retryDisabled || Boolean(item.metadataDraft)} onClick={onRetry} title="Retry this clip now, using the saved automation settings">{retrying ? 'Retrying clip…' : 'Retry clip'}</Button>}
           {item.status === 'queued' && !item.postId && (item.metadataDraft || !enhanced) && <Button size="sm" variant="ghost" disabled={busy || (!item.metadataDraft && enhancementDisabled)} onClick={onEnhance}>{item.metadataDraft ? 'Review draft' : 'Enhance'}</Button>}
           {tiktokReviewNeeded && <Button size="sm" variant="secondary" onClick={onReviewTikTok} disabled={busy || reviewDisabled || Boolean(item.metadataDraft)}>Review TikTok</Button>}
           {item.status === 'needs_review' && <Button size="sm" variant="secondary" onClick={onReturnToQueue} disabled={busy || Boolean(editing)} title={editing ? 'Save or close the editor first' : 'Review and return this clip to the queue'}>Return to queue</Button>}
@@ -946,9 +957,9 @@ function ContentRow({ item, nextUp, tiktokReviewNeeded, tiktokSelected, onReview
               </div>}
             </div>
           }><Info aria-hidden className="h-4 w-4" /></HoverCard>
-          <Button size="sm" variant="ghost" icon={<FolderOpen className="h-3.5 w-3.5" />} disabled={busy} onClick={onViewLibrary} aria-label={`View ${item.title} in Library`} title="Show this clip in Library">View in Library</Button>
           <ActionMenu label={`Actions for ${item.title}`} disabled={busy || item.status === 'posting'} actions={[
             { label: editing ? 'Close editor' : 'Edit', icon: <Pencil className="h-3.5 w-3.5" />, disabled: Boolean(item.metadataDraft), onSelect: onEdit },
+            { label: 'View in Library', icon: <FolderOpen className="h-3.5 w-3.5" />, onSelect: onViewLibrary },
             { label: isMac ? 'Show in Finder' : 'Show in folder', icon: <FolderOpen className="h-3.5 w-3.5" />, onSelect: onShowInFolder },
             ...(item.status === 'queued' && tiktokSelected && !tiktokReviewNeeded ? [{ label: 'Edit TikTok', disabled: reviewDisabled || Boolean(item.metadataDraft), onSelect: onReviewTikTok }] : []),
             { label: item.status === 'posted' ? 'Remove from history' : item.postId ? 'Remove clip' : 'Remove from queue', icon: <X className="h-3.5 w-3.5" />, onSelect: onRemove }

@@ -1,3 +1,4 @@
+import type { EnhancementJob } from '../shared/automations'
 import type { CrashReport } from '../shared/crash-report'
 import type { CustomCaptionPreset } from '../shared/custom-captions'
 import type { CaptionPreferences } from '../shared/caption-preferences'
@@ -54,6 +55,7 @@ export interface ClipSettings extends JevThresholdSettings {
 export type { ClipJobRequest, JobSnapshot } from '../shared/jobs'
 
 export interface HistoryEntry {
+  resumable?: boolean
   editorProject?: boolean
   candidateCount?: number
   favorite?: boolean
@@ -147,8 +149,12 @@ export interface BridgeClipAPI {
     acknowledgeWarnings: (id: string | null, contentId?: string) => Promise<Automation[]>
     dismissMetadataError: (id: string, contentId: string) => Promise<Automation[]>
     libraryClip: (id: string, contentId: string) => Promise<LibraryClipTarget | null>
+    duration: (id: string, contentId: string) => Promise<number | null>
     showInFolder: (id: string, contentId: string) => Promise<boolean>
     reorder: (id: string, contentId: string, beforeId: string | null) => Promise<Automation[]>
+    startEnhancement: (id: string, key: string, guidance: string) => Promise<EnhancementJob>
+    enhancementJobs: () => Promise<EnhancementJob[]>
+    controlEnhancement: (id: string, action: 'stop' | 'dismiss') => Promise<EnhancementJob[]>
     enhancementGroups: (id: string) => Promise<AutomationSourceGroup[]>
     enhanceBatch: (id: string, contentIds: string[], key: string, guidance?: string) => Promise<AutomationBatchResult>
     source: (id: string, contentId: string) => Promise<AutomationSourceContext | null>
@@ -220,6 +226,7 @@ export interface BridgeClipAPI {
   job: {
     /** Queues a clipping run; it starts right away when a slot is free (`queued: false`). */
     start: (config: ClipJobRequest) => Promise<{ jobId?: string; queued?: boolean; job?: JobSnapshot; error?: string }>
+    resume: (jobId: string) => Promise<{ jobId?: string; queued?: boolean; job?: JobSnapshot; error?: string }>
     cancel: (jobId: string) => Promise<boolean>
     /** Every job the main process knows about this session, newest first. */
     list: () => Promise<JobSnapshot[]>
@@ -348,8 +355,12 @@ const api: BridgeClipAPI = {
     acknowledgeWarnings: (id, contentId) => ipcRenderer.invoke('automations:acknowledgeWarnings', id, contentId),
     dismissMetadataError: (id, contentId) => ipcRenderer.invoke('automations:dismissMetadataError', id, contentId),
     libraryClip: (id, contentId) => ipcRenderer.invoke('automations:libraryClip', id, contentId),
+    duration: (id, contentId) => ipcRenderer.invoke('automations:duration', id, contentId),
     showInFolder: (id, contentId) => ipcRenderer.invoke('automations:showInFolder', id, contentId),
     reorder: (id, contentId, beforeId) => ipcRenderer.invoke('automations:reorder', id, contentId, beforeId),
+    startEnhancement: (id, key, guidance) => ipcRenderer.invoke('automations:startEnhancement', id, key, guidance),
+    enhancementJobs: () => ipcRenderer.invoke('automations:enhancementJobs'),
+    controlEnhancement: (id, action) => ipcRenderer.invoke('automations:controlEnhancement', id, action),
     enhancementGroups: (id) => ipcRenderer.invoke('automations:enhancementGroups', id),
     enhanceBatch: (id, contentIds, key, guidance) => ipcRenderer.invoke('automations:enhanceBatch', id, contentIds, key, guidance),
     source: (id, contentId) => ipcRenderer.invoke('automations:source', id, contentId),
@@ -408,6 +419,7 @@ const api: BridgeClipAPI = {
   },
   job: {
     start: (config) => ipcRenderer.invoke('job:start', config),
+    resume: (jobId) => ipcRenderer.invoke('job:resume', jobId),
     cancel: (jobId) => ipcRenderer.invoke('job:cancel', jobId),
     list: () => ipcRenderer.invoke('jobs:list'),
     dismiss: (jobId) => ipcRenderer.invoke('jobs:dismiss', jobId),
