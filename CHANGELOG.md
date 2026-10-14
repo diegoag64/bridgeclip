@@ -65,6 +65,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Mai
 
 ### Fixed
 
+- Queued clipping jobs keep their original review and vocabulary settings. Resuming preserves final render QA and skips completed candidate reviews, including discovery results, instead of repeating their paid work.
 - **Enhance by source video** keeps live progress and stop controls visible when switching tabs or reloading the window. The progress panel shows the current stage, elapsed time, processed clips, draft counts and any failures.
 
 - Automations recover from temporary connection failures during account checks and uploads. Manual **Retry clip** shows a spinner and **Retrying clip…** until the attempt finishes.

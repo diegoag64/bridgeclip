@@ -248,16 +248,21 @@ def test_local_clips_link_on_same_volume_and_copy_across_volumes(monkeypatch, tm
 
 
 
-def test_resume_reuses_completed_paid_stages_and_cleans_checkpoints_on_success(monkeypatch, tmp_path):
+@pytest.fixture
+def resumable_pipeline(monkeypatch, tmp_path):
     from unittest.mock import AsyncMock
     from clip_engine.services.video_downloader import DownloadResult, VideoMetadata
     monkeypatch.setattr(RenderingService, '_verify_ffmpeg', lambda self: None)
     settings = pipeline_module.get_settings()
     monkeypatch.setattr(settings, 'local_mode', True)
     monkeypatch.setattr(settings, 'local_output_dir', str(tmp_path / 'out'))
-    monkeypatch.setattr(settings, 'jev_enabled', False)
+    monkeypatch.setattr(settings, 'jev_enabled', True)
     monkeypatch.setattr(settings, 'source_context_web_research', False)
     monkeypatch.setattr(settings.__class__, 'temp_directory', property(lambda self: str(tmp_path / 'work')))
+    monkeypatch.setattr(settings, 'openrouter_api_key', 'test-no-network')
+    async def forbid_network(*args, **kwargs):
+        raise AssertionError('Unexpected provider request')
+    monkeypatch.setattr(pipeline_module.JevService, 'evaluate', forbid_network)
     async def download(url, output_dir):
         source = os.path.join(output_dir, 'source.mp4')
         with open(source, 'wb') as f: f.write(b'source')
@@ -269,11 +274,18 @@ def test_resume_reuses_completed_paid_stages_and_cleans_checkpoints_on_success(m
     rendering = AsyncMock(side_effect=RenderingError('Synthetic render interruption'))
     def pipeline():
         instance = AIClippingPipeline()
+        monkeypatch.setattr(instance.source_context_service, 'build', AsyncMock(return_value=None))
         monkeypatch.setattr(instance.video_downloader, 'download_video', downloading)
         monkeypatch.setattr(instance.transcription_service, 'transcribe', transcribing)
         monkeypatch.setattr(instance.intelligence_planner, 'plan_clips', planning)
         monkeypatch.setattr(instance.rendering_service, 'render_clip', rendering)
         return instance
+    return SimpleNamespace(make=pipeline, downloading=downloading, transcribing=transcribing, planning=planning, rendering=rendering)
+
+
+def test_resume_reuses_completed_paid_stages_and_cleans_checkpoints_on_success(monkeypatch, tmp_path, resumable_pipeline):
+    pipeline = resumable_pipeline.make
+    downloading, transcribing, planning, rendering = (getattr(resumable_pipeline, name) for name in ('downloading', 'transcribing', 'planning', 'rendering'))
     def request(): return ClippingJobRequest(video_url='https://example.com/video.mp4', job_id='resume-test', checkpoint_enabled=True)
     result = asyncio.run(pipeline().process_video(request()))
     assert result.status == JobStatus.FAILED
@@ -281,6 +293,9 @@ def test_resume_reuses_completed_paid_stages_and_cleans_checkpoints_on_success(m
     assert (checkpoint / 'work/source.mp4').read_bytes() == b'source'
     async def render(request):
         with open(request.output_path, 'wb') as f: f.write(b'mp4')
+        request.editorial_context['flags'].append('title_needs_review')
+        request.editorial_context['qa'] = {'evidence': {'retained_dialogue': 'hi'}, 'judgment': {'status': 'success', 'answers': {}}}
+        request.editorial_context['retained_source'] = [[0, 30000]]
         return RenderResult(output_path=request.output_path, file_size_bytes=3, duration_ms=30000)
     rendering.side_effect = render
     saving_run = pipeline()
@@ -301,3 +316,64 @@ def test_resume_reuses_completed_paid_stages_and_cleans_checkpoints_on_success(m
     assert (tmp_path / 'out/resume-test/clip_00.mp4').read_bytes() == b'mp4'
     audit = json.loads((tmp_path / 'out/resume-test/edit_audit.json').read_text())
     assert audit['candidates'][0]['status'] == 'rendered'
+    report = audit['candidates'][0]['report']
+    assert report['flags'] == ['title_needs_review']
+    assert report['qa']['judgment']['status'] == 'success'
+    assert report['retained_source'] == [[0, 30000]]
+    assert result.output.clips[0].editorial['flags'] == ['title_needs_review']
+    assert result.output.clips[0].editorial['status'] == 'success'
+
+
+@pytest.mark.parametrize('during_discovery', [False, True])
+def test_resume_skips_completed_candidate_reviews(monkeypatch, tmp_path, resumable_pipeline, during_discovery):
+    first_count = 2 if during_discovery else 3
+    plans = [ClipPlanResponse(segments=[ClipPlanSegment(i * 60000, i * 60000 + 30000, .9)
+                                      for i in range(first_count)], total_clips=first_count)]
+    if during_discovery:
+        plans.append(ClipPlanResponse(segments=[ClipPlanSegment(i * 60000, i * 60000 + 30000, .9)
+                                               for i in (2, 3, 4)], total_clips=3))
+    resumable_pipeline.planning.side_effect = plans
+    interrupted_start = 180000 if during_discovery else 120000
+    calls = []
+    stopped = False
+    resumed_budget = []
+    async def review(self, segment, report):
+        nonlocal stopped
+        calls.append(segment.start_time_ms)
+        if segment.start_time_ms == interrupted_start and not stopped:
+            stopped = True
+            raise asyncio.CancelledError()
+        if stopped:
+            resumed_budget.append((self.service.requests, self.service.reserved_tokens))
+        self.service.requests += 1
+        self.service.reserved_tokens += 100
+        if during_discovery:
+            report['coherence'] = {'attempts': [{'judgment': {'status': 'success'}}]}
+        segment.summary = f'Reviewed {segment.start_time_ms}'
+        return segment.start_time_ms != 60000
+    monkeypatch.setattr(pipeline_module.CoherenceReviewer, 'prepare', review)
+    protected = []
+    async def protect(service, transcript, start, end, report):
+        protected.append(start)
+        report['protected_source'].append([start, start + 500])
+    monkeypatch.setattr(pipeline_module, 'protect_acknowledgments', protect)
+    async def render(request):
+        with open(request.output_path, 'wb') as f: f.write(b'mp4')
+        return RenderResult(output_path=request.output_path, file_size_bytes=3, duration_ms=30000)
+    resumable_pipeline.rendering.side_effect = render
+    def request(): return ClippingJobRequest(video_url='https://example.com/video.mp4', job_id='candidate-resume', checkpoint_enabled=True)
+    first = resumable_pipeline.make()
+    first.intelligence_planner.discovery_limit = 3
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(first.process_video(request()))
+    result = asyncio.run(resumable_pipeline.make().process_video(request()))
+    assert result.status == JobStatus.COMPLETED, result.error
+    expected = [0, 60000, 120000, 180000, 180000] if during_discovery else [0, 60000, 120000, 120000]
+    assert calls == expected
+    assert protected == ([0, 120000, 180000] if during_discovery else [0, 120000])
+    assert resumed_budget == ([(3, 300)] if during_discovery else [(2, 200)])
+    assert resumable_pipeline.planning.await_count == (2 if during_discovery else 1)
+    audit = json.loads((tmp_path / 'out/candidate-resume/edit_audit.json').read_text())
+    assert [entry['status'] for entry in audit['candidates']] == ['rendered', 'rejected', 'rendered'] + (['rendered', 'selection_limit'] if during_discovery else [])
+    assert audit['candidates'][0]['title'] == 'Reviewed 0'
+    assert audit['candidates'][0]['report']['protected_source'] == [[0, 500]]

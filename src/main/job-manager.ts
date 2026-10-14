@@ -4,6 +4,7 @@ import { join } from 'path'
 import { cancelJob as cancelRunningJob, startClipJob, type ClipJobConfig, type JobEventSink } from './pipeline-runner'
 import { finishRunRecord } from './run-history'
 import { logger } from './logger'
+import type { AppSettings } from './settings-store'
 import { parseJobOutput } from '../shared/job-output'
 import { isActiveJobStatus, MAX_FINISHED_JOBS, MAX_PARALLEL_JOBS, type JobSnapshot, type JobStatus } from '../shared/jobs'
 
@@ -19,6 +20,7 @@ interface TrackedJob {
   snapshot: JobSnapshot
   config: ClipJobConfig
   outputDirectory: string
+  settings?: AppSettings
 }
 
 const jobs = new Map<string, TrackedJob>()
@@ -70,7 +72,7 @@ function pruneFinished(): void {
 }
 
 /** Track a new job (its run record already exists) and start it as soon as a slot is free. */
-export function enqueueJob(jobId: string, config: ClipJobConfig, outputDirectory: string): JobSnapshot {
+export function enqueueJob(jobId: string, config: ClipJobConfig, outputDirectory: string, settings?: AppSettings): JobSnapshot {
   const snapshot: JobSnapshot = {
     id: jobId,
     revision: (jobs.get(jobId)?.snapshot.revision ?? -1) + 1,
@@ -91,7 +93,8 @@ export function enqueueJob(jobId: string, config: ClipJobConfig, outputDirectory
     startedAt: null,
     finishedAt: null
   }
-  jobs.set(jobId, { snapshot, config, outputDirectory })
+  // Execution settings stay in the main process, outside renderer snapshots.
+  jobs.set(jobId, { snapshot, config, outputDirectory, settings: settings ? { ...settings } : undefined })
   queue.push(jobId)
   broadcast(snapshot)
   pump()
@@ -111,7 +114,7 @@ function pump(): void {
       webContents: { isDestroyed: () => false, send: (channel, payload) => onRunnerEvent(jobId, channel, payload) }
     }
     try {
-      startClipJob(jobId, job.config, sink, () => onExit(jobId), job.outputDirectory)
+      startClipJob(jobId, job.config, sink, () => onExit(jobId), job.outputDirectory, job.settings)
     } catch {
       running.delete(jobId)
       try { finishRunRecord(job.outputDirectory, jobId, 'failed', 'Could not start this run.') } catch { /* Output folder may be unavailable. */ }

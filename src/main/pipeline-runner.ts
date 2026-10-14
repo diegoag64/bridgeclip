@@ -8,7 +8,7 @@ import { promisify } from 'util'
 const execFileAsync = promisify(execFile)
 import { createInterface } from 'readline'
 import { Transform } from 'stream'
-import { loadSettings, getSettingsForBridge, vocabularyTerms } from './settings-store'
+import { loadSettings, getSettingsForBridge, vocabularyTerms, type AppSettings } from './settings-store'
 import { logger } from './logger'
 import { parseJobOutput, type JobOutput } from '../shared/job-output'
 import { BRIDGE_CONTRACT_VERSION } from '../shared/job-contract'
@@ -381,7 +381,8 @@ export function startClipJob(
   config: ClipJobConfig,
   sink: JobEventSink,
   onExit?: () => void,
-  queuedOutputDirectory?: string
+  queuedOutputDirectory?: string,
+  queuedSettings?: AppSettings
 ): void {
   const send = (channel: string, payload: unknown): void => {
     if (!sink.isDestroyed() && !sink.webContents.isDestroyed()) sink.webContents.send(channel, payload)
@@ -389,9 +390,12 @@ export function startClipJob(
   // Runs that never spawned a process still release their slot, just not
   // re-entrantly inside the caller's start.
   const exitWithoutProcess = (): void => { if (onExit) queueMicrotask(onExit) }
-  // A queued job keeps the output folder chosen when its run record was
-  // created, even if Settings changes before a worker slot opens.
-  const settings = { ...loadSettings(), ...(queuedOutputDirectory ? { outputDirectory: queuedOutputDirectory } : {}) }
+  // Keep the options fingerprinted in the saved recipe, even while queued.
+  // Credentials may rotate independently and are never part of that recipe.
+  const currentSettings = loadSettings()
+  const settings = { ...currentSettings, ...queuedSettings,
+    ...(queuedOutputDirectory ? { outputDirectory: queuedOutputDirectory } : {}),
+    openrouterApiKey: currentSettings.openrouterApiKey, zernioApiKey: currentSettings.zernioApiKey }
   const finishHistory = (status: Exclude<StoredRunStatus, 'running'>, message: string | null = null): void => {
     try { finishRunRecord(settings.outputDirectory, jobId, status, message) }
     catch { logger.warn('job.history.writeFailed', { jobId }) }

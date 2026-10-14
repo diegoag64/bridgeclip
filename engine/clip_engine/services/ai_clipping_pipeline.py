@@ -510,19 +510,38 @@ class AIClippingPipeline:
                 return ClippingJobResult(job_id=job_id, status=JobStatus.COMPLETED, output=output,
                     processing_time_seconds=time.time() - start_time)
             saved_selection = checkpoint.load('selected-clips', resume_key) if checkpoint else None
-            accepted = [restore(ClipPlanSegment, segment) for segment in saved_selection['segments']] if saved_selection else []
-            if saved_selection:
-                edit_audit = saved_selection['audit']
-                if saved_selection.get('plan'):
-                    clip_plan = restore(ClipPlanResponse, saved_selection['plan'])
+            selection_progress = checkpoint.load('selection-progress', resume_key) if checkpoint and not saved_selection else None
+            selection_state = saved_selection or selection_progress
+            accepted = [restore(ClipPlanSegment, segment) for segment in selection_state['segments']] if selection_state else []
+            usage_fields = ('requests', 'reserved_tokens', 'input_tokens', 'output_tokens', 'estimated_cost_usd')
+            def selection_snapshot():
+                return {'segments': [asdict(s) for s in accepted], 'audit': edit_audit, 'plan': asdict(clip_plan), 'limit': limit,
+                        'usage': [{field: getattr(service, field) for field in usage_fields}
+                                  for service in (coherence_service, editorial_service)]}
+            def save_selection_progress(discovery_pass, next_index):
+                if checkpoint:
+                    checkpoint.save('selection-progress', resume_key, {**selection_snapshot(),
+                        'discovery_pass': discovery_pass, 'next_index': next_index,
+                        'pending': [asdict(s) for s in pending]})
+            if selection_state:
+                edit_audit = selection_state['audit']
+                if selection_state.get('plan'):
+                    clip_plan = restore(ClipPlanResponse, selection_state['plan'])
+                for service, usage in zip((coherence_service, editorial_service), selection_state.get('usage', [])):
+                    for field in usage_fields:
+                        setattr(service, field, usage[field])
                 # JSON restores separate objects; reconnect reports to their clips
                 # so rendering updates the saved audit as it does on a fresh run.
                 for segment, entry in zip(accepted, (e for e in edit_audit['candidates'] if e['status'] == 'accepted')):
                     segment.editorial = entry['report']
-            limit = getattr(self.intelligence_planner, 'discovery_limit', None) or request.max_clips or self.settings.max_clips_absolute
-            pending = clip_plan.segments
-            for discovery_pass in (() if saved_selection else (1, 2)):
-                for segment in pending:
+            limit = ((selection_state or {}).get('limit') or getattr(self.intelligence_planner, 'discovery_limit', None)
+                     or request.max_clips or self.settings.max_clips_absolute)
+            pending = [restore(ClipPlanSegment, s) for s in selection_progress['pending']] if selection_progress else clip_plan.segments
+            first_pass = selection_progress['discovery_pass'] if selection_progress else 1
+            for discovery_pass in (() if saved_selection else range(first_pass, 3)):
+                next_index = selection_progress['next_index'] if selection_progress and discovery_pass == first_pass else 0
+                for pending_index in range(next_index, len(pending)):
+                    segment = pending[pending_index]
                     i = len(edit_audit['candidates'])
                     self._update_progress(job_id, JobStatus.PLANNING, 35,
                         f"Reviewing candidate {i + 1} for coherence (discovery {discovery_pass})..." if jev_enabled else f"Selecting planned clip {i + 1}...",
@@ -539,6 +558,7 @@ class AIClippingPipeline:
                     edit_audit['candidates'].append(entry)
                     if len(accepted) >= limit:
                         entry['status'] = 'selection_limit'
+                        save_selection_progress(discovery_pass, pending_index + 1)
                         save_edit_audit()
                         continue
                     if jev_enabled:
@@ -560,6 +580,7 @@ class AIClippingPipeline:
                                                               segment.start_time_ms, segment.end_time_ms, segment.editorial)
                     else:
                         entry['status'] = 'rejected'
+                    save_selection_progress(discovery_pass, pending_index + 1)
                     save_edit_audit()
                 # One bounded search for overlooked moments, not repeated attempts to fill a quota.
                 if (not jev_enabled or discovery_pass == 2 or len(accepted) >= limit or not coherence_service.enabled
@@ -574,9 +595,10 @@ class AIClippingPipeline:
                 if not feedback['search_intervals']:
                     break
                 try:
-                    extra = await self.intelligence_planner.plan_clips(**{**planning_args,
-                        'max_clips': min(8, limit - len(accepted)), 'auto_clip_count': False,
-                        'discovery_feedback': feedback})
+                    extra = await cached('discovery-plan', [resume_key, feedback],
+                        lambda: self.intelligence_planner.plan_clips(**{**planning_args,
+                            'max_clips': min(8, limit - len(accepted)), 'auto_clip_count': False,
+                            'discovery_feedback': feedback}), ClipPlanResponse)
                     # Also enforce exclusions at the pipeline boundary, including mocked/custom planners.
                     pending = [c for c in extra.segments[:8]
                         if any(overlaps([c.start_time_ms, c.end_time_ms], span) for span in feedback['search_intervals'])
@@ -595,14 +617,14 @@ class AIClippingPipeline:
                     edit_audit['discovery']['status'] = 'unavailable'
                     pending = []
                 edit_audit['planner'] = getattr(self.intelligence_planner, 'audit', {'requests': []})
+                save_selection_progress(2, 0)
                 save_edit_audit()
                 if not pending:
                     break
             clip_plan.segments = accepted
             clip_plan.total_clips = len(accepted)
             if checkpoint and accepted:
-                checkpoint.save('selected-clips', resume_key, {'segments': [asdict(s) for s in accepted], 'audit': edit_audit,
-                                                             'plan': asdict(clip_plan)})
+                checkpoint.save('selected-clips', resume_key, selection_snapshot())
             if not accepted:
                 edit_audit['outcome'] = 'no_approved_clips'
                 save_edit_audit()
@@ -731,7 +753,10 @@ class AIClippingPipeline:
 
                     render_key = [resume_key, i, asdict(segment)]
                     saved_render = checkpoint.load('render', render_key) if checkpoint else None
-                    render_result = restore(RenderResult, saved_render) if saved_render else None
+                    # Older render checkpoints lack the final editorial report.
+                    # Reviewed clips must rerender rather than silently drop QA.
+                    render_result = (restore(RenderResult, saved_render['result']) if saved_render and 'result' in saved_render
+                                     else restore(RenderResult, saved_render) if saved_render and not jev_enabled else None)
                     if render_result and (render_result.output_path != output_path or not os.path.isfile(output_path)
                                           or os.path.islink(output_path)
                                           or os.path.getsize(output_path) != render_result.file_size_bytes):
@@ -742,10 +767,14 @@ class AIClippingPipeline:
                                              or not Path(artifact).resolve().is_relative_to(Path(work_dir).resolve())):
                                 render_result = None
                                 break
+                    if render_result is not None and saved_render and 'editorial' in saved_render:
+                        # Preserve the object shared by the segment, audit and request.
+                        segment.editorial.clear()
+                        segment.editorial.update(saved_render['editorial'])
                     if render_result is None:
                         render_result = await self.rendering_service.render_clip(render_request)
                         if checkpoint:
-                            checkpoint.save('render', render_key, render_result)
+                            checkpoint.save('render', render_key, {'result': asdict(render_result), 'editorial': segment.editorial})
                     if getattr(render_result, "framing_trace_path", None):
                         clip_trace_paths[i] = render_result.framing_trace_path
                     segment.layout_type = render_result.layout_type

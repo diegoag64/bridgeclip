@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'crypto'
-import { getSettingsForBridge, loadSettings } from './settings-store'
+import { getSettingsForBridge, loadSettings, type AppSettings } from './settings-store'
 import { ensureOutputDir } from './file-manager'
 import { getBridgeRunnerPath, getEnginePath, preflightCheck, resolvePythonPath, validatePython, type ClipJobConfig } from './pipeline-runner'
 import { createRunRecord, finishRunRecord, readRunRecord, readRunRequest, writeRunRequest } from './run-history'
@@ -19,8 +19,7 @@ let lastEngineCheck: { key: string; at: number } | null = null
 export type StartJobResult = { jobId: string; queued: boolean; job: JobSnapshot } | { error: string }
 
 const resuming = new Set<string>()
-function settingsFingerprint(): string {
-  const settings = loadSettings()
+function settingsFingerprint(settings: AppSettings = loadSettings()): string {
   const options = { ...getSettingsForBridge(settings) }
   delete options.OPENROUTER_API_KEY
   delete options.LOCAL_OUTPUT_DIR
@@ -66,7 +65,7 @@ export async function startClipJobRequest(request: unknown, resumeId?: string): 
     else assertMediaPath(config.videoUrl, loadSettings().outputDirectory)
     if (config.bannerChannelUrl) await assertPublicWebUrl(config.bannerChannelUrl)
   } catch (error) { return { error: error instanceof Error ? error.message : 'Invalid job options' } }
-  const settings = loadSettings()
+  const settings = { ...loadSettings() }
 
   if (!settings.openrouterApiKey) {
     logger.warn('job.start.missingKey', { key: 'OPENROUTER_API_KEY' })
@@ -107,7 +106,7 @@ export async function startClipJobRequest(request: unknown, resumeId?: string): 
   ensureOutputDir(settings.outputDirectory)
 
   if (resumeId && (isJobStillActive(resumeId) || settings.outputDirectory !== originalDirectory ||
-      loadSettings().outputDirectory !== originalDirectory || settingsFingerprint() !== originalFingerprint ||
+      loadSettings().outputDirectory !== originalDirectory || settingsFingerprint() !== originalFingerprint || settingsFingerprint(settings) !== originalFingerprint ||
       !readRunRecord(settings.outputDirectory, resumeId))) {
     return { error: 'The job or output folder changed. Refresh Jobs and try again.' }
   }
@@ -115,12 +114,12 @@ export async function startClipJobRequest(request: unknown, resumeId?: string): 
   logger.info('job.start.request', { jobId, sourceType: isWebUrl(config.videoUrl) ? 'remote' : 'local', aspectRatio: config.aspectRatio })
   try {
     createRunRecord(settings.outputDirectory, jobId, config.videoUrl)
-    writeRunRequest(settings.outputDirectory, jobId, config, settingsFingerprint())
+    writeRunRequest(settings.outputDirectory, jobId, config, settingsFingerprint(settings))
   } catch {
     try { finishRunRecord(settings.outputDirectory, jobId, 'failed', 'Could not start this run.') } catch { /* Output folder may be unavailable. */ }
     return { error: 'Could not create the clipping run. Check the output folder and retry.' }
   }
   // Starts now when a slot is free; otherwise waits its turn in the queue.
-  const job = enqueueJob(jobId, config, settings.outputDirectory)
+  const job = enqueueJob(jobId, config, settings.outputDirectory, settings)
   return { jobId, queued: job.status === 'queued', job }
 }
