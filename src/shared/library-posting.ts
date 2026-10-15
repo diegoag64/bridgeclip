@@ -5,13 +5,14 @@ export interface LibraryClipTarget { outputDir: string; clipIndex: number }
 
 export type LibraryPostingState = 'not_posted' | 'posted' | 'partial' | 'scheduled' | 'publishing' | 'draft' | 'failed'
 export interface LibraryClipPostingStatus {
+  queuedIn?: { id: string; name: string }[]
   manuallyPosted?: boolean
   clipIndex: number
   state: LibraryPostingState
   platforms: string[]
 }
 /** Posted and not-posted clip counts for one run; null when the run could not be checked. */
-export interface LibraryRunPostingCounts { outputDir: string; counts: { posted: number; notPosted: number } | null }
+export interface LibraryRunPostingCounts { outputDir: string; counts: { posted: number; notPosted: number; queued: number } | null }
 export const MAX_POSTING_SUMMARY_RUNS = 5000
 export interface LibraryEnhancementOptions {
   platforms: AutomationAccount['platform'][]

@@ -32,6 +32,8 @@ Turn off **Play cuts only**, watch beyond the current selection, then choose **E
 
 ## Layouts and crop movement
 
+New Smart framing suggestions split interviews only when two clear, sufficiently large faces are visible together for most of the shot. Wide or ambiguous group shots preserve the full source frame using **Fit**; a clearly dominant foreground face gets a single crop. This is visual framing, not audio-based speaker identification. Existing saved layouts stay as they are; choose **Fit** to correct an older unwanted split.
+
 Choose **Full frame**, **Split** or **Fit**. Drag inside a crop rectangle to move it, or drag any corner to resize it with the opposite corner anchored. Corners preserve the crop’s proportions and stay within the source; split layouts have independent handles for each panel. Arrow keys adjust a focused corner (Shift for larger steps). Position and zoom controls remain available. Add a layout change at the playhead to reframe another section, or apply one layout to the whole clip.
 
 Edit **Layout starts** or drag its diamond on the timeline to move an existing change; arrow keys nudge a focused diamond by one source frame after a camera scan (before scanning: 0.1 seconds; Shift: 1 second). Changes stay between their neighbours, with undo and autosave support. Enable **Smooth movement** on a new layout to ease from the preceding crop, including zoom, in both preview and export. Adjust its duration from 0.1–5 seconds of source time.

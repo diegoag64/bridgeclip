@@ -52,12 +52,12 @@ def test_large_weak_lamp_detection_cannot_beat_confident_subject():
     assert len(frames[0].faces) == 2
 
 
-def test_two_confident_people_and_single_less_confident_face_still_work():
+def test_clear_faces_can_split_but_a_sole_weak_detection_keeps_the_frame():
     a, b = Box(.15, .2, .14, .3), Box(.65, .2, .14, .3)
     two = [FrameInfo(t, [a, b], None, [.96, .93]) for t in range(0, 4000, 250)]
     assert heuristic_layout(two, 0, 4000, 1920, 1080).layout == LayoutType.TWO_SHOT
     one = [FrameInfo(t, [a], None, [.82]) for t in range(0, 4000, 250)]
-    assert heuristic_layout(one, 0, 4000, 1920, 1080).people == [a]
+    assert heuristic_layout(one, 0, 4000, 1920, 1080).layout == LayoutType.SCREEN
 
 
 def test_padding_transitions_ignore_blips_and_detect_changed_region():

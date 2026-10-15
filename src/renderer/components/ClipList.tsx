@@ -28,6 +28,7 @@ import { Callout } from './ui/Callout'
 import { Segmented } from './ui/Segmented'
 import { usePostsStore } from '../store/use-posts-store'
 import { useSettingsStore } from '../store/use-settings-store'
+import { useDataVersion } from '../store/use-data-version-store'
 import type { LibraryClipPostingStatus } from '../../shared/library-posting'
 import type { Page as AppPage } from './Sidebar'
 
@@ -105,6 +106,7 @@ function GeneratedClipList({ output, outputDir: runDirectory, leading, onNewClip
   const postRecords = usePostsStore((state) => state.posts)
   const refreshError = usePostsStore((state) => state.error)
   const configured = useSettingsStore((state) => state.zernioConfigured)
+  const automationVersion = useDataVersion('automations')
   const [postingStatus, setPostingStatus] = useState<LibraryClipPostingStatus[] | null>(null)
   const [postingError, setPostingError] = useState<string | null>(null)
   const [postedExpanded, setPostedExpanded] = useState(false)
@@ -175,7 +177,7 @@ function GeneratedClipList({ output, outputDir: runDirectory, leading, onNewClip
     void getApi().history.postingStatus(outputDir).then((statuses) => { if (active) setPostingStatus(statuses) })
       .catch((cause) => { if (active) { setPostingStatus(null); setPostingError(errorMessage(cause, 'Could not read posting history.')) } })
     return () => { active = false }
-  }, [outputDir, postRecords, statusRetry])
+  }, [outputDir, postRecords, statusRetry, automationVersion])
 
   useEffect(() => { setPostingStatus(null); setPostedExpanded(false); setUnpostedExpanded(true) }, [outputDir])
 
@@ -497,6 +499,7 @@ function GeneratedClipList({ output, outputDir: runDirectory, leading, onNewClip
           setBankClips(null)
           setSelected(new Set())
           setAddedToBank(true)
+          setStatusRetry(value => value + 1)
           setNotice(`Added ${bankClips.length} clip${bankClips.length === 1 ? '' : 's'} to ${name}.`)
           if (noticeTimer.current) clearTimeout(noticeTimer.current)
           noticeTimer.current = setTimeout(() => setNotice(null), 6000)

@@ -5,6 +5,7 @@ import { getApi } from '../lib/ipc'
 import { clipFilePath, loadThumbnail } from '../lib/thumbnails'
 import type { ClipArtifact } from '../store/use-job-store'
 import { Checkbox } from './ui/Checkbox'
+import { HoverCard } from './ui/HoverCard'
 import { Badge } from './ui/Badge'
 import { Skeleton } from './ui/Skeleton'
 import { ActionMenu } from './ui/ActionMenu'
@@ -207,6 +208,7 @@ export function ClipCard({
       <div className="px-2 pb-2 pt-3">
         <div className="mb-3 flex min-h-8 flex-wrap items-center justify-between gap-2">
           {postingBadge}
+          {Boolean(postingStatus?.queuedIn?.length) && <HoverCard openDelay={0} content={<p className="max-w-xs px-3 py-2 text-xs">Queued in: {postingStatus!.queuedIn!.map(item => item.name).join(', ')}. Includes paused automations and drafts awaiting review.</p>}><Badge tone="accent">Queued in automations</Badge></HoverCard>}
           {!selecting && <div className="ml-auto">
             <ActionMenu label={`Actions for “${title}”`} disabled={markingPosted || actionsDisabled} actions={[
               ...(onPost ? [{ label: 'Post or schedule', icon: <Send className="h-3.5 w-3.5" />, onSelect: onPost }] : []),

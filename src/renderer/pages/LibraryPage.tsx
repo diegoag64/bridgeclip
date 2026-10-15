@@ -8,6 +8,7 @@ import { useSettingsStore } from '../store/use-settings-store'
 import { usePostsStore } from '../store/use-posts-store'
 import type { JobOutput } from '../store/use-job-store'
 import { parseJobOutput } from '../../shared/job-output'
+import type { LibraryRunPostingCounts } from '../../shared/library-posting'
 import type { HistoryEntry } from '../../preload/index'
 import { BackLink, ClipList } from '../components/ClipList'
 import { Page } from '../components/ui/Page'
@@ -46,7 +47,7 @@ export function LibraryPage({ onNavigate, initialRun, initialClipIndex }: { onNa
   const [previewRevision, setPreviewRevision] = useState(0)
   const { gridRef, capture } = useLibraryMotion()
   const [bookmarkMessage, setBookmarkMessage] = useState('')
-  const [counts, setCounts] = useState<Record<string, { posted: number; notPosted: number } | null>>({})
+  const [counts, setCounts] = useState<Record<string, LibraryRunPostingCounts['counts']>>({})
   const posts = usePostsStore((state) => state.posts)
   const postError = usePostsStore((state) => state.error)
   const configured = useSettingsStore((state) => state.zernioConfigured)
@@ -86,6 +87,7 @@ export function LibraryPage({ onNavigate, initialRun, initialClipIndex }: { onNa
   }, [load, outputDirectory])
 
   // The assistant changed the Library (deleted clips, marked posted, exported): reload what's shown.
+  const automationVersion = useDataVersion('automations')
   const libraryVersion = useDataVersion('library')
   const seenLibraryVersion = useRef(libraryVersion)
   const openRef = useRef(open)
@@ -129,7 +131,7 @@ export function LibraryPage({ onNavigate, initialRun, initialClipIndex }: { onNa
       if (active) setCounts(Object.fromEntries(paths.map((path) => [path, null])))
     })
     return () => { active = false }
-  }, [entryPaths, postsRevision, open, configured])
+  }, [entryPaths, postsRevision, open, configured, automationVersion, previewRevision])
 
   const filtered = useMemo(() => {
     if (!entries) return []
@@ -360,7 +362,7 @@ export function LibraryPage({ onNavigate, initialRun, initialClipIndex }: { onNa
 function RunCard({ entry, previewRevision, counts, storage, busy, onFavorite, onDelete, onOpen, onOpenFolder }: {
   entry: HistoryEntry
   previewRevision: number
-  counts: { posted: number; notPosted: number } | null | undefined
+  counts: LibraryRunPostingCounts['counts'] | undefined
   storage: OutputStorageUsage | null | undefined
   busy: boolean
   onFavorite: () => void
@@ -440,6 +442,7 @@ function RunCard({ entry, previewRevision, counts, storage, busy, onFavorite, on
           {entry.editorProject && entry.clipCount === 0 ? remaining === 0 ? 'No clips to finish' : 'No clips baked yet' : counts ? <><span className="text-success">{counts.posted} Posted</span><span className="mx-2 text-ink-faint">·</span><span>{counts.notPosted} Not Posted</span></>
             : counts === null ? 'Posting status unavailable' : 'Checking posting status…'}
         </p>
+        {Boolean(counts?.queued) && <p className="mt-2 text-xs font-medium text-accent" title="Clips waiting in automation queues, including paused automations and drafts awaiting review.">{counts!.queued} queued in automations</p>}
       </div>
       </button>
       <div className="absolute right-3.5 top-3.5 flex items-center gap-1.5">

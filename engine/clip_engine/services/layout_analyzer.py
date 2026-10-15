@@ -111,7 +111,6 @@ def analysis_dimensions(width: int, height: int) -> tuple[int, int]:
 
 
 FACE_SCORE_THRESHOLD = 0.72
-STRONG_FACE_SCORE = 0.90
 COMPETING_FACE_SCORE = 0.85
 # Bhattacharyya distance between consecutive HSV histograms that counts as a cut.
 SHOT_CUT_THRESHOLD = 0.42
@@ -132,6 +131,9 @@ MAX_TRACK_GAP_MS = 1000
 OVERLAY_MAX_FACE_HEIGHT = 0.17
 # Faces smaller than this are ignored entirely (crowds, posters, thumbnails).
 MIN_FACE_HEIGHT = 0.035
+# Automatic splits need two close, simultaneous subjects, not distant heads.
+MIN_SPLIT_FACE_HEIGHT = 0.18
+MIN_SPLIT_PRESENCE = 0.6
 # Share of a webcam overlay's height its face spans (head-and-shoulders framing).
 CAM_FACE_SHARE = 0.28
 # A face inside a padded landscape inset (4:3 pillarbox, a framed 16:9
@@ -301,14 +303,13 @@ class ClipLayoutPlan:
 
 
 def framing_faces(frame: FrameInfo) -> list[Box]:
-    """Weak competing detections must not displace a confident real face.
+    """Weak detections must not create subject crops, even without a stronger face.
 
     Keep the original observations in diagnostics. Unknown scores (older
     records / fixtures) retain the existing behavior.
     """
-    reliable = any(score >= STRONG_FACE_SCORE for score in frame.scores)
     return [box for i, box in enumerate(frame.faces)
-            if not reliable or i >= len(frame.scores) or frame.scores[i] >= COMPETING_FACE_SCORE]
+            if i >= len(frame.scores) or frame.scores[i] >= COMPETING_FACE_SCORE]
 
 
 def _content_edges(image):
@@ -1017,13 +1018,18 @@ def classify_shot(
 
     if len(on_camera) >= 2:
         a, b = on_camera[0].median_box(), on_camera[1].median_box()
-        similar = min(a.h, b.h) / max(a.h, b.h) >= 0.5
+        simultaneous = len({t for t, _ in on_camera[0].samples} & {t for t, _ in on_camera[1].samples})
+        similar = min(a.h, b.h) / max(a.h, b.h) >= 0.67
         separated = abs(a.cx - b.cx) >= 0.22
-        if len(on_camera) == 2 and similar and separated:
+        if (len(on_camera) == 2 and similar and separated and min(a.h, b.h) >= MIN_SPLIT_FACE_HEIGHT
+                and simultaneous >= max(2, MIN_SPLIT_PRESENCE * shot_frames)):
             people = sorted([a, b], key=lambda box: box.cx)
             return ShotLayout(0, 0, LayoutType.TWO_SHOT, people=people), None
-        if len(on_camera) > 2:
-            return ShotLayout(0, 0, LayoutType.SCREEN), None
+        # Size alone cannot identify a speaker among comparable subjects.
+        # Follow only an unmistakable foreground face; otherwise preserve context.
+        if a.area >= 2.5 * b.area and len(on_camera[0].samples) >= MIN_SPLIT_PRESENCE * shot_frames:
+            return ShotLayout(0, 0, LayoutType.TALKING_HEAD, people=[a]), on_camera[0]
+        return ShotLayout(0, 0, LayoutType.SCREEN, people=[t.median_box() for t in on_camera]), None
     if on_camera:
         main = on_camera[0]
         return ShotLayout(0, 0, LayoutType.TALKING_HEAD, people=[main.median_box()]), main
@@ -1278,7 +1284,7 @@ VISION_PROMPT = """You are framing a frame from a video for a 9:16 vertical shor
 
 Classify the frame's layout:
 - "talking_head": one person on camera fills a meaningful part of the frame (no screen recording).
-- "two_shot": two people on camera, e.g. a podcast wide shot.
+- "two_shot": exactly two clearly visible faces in a close interview composition, both large enough for separate vertical panels. Never split distant people, backs of heads, posters or uncertain subjects; use "screen" to preserve the full frame when no single subject is clear.
 - "screen_cam": a screen recording, slides, browser, code or gameplay WITH a webcam overlay of the presenter.
 - "screen": screen content, graphics or b-roll with NO webcam overlay, or a crowd/group where no single framing works.
 
@@ -1303,17 +1309,6 @@ def _box_from_1000(values: list[int]) -> Optional[Box]:
     return Box(xmin, ymin, xmax - xmin, ymax - ymin)
 
 
-def face_from_person_box(person: Box) -> Box:
-    """Approximate the face inside a head-and-shoulders box.
-
-    The renderer sizes crops from face boxes, so vision-model person boxes are
-    converted to the same convention.
-    """
-    face_h = person.h * 0.45
-    face_w = person.w * 0.5
-    return Box(person.cx - face_w / 2, person.y + person.h * 0.08, face_w, face_h).clamp()
-
-
 def merge_vision_result(heuristic: ShotLayout, result: dict, src_w: int, src_h: int) -> ShotLayout:
     """Combine the vision model's layout with locally detected faces."""
     layout = result.get("layout")
@@ -1322,8 +1317,6 @@ def merge_vision_result(heuristic: ShotLayout, result: dict, src_w: int, src_h: 
 
     cam = _box_from_1000(result.get("cam_box", []))
     screen = _box_from_1000(result.get("screen_box", []))
-    people = [face_from_person_box(b) for b in (_box_from_1000(p) for p in result.get("people", [])) if b]
-    people.sort(key=lambda b: b.cx)
 
     merged = ShotLayout(0, 0, layout, source="vision")
     if layout == LayoutType.SCREEN_CAM:
@@ -1341,12 +1334,15 @@ def merge_vision_result(heuristic: ShotLayout, result: dict, src_w: int, src_h: 
             face = next((p for p in heuristic.people if cam.contains(p.cx, p.cy)), None)
         merged.cam_face = face
     elif layout == LayoutType.TWO_SHOT:
-        local = heuristic.people if heuristic.layout == LayoutType.TWO_SHOT else []
-        merged.people = local if len(local) == 2 else people[:2]
-        if len(merged.people) < 2:
-            merged.layout = LayoutType.TALKING_HEAD if merged.people else LayoutType.SCREEN
+        # Person boxes can include backs of heads, posters or unrelated objects.
+        # A single vision frame cannot establish two reliable face tracks.
+        if heuristic.layout != LayoutType.TWO_SHOT:
+            return heuristic
+        merged.people = heuristic.people
     elif layout == LayoutType.TALKING_HEAD:
-        merged.people = heuristic.people[:1] if heuristic.people else people[:1]
+        if heuristic.layout != LayoutType.TALKING_HEAD:
+            return heuristic
+        merged.people = heuristic.people[:1]
         merged.focus_path = heuristic.focus_path
     elif layout == LayoutType.SCREEN:
         merged.screen_box = screen

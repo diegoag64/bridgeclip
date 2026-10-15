@@ -124,6 +124,8 @@ Select clips to reveal the red trash button for deleting just those exports, wit
 
 ### Bookmarks and run deletion
 
+**Queued in automations** appears on clips waiting in a content bank; hover over the badge to see the automation names. Overview cards count each queued clip once, even if it belongs to multiple automations. Counts include paused automations and drafts awaiting review, and exclude content already submitted for posting. An already-posted clip can also be queued again. Older bank copies without saved Library provenance are matched only when their media bytes are identical.
+
 Library overview cards show the total clip count at the top left, the run's local file size beside its date and cost, and separate **Posted** / **Not Posted** counts below the title. Sizes include all files in the run folder and update when you refresh the Library; **≥** marks an incomplete total. Bookmark a run to keep it in the **Bookmarked** section. Cards move smoothly between Bookmarked and Recent runs without reloading their thumbnails; removing the last bookmark returns to one **All runs** grid. Bookmarks persist across restarts, and reduced-motion preferences turn off movement.
 
 The trash action shows estimated space freed and a visual summary before permanently deleting the run folder, all clips and other files inside it, and cached clip previews. The estimate counts the run's files, including saved edits and source copies; incomplete scans are marked. Published social posts and copies stored elsewhere are kept. Expand **Folder location** to check the exact folder. Active runs cannot be deleted.
