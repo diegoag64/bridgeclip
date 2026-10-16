@@ -7,7 +7,7 @@ import { clipPostingStatus, MAX_POSTING_SUMMARY_RUNS, type LibraryClipPostingSta
 import { loadSettings } from './settings-store'
 import { getJobOutput, isManuallyPosted } from './file-manager'
 import { assertAbsolutePath, assertMediaPath, authorizeMedia, isWithinDirectory, openAuthorizedMedia } from './security'
-import { automationMediaMatcher, listAutomations } from './automations'
+import { automationMediaMatcher, automationLibraryReferences } from './automations'
 import { listPostingHistory } from './zernio/posts'
 import { completeSourceContext, parseSourceContext, sourceFromOutput } from './automation-source'
 import { generateAutomationMetadata, researchAutomationTopic, transcribeAutomationClip } from './automation-metadata'
@@ -60,21 +60,24 @@ async function fingerprint(path: string, library: string): Promise<{ size: numbe
   } }
 }
 
+interface QueuedClip { id: string; name: string; clipPath: string; sourceClipPath?: string }
+
 type Fingerprint = Awaited<ReturnType<typeof fingerprint>>
 /** Everything that is the same for every run: read settings, posts and automation banks once. */
-interface PostingContext { library: string; posts: PostRecord[]; origins: Map<string, string>; bankPosts: PostRecord[]; bankFiles: Map<string, Fingerprint> }
+interface PostingContext { library: string; posts: PostRecord[]; origins: Map<string, string>; bankPosts: PostRecord[]; bankFiles: Map<string, Fingerprint>; queued: QueuedClip[] }
 
 async function postingContext(library: string): Promise<PostingContext> {
   const posts = listPostingHistory()
-  const origins = new Map(listAutomations().flatMap((automation) => automation.content.filter((item) => item.postId && item.sourceClipPath).map((item) => [item.postId!, pathKey(item.sourceClipPath!)] as const)))
+  const references = automationLibraryReferences()
+  const queued = references.filter(item => item.status === 'queued' && !item.postId)
+  const origins = new Map(references.filter(item => item.postId && item.sourceClipPath).map(item => [item.postId!, pathKey(item.sourceClipPath!)]))
   const isBankFile = automationMediaMatcher()
   const bankPosts = posts.filter((post) => !origins.has(post.id) && isBankFile(post.clipPath))
   const bankFiles = new Map<string, Fingerprint>()
-  for (const post of bankPosts) {
-    if (bankFiles.has(post.clipPath)) continue
-    try { authorizeMedia(post.clipPath); bankFiles.set(post.clipPath, await fingerprint(post.clipPath, library)) } catch { /* A removed bank copy cannot be matched. */ }
+  for (const path of new Set([...bankPosts.map(post => post.clipPath), ...queued.filter(item => !item.sourceClipPath).map(item => item.clipPath)])) {
+    try { if (!isBankFile(path)) continue; authorizeMedia(path); bankFiles.set(path, await fingerprint(path, library)) } catch { /* A removed bank copy cannot be matched. */ }
   }
-  return { library, posts, origins, bankPosts, bankFiles }
+  return { library, posts, origins, bankPosts, bankFiles, queued }
 }
 
 async function runPostingStatus(outputDir: unknown, library: string, context: PostingContext | null, cleanup = false): Promise<(LibraryClipPostingStatus & { cleanable?: boolean })[]> {
@@ -86,12 +89,13 @@ async function runPostingStatus(outputDir: unknown, library: string, context: Po
     const status = withManualStatus(clipPostingStatus(clip.clip_index, []))
     return cleanup ? { ...status, cleanable: status.state === 'posted' } : status
   })
-  const { posts, origins, bankPosts, bankFiles } = context
+  const { posts, origins, bankPosts, bankFiles, queued } = context
   const statuses: (LibraryClipPostingStatus & { cleanable?: boolean })[] = []
   for (const clip of output.clips) {
     const path = mediaPath(clip.s3_url)
     if (!isWithinDirectory(path, run)) throw new Error('A clip is outside its Library run.')
     const matches = posts.filter((post) => pathKey(post.clipPath) === pathKey(path) || origins.get(post.id) === pathKey(path))
+    const queuedMatches = queued.filter(item => pathKey(item.sourceClipPath || item.clipPath) === pathKey(path))
     if (bankFiles.size) {
       let original: Fingerprint | null = null
       try { original = await fingerprint(path, library) } catch { /* Direct history remains available for removed originals. */ }
@@ -99,8 +103,13 @@ async function runPostingStatus(outputDir: unknown, library: string, context: Po
         const bank = bankFiles.get(post.clipPath)
         if (bank && bank.size === original.size && await bank.hash() === await original.hash()) matches.push(post)
       }
+      if (original) for (const item of queued.filter(item => !item.sourceClipPath)) {
+        const bank = bankFiles.get(item.clipPath)
+        if (bank && bank.size === original.size && await bank.hash() === await original.hash()) queuedMatches.push(item)
+      }
     }
     const status = withManualStatus(clipPostingStatus(clip.clip_index, matches))
+    if (queuedMatches.length) status.queuedIn = [...new Map(queuedMatches.map(item => [item.id, { id: item.id, name: item.name }])).values()]
     // A published copy must not hide a second scheduled post, failed retry or
     // inbox delivery that still needs its original media.
     statuses.push(cleanup ? { ...status, cleanable: status.state === 'posted' && matches.every(post =>
@@ -144,7 +153,7 @@ export async function libraryPostingSummary(outputDirs: unknown): Promise<Librar
     try {
       const statuses = await runPostingStatus(outputDir, library, context)
       const posted = statuses.filter((status) => status.state === 'posted').length
-      results.push({ outputDir, counts: { posted, notPosted: statuses.length - posted } })
+      results.push({ outputDir, counts: { posted, notPosted: statuses.length - posted, queued: statuses.filter(status => status.queuedIn?.length).length } })
     } catch { results.push({ outputDir, counts: null }) }
   }
   if (loadSettings().zernioApiKey !== workspaceKey) throw new Error('The posting workspace changed. Refresh the Library.')

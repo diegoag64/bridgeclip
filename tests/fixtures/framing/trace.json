@@ -21,7 +21,6 @@
   "sample_fps": 4.0,
   "thresholds": {
     "FACE_SCORE_THRESHOLD": 0.72,
-    "STRONG_FACE_SCORE": 0.9,
     "COMPETING_FACE_SCORE": 0.85,
     "SHOT_CUT_THRESHOLD": 0.42,
     "MIN_SHOT_MS": 1200,
@@ -29,7 +28,9 @@
     "LAYOUT_CHANGE_SAMPLES": 3,
     "MIN_TRACK_PRESENCE": 0.35,
     "OVERLAY_MAX_FACE_HEIGHT": 0.17,
-    "MIN_FACE_HEIGHT": 0.035
+    "MIN_FACE_HEIGHT": 0.035,
+    "MIN_SPLIT_FACE_HEIGHT": 0.18,
+    "MIN_SPLIT_PRESENCE": 0.6
   },
   "config": {
     "style": "auto",

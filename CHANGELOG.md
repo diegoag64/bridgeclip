@@ -8,6 +8,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Mai
 
 ### Added
 
+- Library cards show how many clips are queued in automations. Individual clips show a queue badge with automation names on hover, including paused queues and drafts awaiting review.
+
 - **Resume job** in Jobs continues failed, cancelled or interrupted runs using saved processing checkpoints, including completed transcription chunks and prepared editor clips, even after restarting the app.
 
 - **Default caption** on the Captions page lets you choose a saved or built-in preset for new clips in Create and Chat, or follow your first bookmark. Existing drafts keep their selected style.
@@ -64,6 +66,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Mai
 - Editor previews use much less disk space, and downloaded sources are moved into the project instead of copied.
 
 ### Fixed
+
+- Smart framing avoids forced splits for distant or uncertain subjects. Splits require two clear faces visible together; ambiguous shots keep the full frame, while a clearly dominant face gets a single crop.
 
 - Queued clipping jobs keep their original review and vocabulary settings. Resuming preserves final render QA and skips completed candidate reviews, including discovery results, instead of repeating their paid work.
 - **Enhance by source video** keeps live progress and stop controls visible when switching tabs or reloading the window. The progress panel shows the current stage, elapsed time, processed clips, draft counts and any failures.

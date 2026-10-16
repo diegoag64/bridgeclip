@@ -22,7 +22,7 @@ for (const listFirst of [false, true]) test(`cleanup preserves pending media wit
   const main = loadMain("export * from './src/main/storage-cleanup'; export * as settings from './src/main/settings-store'", {
     electron: fakeElectron(f.dir).electron,
     './job-manager': { liveJobIds: () => new Set(), dismissJob: () => {} },
-    './automations': { listAutomations: () => [], automationMediaMatcher: () => () => false },
+    './automations': { listAutomations: () => [], automationLibraryReferences: () => [], automationMediaMatcher: () => () => false },
     './zernio/posts': { listPostingHistory: () => store.history(), hasActiveUploads: () => false }
   })
   main.settings.savePublicSettings({ outputDirectory: library, pythonPath: 'python3' })

@@ -15,7 +15,7 @@ function fixture(extra = {}) {
   const main = loadMain("export * from './src/main/storage-cleanup'; export * as editor from './src/main/clip-editor'; export * as settings from './src/main/settings-store'", {
     electron: fakeElectron(temp.dir).electron,
     './job-manager': { liveJobIds: () => active, dismissJob: () => {} },
-    './automations': { listAutomations: () => automations, automationMediaMatcher: () => () => false },
+    './automations': { listAutomations: () => automations, automationLibraryReferences: () => automations.flatMap(automation => automation.content.map(item => ({ id: automation.id, name: automation.name, ...item }))), automationMediaMatcher: () => () => false },
     './zernio/posts': { listPostingHistory: () => posts, hasActiveUploads: () => uploading },
     ...extra
   })

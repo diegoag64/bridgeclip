@@ -22,7 +22,7 @@ function fixture(t, extra = {}) {
   const mocks = {
     electron,
     './job-manager': { liveJobIds: () => new Set(), dismissJob: () => {} },
-    './automations': { listAutomations: () => automations, automationMediaMatcher: () => () => false },
+    './automations': { listAutomations: () => automations, automationLibraryReferences: () => automations.flatMap(automation => automation.content.map(item => ({ id: automation.id, name: automation.name, ...item }))), automationMediaMatcher: () => () => false },
     ...extra
   }
   const reload = () => loadMain(source, mocks)
@@ -57,7 +57,7 @@ test('dismissing existing activity preserves Posted, platforms, counts and clean
   assert.deepEqual(restarted.posts.listPosts(), [], 'dismissal survives restarting')
   assert.deepEqual(await restarted.library.libraryPostingStatus(f.run), before)
   assert.deepEqual(before[0], { clipIndex: 0, state: 'posted', platforms: ['youtube'] })
-  assert.deepEqual((await restarted.library.libraryPostingSummary([f.run]))[0].counts, { posted: 1, notPosted: 2 })
+  assert.deepEqual((await restarted.library.libraryPostingSummary([f.run]))[0].counts, { posted: 1, notPosted: 2, queued: 0 })
   assert.equal((await restarted.storage.previewStorageCleanup('published')).items[0].clipCount, 1)
   // Dismissing activity does not invalidate a previously reviewed cleanup.
   assert.deepEqual(await f.main.storage.cleanStoredContent(preview.token, [preview.items[0].id]), { cleaned: 1, skipped: 0, failed: 0 })

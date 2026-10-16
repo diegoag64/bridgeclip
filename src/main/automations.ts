@@ -357,6 +357,15 @@ function checkProfileAccounts(overview: ZernioOverview, profileId: string, accou
 
 export function listAutomations(): Automation[] { return structuredClone(data().automations) }
 
+/** Main-only media provenance for Library posting and queue indicators. */
+export function automationLibraryReferences(): { id: string; name: string; status: AutomationContent['status']; postId: string | null; sourceClipPath?: string; clipPath: string }[] {
+  const { workspace, automations } = data()
+  return automations.flatMap(automation => automation.content.map(item => ({
+    id: automation.id, name: automation.name, status: item.status, postId: item.postId,
+    sourceClipPath: item.sourceClipPath, clipPath: join(bankPath(workspace, automation.id), item.fileName)
+  })))
+}
+
 /** Acknowledge existing messages only; never retry, release, or mark a clip as posted. */
 export function acknowledgeAutomationWarnings(id: unknown, contentId?: unknown): Automation[] {
   const { workspace, automations } = data()

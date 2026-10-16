@@ -47,7 +47,12 @@ test('reordered queues and original media provenance survive a fresh load', asyn
     const [a, b, c] = added.content
     assert.equal(a.sourceClipPath, fs.realpathSync(paths[0]))
     main.automations.reorderAutomationContent(automation.id, c.id, a.id)
-    const reloaded = loadMain(source, mocks).automations.listAutomations()[0]
+    const reloadedMain = loadMain(source, mocks)
+    const reloaded = reloadedMain.automations.listAutomations()[0]
+    const references = reloadedMain.automations.automationLibraryReferences()
+    assert.deepEqual(references.map(item => item.sourceClipPath), [paths[2], paths[0], paths[1]].map(file => fs.realpathSync(file)))
+    assert.ok(references.every(item => item.id === automation.id && item.name === 'Queue' && item.status === 'queued'))
+    assert.equal(fs.readFileSync(references[1].clipPath, 'utf8'), 'first', 'Library references resolve the persisted bank filename')
     assert.deepEqual(reloaded.content.map((item) => item.id), [c.id, a.id, b.id])
     assert.equal(reloaded.content[1].sourceClipPath, a.sourceClipPath)
     assert.throws(() => main.automations.reorderAutomationContent(automation.id, 'invalid', null), /Choose queued/)

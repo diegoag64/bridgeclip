@@ -67,7 +67,9 @@ function fixture(mocks = {}) {
   const main = loadMain("export * from './src/main/library-posting'; export * as settings from './src/main/settings-store'", {
     electron,
     './zernio/posts': { listPostingHistory: () => posts },
-    './automations': { listAutomations: () => automations, automationMediaMatcher: () => isBankFile },
+    './automations': { automationLibraryReferences: () => automations.flatMap(automation => automation.content.map(item => ({
+      id: automation.id, name: automation.name, ...item, clipPath: path.join(temp.dir, item.fileName || 'bank-missing.mp4')
+    }))), automationMediaMatcher: () => isBankFile },
     ...mocks
   })
   main.settings.savePublicSettings({ outputDirectory: library, pythonPath: 'python3' })
@@ -166,10 +168,10 @@ test('the Library summary checks many runs in one request, reading settings a fi
     const results = await f.main.libraryPostingSummary([...runs, 'relative/run', path.join(f.dir, 'outside'), f.run])
     assert.equal(f.counters.decrypts, single, 'settings are read once per request, not per run or clip')
     const byRun = Object.fromEntries(results.map((result) => [result.outputDir, result.counts]))
-    assert.deepEqual(byRun[f.run], { posted: 1, notPosted: 2 }, 'byte-identical bank copies still count')
-    assert.deepEqual(byRun[runs[1]], { posted: 1, notPosted: 9 })
-    assert.deepEqual(byRun[runs[2]], { posted: 1, notPosted: 9 }, 'manual marks count')
-    assert.deepEqual(byRun[runs[3]], { posted: 0, notPosted: 10 })
+    assert.deepEqual(byRun[f.run], { posted: 1, notPosted: 2, queued: 0 }, 'byte-identical bank copies still count')
+    assert.deepEqual(byRun[runs[1]], { posted: 1, notPosted: 9, queued: 0 })
+    assert.deepEqual(byRun[runs[2]], { posted: 1, notPosted: 9, queued: 0 }, 'manual marks count')
+    assert.deepEqual(byRun[runs[3]], { posted: 0, notPosted: 10, queued: 0 })
     assert.equal(byRun['relative/run'], null, 'an invalid run fails alone')
     assert.equal(byRun[path.join(f.dir, 'outside')], null)
     assert.equal(results.length, runs.length + 2, 'duplicates are checked once')
@@ -177,6 +179,31 @@ test('the Library summary checks many runs in one request, reading settings a fi
     for (const input of ['not-an-array', [1], Array.from({ length: 5001 }, () => f.run)]) await assert.rejects(f.main.libraryPostingSummary(input), /Choose runs/)
     await assert.rejects(f.main.libraryPostingStatus('relative/run'), /absolute path/)
     f.main.settings.replaceApiKey('zernioApiKey', '')
-    assert.deepEqual((await f.main.libraryPostingSummary([runs[2]]))[0].counts, { posted: 1, notPosted: 9 }, 'manual marks work without an account')
+    assert.deepEqual((await f.main.libraryPostingSummary([runs[2]]))[0].counts, { posted: 1, notPosted: 9, queued: 0 }, 'manual marks work without an account')
+  } finally { f.cleanup() }
+})
+
+
+test('Library queue badges use provenance or exact legacy bytes and count clips once across paused automations', async () => {
+  const f = fixture()
+  try {
+    const bank = path.join(f.dir, 'bank-queued.mp4')
+    fs.copyFileSync(f.clips[1].s3_url.slice(7), bank)
+    const item = (source, extra = {}) => ({ status: 'queued', postId: null, sourceClipPath: source, ...extra })
+    f.automations.push({ id: 'paused', name: 'AI interviews', enabled: false, content: [
+      item(f.clips[0].s3_url.slice(7), { metadataDraft: {} }), item(undefined, { fileName: path.basename(bank) })
+    ] }, { id: 'other', name: 'Highlights', content: [item(f.clips[0].s3_url.slice(7)),
+      item(f.clips[2].s3_url.slice(7), { status: 'posted', postId: 'published' }),
+      item(f.clips[2].s3_url.slice(7), { postId: 'submitted' })] })
+    let statuses = await f.main.libraryPostingStatus(f.run)
+    assert.deepEqual(statuses[0].queuedIn, [{ id: 'paused', name: 'AI interviews' }, { id: 'other', name: 'Highlights' }])
+    assert.deepEqual(statuses[1].queuedIn, [{ id: 'paused', name: 'AI interviews' }])
+    assert.equal(statuses[2].queuedIn?.length ?? 0, 0)
+    assert.equal((await f.main.libraryPostingSummary([f.run]))[0].counts.queued, 2)
+    fs.writeFileSync(bank, 'other!')
+    assert.equal((await f.main.libraryPostingStatus(f.run))[1].queuedIn, undefined, 'same size with different bytes must not match')
+    f.automations[0].content = []; f.automations[1].content = []
+    statuses = await f.main.libraryPostingStatus(f.run)
+    assert.ok(statuses.every(status => !status.queuedIn?.length))
   } finally { f.cleanup() }
 })

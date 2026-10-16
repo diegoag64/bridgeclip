@@ -109,6 +109,30 @@ class TestClassification:
         assert shot.layout == LayoutType.TWO_SHOT
         assert shot.people[0].cx < shot.people[1].cx
 
+    def test_wide_interview_keeps_full_frame_without_a_clear_subject(self):
+        shot, track = self.classify([Box(.25, .4, .05, .1), Box(.65, .4, .05, .1)])
+        assert shot.layout == LayoutType.SCREEN
+        assert track is None
+
+    def test_dominant_face_wins_over_a_small_background_person(self):
+        shot, track = self.classify([Box(.4, .2, .15, .3), Box(.7, .4, .06, .12)])
+        assert shot.layout == LayoutType.TALKING_HEAD
+        assert track is not None
+        assert shot.people[0].h == pytest.approx(.3)
+
+    def test_two_people_at_different_times_do_not_make_a_split(self):
+        fr = frames(4000, lambda t: ([Box(.2, .25, .12, .25)] if t < 2250 else []) + ([Box(.65, .25, .12, .25)] if t >= 1750 else []))
+        shot, track = classify_shot(track_faces(fr), len(fr), SRC_W, SRC_H)
+        assert shot.layout != LayoutType.TWO_SHOT
+
+    def test_weak_faces_do_not_create_subject_crops(self):
+        fr = frames(4000, lambda t: [Box(.25, .25, .12, .25), Box(.65, .25, .12, .25)])
+        for frame in fr:
+            frame.scores = [.76, .79]
+        shot, track = classify_shot(track_faces(fr), len(fr), SRC_W, SRC_H)
+        assert shot.layout == LayoutType.SCREEN
+        assert track is None
+
     def test_screen_with_webcam(self):
         shot, _ = self.classify([CAM_FACE])
         assert shot.layout == LayoutType.SCREEN_CAM
@@ -221,15 +245,15 @@ class TestVisionMerge:
         heuristic = ShotLayout(0, 0, LayoutType.TALKING_HEAD)
         assert merge_vision_result(heuristic, {"layout": "banana"}, SRC_W, SRC_H) is heuristic
 
-    def test_two_shot_from_vision_people(self):
-        merged = merge_vision_result(ShotLayout(0, 0, LayoutType.SCREEN), {
+    @pytest.mark.parametrize('layout', [LayoutType.SCREEN, LayoutType.TALKING_HEAD])
+    def test_vision_cannot_invent_a_second_face(self, layout):
+        heuristic = ShotLayout(0, 0, layout, people=[HEAD] if layout == LayoutType.TALKING_HEAD else [])
+        merged = merge_vision_result(heuristic, {
             "layout": "two_shot", "cam_box": [], "screen_box": [], "screen_focus": [],
             "people": [[200, 550, 900, 900], [200, 100, 900, 450]],
         }, SRC_W, SRC_H)
-        assert merged.layout == LayoutType.TWO_SHOT
-        assert merged.people[0].cx < merged.people[1].cx
-        # Person boxes are converted to face-sized boxes for crop sizing.
-        assert merged.people[0].h < 0.7 * 0.5
+        assert merged.layout == layout
+        assert merged.people == heuristic.people
 
 
 class TestFocusPath:
